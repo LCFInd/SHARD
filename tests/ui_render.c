@@ -1673,7 +1673,7 @@ static void setup(int s)
         ui.hot_col = 1; ui.hot_t = 30;
         break;
     case S_SHFX_ENUM:
-        eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 1; shfx_sl_param = 11; shfx_knob(2, 1); ui.msg_t = 0;
+        eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 1; shfx_sl_param = SHFX_ROUTE; shfx_knob(2, 1); ui.msg_t = 0;
         break;
     case S_SHFX_NOFILE: eng(ENGI_SHARD); TSEL->p[P_E0] = 2; go_page(GR_SHFX); ui.msg_t = 0; break;
     case S_SHARD_EDIT1: eng(ENGI_SHARD); go_title("EDIT 1"); ui.hot_col = 1; ui.hot_t = 30; break;

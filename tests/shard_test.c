@@ -583,6 +583,12 @@ int main(int argc, char **argv)
     shd_kit[src].sl[2].pitch = -7;
     shd_kit[src].sl[5].route = SHD_HIGH;
     shd_kit[src].bus.type[1] = SHD_D_DECIM;
+    shd_kit[src].sl[4].sus = 77;
+    shd_kit[src].sl[4].rel = 33;
+    shd_kit[src].sl[4].dly = 99;
+    shd_kit[src].sl[4].rev = SHD_PING;
+    shd_kit[src].bus.type[3] = SHD_D_FUZZ;
+    shd_kit[src].bus.sens = 100;
     {
         slc_man_t *m = slc_man_begin(0);                       /* MAN slices too: both records in the sector */
         uint32_t nm = m ? m->n : 0;
@@ -602,6 +608,16 @@ int main(int argc, char **argv)
         smp_user_scan(0);                                      /* as at boot */
         check("the kit comes back with the sample", shd_kit[src].sl[2].pitch == -7 &&
               shd_kit[src].sl[5].route == SHD_HIGH && shd_kit[src].bus.type[1] == SHD_D_DECIM, 0);
+        check("SUSTAIN, RELEASE, DELAY, DIR, FULL's type and SENS come back too", shd_kit[src].sl[4].sus == 77 &&
+              shd_kit[src].sl[4].rel == 33 && shd_kit[src].sl[4].dly == 99 && shd_kit[src].sl[4].rev == SHD_PING &&
+              shd_kit[src].bus.type[3] == SHD_D_FUZZ && shd_kit[src].bus.sens == 100, 0);
+        {
+            uint32_t na = slc_usr[0].nauto;
+            slc_rescan(0, SHD_SENS_DEF);
+            check("SENS from the kit at load: its AUTO slices are SENS 100's, not the default's", na >= slc_usr[0].nauto,
+                  "%u at 100, %u at 64", na, slc_usr[0].nauto);
+            slc_rescan(0, 100);
+        }
         m = (slc_man_t *)slc_man_of(slc_get(1));
         check("the MAN slices beside it come back too", m && m->n == nm + 1u, "%u slices", m ? m->n : 0);
     }
@@ -624,8 +640,217 @@ int main(int argc, char **argv)
         shd_kit_sane(&j);
         for (ok = 1, i = 0; i < SLC_AUTO; i++)
             ok &= j.sl[i].route < SHD_NROUTE && j.sl[i].dtype < SHD_NDRIVE && j.sl[i].mode <= SHD_LOOP &&
-                  j.sl[i].pitch >= -24 && j.sl[i].pitch <= 24 && j.sl[i].filt <= SHD_F_BP && j.sl[i].choke <= 4u;
+                  j.sl[i].pitch >= -24 && j.sl[i].pitch <= 24 && j.sl[i].filt < SHD_NFILT && j.sl[i].choke <= 4u &&
+                  j.sl[i].rev < SHD_NDIR && j.sl[i].sus <= 127u && j.sl[i].rel <= 127u && j.sl[i].dly <= 127u;
+        for (i = 0; i < SHD_NCH; i++)
+            ok &= j.bus.type[i] < SHD_NDRIVE && j.bus.level[i] <= 127u;
+        ok &= j.bus.sens <= 127u;
         check("a kit of junk reads in range", ok, 0);
+    }
+
+    /* 9: the diagram's controls: SUSTAIN, RELEASE, DIR PING, COMB-/+, FUZZ, DELAY's send, FULL, SENS */
+    {
+        static int32_t buf[FS * 2];
+        double e0, e1;
+        uint32_t nb0, nb1, d, k;
+        /* SUSTAIN: a fast DECAY falls to SUSTAIN and holds there (LOOP, held); 0: to silence */
+        for (k = 0; k < 2u; k++) {
+            fresh(1, SHD_M_LOOP, SHD_DIV_AUTO);
+            for (i = 0; i < SLC_AUTO; i++) {
+                shd_kit[0].sl[i].dec = 30;
+                shd_kit[0].sl[i].sus = k ? 90 : 0;
+            }
+            trk_note_on(T, 60, 110);
+            blocks(FS / 2u / CTL);
+            out_energy = 0;
+            blocks(FS / 10u / CTL);
+            if (k) e1 = out_energy; else e0 = out_energy;
+            voices_off();
+        }
+        check("SUSTAIN: DECAY stops at it and holds (LOOP); at 0 it decays to silence", e0 < 1e3 && e1 > 1e9,
+              "%.3g, %.3g", e0, e1);
+        /* RELEASE: from the key's release, faster than the track's own (GATE) */
+        for (k = 0; k < 2u; k++) {
+            fresh(1, SHD_M_GATE, SHD_DIV_AUTO);
+            T->p[P_REL] = 90;                                    /* a long release on the track */
+            for (i = 0; i < SLC_AUTO; i++)
+                shd_kit[0].sl[i].rel = k ? 10 : 0;
+            trk_note_on(T, 60, 110);
+            blocks(FS / 50u / CTL);
+            trk_note_off(T, 60);
+            blocks(FS / 50u / CTL);
+            out_energy = 0;
+            blocks(FS / 10u / CTL);
+            if (k) e1 = out_energy; else e0 = out_energy;
+            voices_off();
+        }
+        check("RELEASE: a short one ends the slice before the track's long release", e1 < e0 * 0.05 && e0 > 0,
+              "%.3g against %.3g", e1, e0);
+        /* DIR PING: once, forward and back (ONE: twice as long); LOOP: to and fro while held */
+        for (k = 0; k < 2u; k++) {
+            fresh(1, SHD_M_ONE, 3);                            /* DIV 8: long slices */
+            for (i = 0; i < SLC_AUTO; i++)
+                shd_kit[0].sl[i].rev = k ? SHD_PING : SHD_FWD;
+            trk_note_on(T, 60, 110);
+            blocks(1);
+            trk_note_off(T, 60);
+            for (d = 1; nvoices() && d < 4000u; d++)
+                blocks(1);
+            if (k) nb1 = d; else nb0 = d;
+        }
+        check("DIR PING (ONE): forward then back, twice the slice", nb1 >= nb0 * 19u / 10u && nb1 <= nb0 * 21u / 10u,
+              "%u blocks against %u", nb1, nb0);
+        fresh(1, SHD_M_LOOP, 3);
+        for (i = 0; i < SLC_AUTO; i++)
+            shd_kit[0].sl[i].rev = SHD_PING;
+        trk_note_on(T, 60, 110);
+        blocks(nb0 * 5u);
+        out_energy = 0;
+        blocks(nb0 / 2u);
+        check("DIR PING (LOOP): to and fro while held", nvoices() == 1u && out_energy > 1e9, "%u voices", nvoices());
+        {   /* and it plays the slice backwards on the way back: the second half mirrors the first */
+            fresh(1, SHD_M_ONE, 3);
+            for (i = 0; i < SLC_AUTO; i++) {
+                shd_kit[0].sl[i].rev = SHD_PING;
+                shd_kit[0].sl[i].level = 100;
+            }
+            T->p[P_ATK] = 0;
+            trk_note_on(T, 60, 110);
+            for (d = 0; d < nb1 * CTL && d + CTL <= NELEM(buf); d += CTL) {
+                int32_t o[2 * CTL];
+                mix_block(o, CTL);
+                for (i = 0; i < CTL; i++)
+                    buf[d + i] = o[2 * i];
+            }
+            {
+                uint32_t half = nb0 * CTL, a0 = half / 4u, cnt = half / 4u;
+                double sab = 0, saa = 0, sbb = 0;
+                uint32_t lag, best = 0;
+                double bestc = -2;
+                /* where the way back lines up with the way out: within a few blocks of the turn, mirrored */
+                for (lag = 0; lag < 3u * CTL; lag += 2u) {
+                    sab = saa = sbb = 0;
+                    for (i = 0; i < cnt; i++) {
+                        int32_t a = buf[a0 + i], b = buf[(2u * half + lag - a0 - i) % NELEM(buf)];
+                        sab += (double)a * b; saa += (double)a * a; sbb += (double)b * b;
+                    }
+                    if (sab / sqrt(saa * sbb + 1) > bestc) { bestc = sab / sqrt(saa * sbb + 1); best = lag; }
+                }
+                check("DIR PING: the way back is the way out reversed", bestc > 0.9, "correlation %.2f (lag %u)", bestc,
+                      best);
+            }
+            voices_off();
+        }
+        /* COMB+ / COMB-: the output correlates with itself at the comb's delay (+ / -) */
+        {
+            double c[3];
+            for (k = 0; k < 3u; k++) {
+                fresh(1, SHD_M_LOOP, SHD_DIV_AUTO);
+                for (i = 0; i < SLC_AUTO; i++) {
+                    shd_kit[0].sl[i].filt = (uint8_t)(k == 0 ? SHD_F_OFF : k == 1 ? SHD_F_COMBP : SHD_F_COMBN);
+                    shd_kit[0].sl[i].cut = 70;
+                    shd_kit[0].sl[i].res = 120;
+                }
+                trk_note_on(T, 62, 110);                       /* a snare: noisy */
+                for (d = 0; d + CTL <= FS / 2u; d += CTL) {
+                    int32_t o[2 * CTL];
+                    mix_block(o, CTL);
+                    for (i = 0; i < CTL; i++)
+                        buf[d + i] = o[2 * i];
+                }
+                {
+                    uint32_t lag = SHD_COMB_D[70] >> 8, n2 = FS / 2u - 2u * CTL - lag;
+                    double sab = 0, saa = 0;
+                    for (i = 0; i < n2; i++) {
+                        sab += (double)buf[i] * (buf[i + lag] + buf[i + lag + 1]) / 2;
+                        saa += (double)buf[i] * buf[i];
+                    }
+                    c[k] = sab / (saa + 1);
+                }
+                voices_off();
+            }
+            check("COMB+: a peak at its delay (CUT); COMB-: a trough", c[1] > c[0] + 0.3 && c[2] < c[0] - 0.3,
+                  "off %.2f, + %.2f, - %.2f", c[0], c[1], c[2]);
+        }
+        /* FUZZ: near square (a low crest factor), louder than clean at the same level */
+        {
+            double cf[2];
+            for (k = 0; k < 2u; k++) {
+                fresh(1, SHD_M_LOOP, SHD_DIV_AUTO);
+                for (i = 0; i < SLC_AUTO; i++) {
+                    shd_kit[0].sl[i].dtype = (uint8_t)(k ? SHD_D_FUZZ : SHD_D_OFF);
+                    shd_kit[0].sl[i].drv = 127;
+                }
+                trk_note_on(T, 60, 110);
+                blocks(FS / 20u / CTL);
+                out_peak = 0;
+                out_energy = 0;
+                blocks(FS / 10u / CTL);
+                cf[k] = out_peak / sqrt(out_energy / (FS / 10u / CTL * CTL) + 1);
+                voices_off();
+            }
+            check("FUZZ: square-ish (crest factor near 1)", cf[1] < 1.6 && cf[0] > cf[1] * 1.5, "fuzz %.2f, clean %.2f",
+                  cf[1], cf[0]);
+        }
+        /* DELAY: the slice's send echoes with the track's own send at 0 */
+        for (k = 0; k < 2u; k++) {
+            fresh(1, SHD_M_ONE, SHD_DIV_AUTO);
+            song.g[G_DMIX] = 100;
+            song.g[G_DFDBK] = 40;
+            for (i = 0; i < SLC_AUTO; i++) {
+                shd_kit[0].sl[i].dly = (uint8_t)(k ? 127 : 0);
+                shd_kit[0].sl[i].dec = 40;                     /* a short slice */
+            }
+            trk_note_on(T, 60, 110);
+            blocks(1);
+            trk_note_off(T, 60);
+            for (d = 0; nvoices() && d < 4000u; d++)
+                blocks(1);
+            blocks(FS / 20u / CTL);
+            out_energy = 0;
+            blocks(FS * 3u / 2u / CTL);
+            if (k) e1 = out_energy; else e0 = out_energy;
+        }
+        check("DELAY: the slice's send echoes after it ends; at 0, next to nothing (the delay line's leftovers)",
+              e1 > 1e9 && e0 < e1 / 100, "%.3g against %.3g", e1, e0);
+        song.g[G_DMIX] = 0;
+        /* FULL: a channel of its own; FUZZ on it squares the slice, OFF leaves it as DIRECT (but for the bus's DC
+         * blocker and gain ramp) */
+        {
+            double ed, ef;
+            for (k = 0; k < 2u; k++) {
+                fresh(1, SHD_M_LOOP, SHD_DIV_AUTO);
+                T->p[P_E6] = 127;
+                for (i = 0; i < SLC_AUTO; i++)
+                    shd_kit[0].sl[i].route = (uint8_t)(k ? SHD_FULL : SHD_DIRECT);
+                shd_kit[0].bus.type[3] = SHD_D_OFF;
+                shd_kit[0].bus.level[3] = 127;
+                trk_note_on(T, 60, 110);
+                blocks(FS / 20u / CTL);
+                out_energy = 0;
+                blocks(FS / 5u / CTL);
+                if (k) ef = out_energy; else ed = out_energy;
+                voices_off();
+            }
+            check("FULL, clean: about as loud as DIRECT", ef > ed * 0.8 && ef < ed * 1.25, "%.3g against %.3g", ef, ed);
+        }
+    }
+    {   /* SENS: more hits found as it rises, on a slot (USR3: hats, snares, kicks) */
+        static double x[22050 * 4];
+        static int16_t y[22050 * 4];
+        uint32_t m = make_loop(x, NELEM(x), 120, "XHHHYHH.XHKHY.HH", 2, 0), n0, n64, n127;
+        slot_pcm(2, y, to_pcm(x, y, m));
+        slc_rescan(2, 0);
+        n0 = slc_usr[2].nauto;
+        slc_rescan(2, 64);
+        n64 = slc_usr[2].nauto;
+        slc_rescan(2, 127);
+        n127 = slc_usr[2].nauto;
+        check("SENS: fewer slices at 0, more at 127", n0 <= n64 && n64 <= n127 && n0 < n127, "%u, %u, %u", n0, n64, n127);
+        slc_rescan(2, SHD_SENS_DEF);
+        check("SENS 64 is SLICE's scan", slc_usr[2].nauto == n64, 0);
+        memset((uint8_t *)host_slots + 2u * SMP_USER_SIZE, 0, SMP_USER_SIZE);
+        smp_user_scan(2);
     }
 
     /* 7: demos */

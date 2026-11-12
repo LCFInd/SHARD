@@ -41,14 +41,18 @@
           mem.set(m.data, 512);
           e.emu_slot_loaded(m.k);
           e.emu_tempo_set(m.k + 1, m.bpm | 0);
+          const hits = e.emu_sens_set(m.k, m.sens ?? 64);
           const set = e.emu_set_src(m.k + 1);
           const div = set && m.div >= 0 ? e.emu_set_div(m.div) : 0;
-          this.post({ type: "slot", k: m.k, src: !!set, div: !!div, found: e.emu_tempo_found(m.k + 1) });
+          this.post({ type: "slot", k: m.k, src: !!set, div: !!div, found: e.emu_tempo_found(m.k + 1), hits });
           break;
         }
         case "tempo":                              /* the slot's tempo after the fact (0: AUTO) */
           e.emu_tempo_set(m.k + 1, m.bpm | 0);
           this.post({ type: "tempo", k: m.k, found: e.emu_tempo_found(m.k + 1) });
+          break;
+        case "sens":
+          this.post({ type: "sens", k: m.k, hits: e.emu_sens_set(m.k, m.sens) });
           break;
         case "div":
           this.post({ type: "div", ok: !!e.emu_set_div(m.div) });

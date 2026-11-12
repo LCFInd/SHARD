@@ -318,20 +318,41 @@ typedef struct {
     const char *const *names;
     const char *unit;
 } shfx_desc_t;
-static const shfx_desc_t SHFX_SL[13] = {
+enum { SHFX_PITCH, SHFX_LEVEL, SHFX_ATK, SHFX_DEC, SHFX_SUS, SHFX_REL, SHFX_MODE, SHFX_DIR, SHFX_FILT, SHFX_CUT,
+       SHFX_RES, SHFX_DRIVE, SHFX_AMT, SHFX_DLY, SHFX_ROUTE, SHFX_CHOKE, SHFX_NSL };
+static const shfx_desc_t SHFX_SL[SHFX_NSL] = {
     {"PITCH", -24, 24, 0, "ST"}, {"LEVEL", 0, 127, 0, ""}, {"ATTACK", 0, 127, 0, ""}, {"DECAY", 0, 127, 0, ""},
-    {"MODE", 0, 3, N_SHD_SMODE, ""}, {"REV", 0, 1, N_SLC_REV, ""}, {"FILTER", 0, 3, N_SHD_FILT, ""},
-    {"CUT", 0, 127, 0, ""}, {"RES", 0, 127, 0, ""}, {"DRIVE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""},
-    {"AMT", 0, 127, 0, ""}, {"ROUTE", 0, SHD_NROUTE - 1, N_SHD_ROUTE, ""}, {"CHOKE", 0, 4, N_SHD_CHOKE, ""},
+    {"SUS", 0, 127, 0, ""}, {"REL", 0, 127, 0, ""}, {"MODE", 0, 3, N_SHD_SMODE, ""}, {"DIR", 0, SHD_NDIR - 1, N_SHD_DIR, ""},
+    {"FILTER", 0, SHD_NFILT - 1, N_SHD_FILT, ""}, {"CUT", 0, 127, 0, ""}, {"RES", 0, 127, 0, ""},
+    {"DRIVE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"AMT", 0, 127, 0, ""}, {"DELAY", 0, 127, 0, ""},
+    {"ROUTE", 0, SHD_NROUTE - 1, N_SHD_ROUTE, ""}, {"CHOKE", 0, 4, N_SHD_CHOKE, ""},
 };
-static const shfx_desc_t SHFX_BUS[15] = {           /* (6 letters at most: the cards) */
-    {"BPM", 0, SHD_BPM_MAX, 0, ""},                  /* the source's tempo, 0 AUTO (shfx_bpm) */
+enum { SHFX_BPM, SHFX_SENS, SHFX_XLOW, SHFX_XHIGH, SHFX_CH0 };   /* then TYPE DRV GATE LVL per channel */
+static const shfx_desc_t SHFX_BUS[SHFX_CH0 + 4u * SHD_NCH] = {   /* (6 letters at most: the cards) */
+    {"BPM", 0, SHD_BPM_MAX, 0, ""},                  /* the source's tempo, 0 AUTO (shfx_knob) */
+    {"SENS", 0, 127, 0, ""},                         /* AUTO's hits (a user slot's: slc_rescan) */
     {"XLOW", 0, 127, 0, ""}, {"XHIGH", 0, 127, 0, ""},
     {"L TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"L DRV", 0, 127, 0, ""}, {"L GATE", 0, 127, 0, ""},
     {"L LVL", 0, 127, 0, ""}, {"M TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"M DRV", 0, 127, 0, ""},
     {"M GATE", 0, 127, 0, ""}, {"M LVL", 0, 127, 0, ""}, {"H TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""},
     {"H DRV", 0, 127, 0, ""}, {"H GATE", 0, 127, 0, ""}, {"H LVL", 0, 127, 0, ""},
+    {"F TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"F DRV", 0, 127, 0, ""}, {"F GATE", 0, 127, 0, ""},
+    {"F LVL", 0, 127, 0, ""},
 };
+/* SENS: a user slot's AUTO slices again once the knob rests (slc_rescan stops its voices: not at every step) */
+static uint8_t shd_sens_pend;                       /* bit k: user slot k */
+static uint32_t shd_sens_at;
+static void shd_sens_poll(void)                     /* ui_input, every frame */
+{
+    uint32_t k;
+    if (!shd_sens_pend || fm1_ms - shd_sens_at < 300u)
+        return;
+    for (k = 0; k < SMP_USER_SLOTS; k++)
+        if (shd_sens_pend >> k & 1u)
+            slc_rescan(k, shd_kit[k + 1u].bus.sens);
+    shd_sens_pend = 0;
+    ui.force = 1;
+}
 static uint8_t shfx_sl_param, shfx_bus_param;
 
 /* the kit of the selected part's source; *bus 1 on the BUS marker, *j the slice */
@@ -349,30 +370,42 @@ static uint8_t *shfx_field(shd_kit_t *kit, uint32_t j, int bus, uint32_t k)
     shd_sl_t *s;
     if (bus) {
         shd_bus_t *b = &kit->bus;
-        if (k-- == 0u)
-            return &b->bpm;
-        return k == 0u ? &b->lo : k == 1u ? &b->hi : (k - 2u) % 4u == 0u ? &b->type[(k - 2u) / 4u] :
-               (k - 2u) % 4u == 1u ? &b->drive[(k - 2u) / 4u] : (k - 2u) % 4u == 2u ? &b->gate[(k - 2u) / 4u] :
-               &b->level[(k - 2u) / 4u];
+        uint32_t c = (k - SHFX_CH0) / 4u % SHD_NCH;
+        switch (k) {
+        case SHFX_BPM: return &b->bpm;
+        case SHFX_SENS: return &b->sens;
+        case SHFX_XLOW: return &b->lo;
+        case SHFX_XHIGH: return &b->hi;
+        default: break;
+        }
+        switch ((k - SHFX_CH0) % 4u) {
+        case 0: return &b->type[c];
+        case 1: return &b->drive[c];
+        case 2: return &b->gate[c];
+        default: return &b->level[c];
+        }
     }
     s = &kit->sl[j % SLC_AUTO];
     switch (k) {
-    case 0: return (uint8_t *)&s->pitch;
-    case 1: return &s->level;
-    case 2: return &s->atk;
-    case 3: return &s->dec;
-    case 4: return &s->mode;
-    case 5: return &s->rev;
-    case 6: return &s->filt;
-    case 7: return &s->cut;
-    case 8: return &s->res;
-    case 9: return &s->dtype;
-    case 10: return &s->drv;
-    case 11: return &s->route;
+    case SHFX_PITCH: return (uint8_t *)&s->pitch;
+    case SHFX_LEVEL: return &s->level;
+    case SHFX_ATK: return &s->atk;
+    case SHFX_DEC: return &s->dec;
+    case SHFX_SUS: return &s->sus;
+    case SHFX_REL: return &s->rel;
+    case SHFX_MODE: return &s->mode;
+    case SHFX_DIR: return &s->rev;
+    case SHFX_FILT: return &s->filt;
+    case SHFX_CUT: return &s->cut;
+    case SHFX_RES: return &s->res;
+    case SHFX_DRIVE: return &s->dtype;
+    case SHFX_AMT: return &s->drv;
+    case SHFX_DLY: return &s->dly;
+    case SHFX_ROUTE: return &s->route;
     default: return &s->choke;
     }
 }
-static int32_t shfx_get(const uint8_t *f, uint32_t k, int bus) { return !bus && k == 0u ? (int8_t)*f : *f; }
+static int32_t shfx_get(const uint8_t *f, uint32_t k, int bus) { return !bus && k == SHFX_PITCH ? (int8_t)*f : *f; }
 static void shfx_set(uint8_t *f, const shfx_desc_t *d, int32_t v) { *f = (uint8_t)(int8_t)clamp(v, d->min, d->max); }
 static void shfx_changed(uint32_t src)
 {
@@ -405,7 +438,15 @@ static void shfx_knob(uint32_t slot, int32_t steps)
         return;
     }
     d = bus ? &SHFX_BUS[k] : &SHFX_SL[k];
-    if (slot == 2u && bus && k == 0u) {             /* BPM: up from AUTO starts at the tempo found (else 120); */
+    if (slot == 2u && bus && k == SHFX_SENS) {       /* SENS: a user slot's; BREAK's and PIANO's slices are fixed */
+        if (!src || src == SLC_SRC_PIANO || src > SMP_USER_SLOTS) {
+            ui_message("SENS: USER SAMPLES");
+            return;
+        }
+        shfx_set(&kit->bus.sens, d, kit->bus.sens + steps);
+        shd_sens_pend |= (uint8_t)(1u << (src - 1u));
+        shd_sens_at = fm1_ms;
+    } else if (slot == 2u && bus && k == SHFX_BPM) { /* BPM: up from AUTO starts at the tempo found (else 120); */
         uint8_t *f = &kit->bus.bpm;                  /* below 40 is AUTO again */
         int32_t v = *f;
         if (!v)
@@ -459,7 +500,7 @@ static int shfx_card(uint32_t c, const char **lb, char *val, const char **u, int
         str_cpy(val, d->name, 12);
         return 1;
     }
-    if (c == 3u && bus && k == 0u) {                 /* BPM: the tempo found beside it (0.1 BPM) */
+    if (c == 3u && bus && k == SHFX_BPM) {          /* BPM: the tempo found beside it (0.1 BPM) */
         *lb = "FOUND";
         if (shd_det_bpm10[src])
             fmt_fix(val, (int32_t)shd_det_bpm10[src], 1);
@@ -471,7 +512,11 @@ static int shfx_card(uint32_t c, const char **lb, char *val, const char **u, int
         return 0;
     v = shfx_get(shfx_field(kit, j, bus, k), k, bus);
     *lb = c == 2u ? d->name : "ALL";
-    if (bus && k == 0u) {                            /* BPM: set, or AUTO (the tempo found: the next card) */
+    if (bus && k == SHFX_SENS && (!src || src == SLC_SRC_PIANO)) {
+        str_cpy(val, "FIXED", 12);                   /* (BREAK, PIANO: slices made with the firmware) */
+        return 1;
+    }
+    if (bus && k == SHFX_BPM) {                      /* BPM: set, or AUTO (the tempo found: the next card) */
         if (v) {
             fmt_int(val, v);
             *r = (v - (int32_t)SHD_BPM_MIN) * 1000 / (int32_t)(SHD_BPM_MAX - SHD_BPM_MIN);
@@ -481,8 +526,10 @@ static int shfx_card(uint32_t c, const char **lb, char *val, const char **u, int
     }
     if (d->names)
         str_cpy(val, d->names[clamp(v, d->min, d->max) - d->min], 12);
-    else if (!bus && k == 3u && v >= 127)
+    else if (!bus && k == SHFX_DEC && v >= 127)
         str_cpy(val, "NONE", 12);                    /* DECAY 127: no decay */
+    else if (!bus && (k == SHFX_REL || k == SHFX_DLY) && !v)
+        str_cpy(val, "OFF", 12);                     /* RELEASE 0: the track's; DELAY 0: no send */
     else {
         if (d->min < 0 && v > 0) {
             val[0] = '+';

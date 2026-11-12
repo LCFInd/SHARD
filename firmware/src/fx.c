@@ -882,6 +882,25 @@ static const uint16_t ENG_VCOST[NENGINES] = {163, FELUCCA_FM4 ? 181 : 0, 162, 67
 };
 #endif
 
+#if FELUCCA_SHARD
+/* SHARD's per-slice DELAY (eng_shard.c): the slices' send into the delay bus, at the track's LEVEL as its own send
+ * (beside P_DLY, and not through DIST / INSERT / SLICER: a send straight from the slice) */
+static void shard_send(track_t *t, int32_t *sd, uint32_t n)
+{
+    shd_mem_t *mem;
+    int32_t lvl;
+    uint32_t i;
+    if ((uint32_t)(t - trk) >= NPART || ENGINES[t->engine % NENGINES] != &ENG_SHARD)
+        return;
+    mem = shd_mem(t);
+    if (!mem->dused)
+        return;
+    lvl = LEVEL_Q12[t->p[P_LEVEL] & 127];
+    for (i = 0; i < n; i++)
+        sd[i] += ((clamp(mem->dsend[i], -(1 << 19), 1 << 19) >> 2) * lvl) >> 10;
+}
+#endif
+
 /* one synth part into the dry mix and the sends of sm (mx[0]; mx[1] on the second core); a part with no voice sounding costs
  * the LFO tick and a cleared buffer only (after the DIST tail has run out) */
 static void mix_part(track_t *t, uint32_t n SM_DECL)
@@ -943,6 +962,9 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
         }
         t->peak = pk;
     }
+#if FELUCCA_SHARD
+    shard_send(t, SM(d), n);
+#endif
     if (pf.thr)
         perf_throw(t, b, SM(d), SM(v), n);              /* perform.c: REV / ECHO THROW (1.5.1), the sends towards full */
     if (MOD(t).on)

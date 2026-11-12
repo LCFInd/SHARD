@@ -5,13 +5,18 @@
  * equal, AUTO, MAN from the SLICES page) and the same IMA ADPCM decoder, checkpoints and reverse windows. What SHARD adds:
  *
  * Per-slice settings (the "kit", one per source, kept with a user slot's sample: shard_store in slice_store.c):
- *   PITCH (-24..+24 st), LEVEL, ATTACK, DECAY (its own envelope, restarted by each slice), MODE (TRACK / ONE / GATE /
- *   LOOP), REV, FILTER (OFF / LP / HP / BP, a 2x state-variable filter) with CUT and RES, DRIVE (OFF SOFT HARD FOLD
- *   CRUSH DECIM HALF TUBE) with AMT, ROUTE and CHOKE (1..4: a slice fades the part's other slices of its group).
+ *   PITCH (-24..+24 st), LEVEL, ATTACK, DECAY, SUSTAIN, RELEASE (its own envelope, restarted by each slice; RELEASE
+ *   OFF leaves the key's release to the track's envelope), MODE (TRACK / ONE / GATE / LOOP), DIR (FWD, REV, PING:
+ *   forward then back, once or, looping, to and fro), FILTER (OFF / LP / HP / BP, a 2x state-variable filter;
+ *   COMB- / COMB+, a feedback comb tuned by CUT) with CUT and RES, DRIVE (OFF OVRDRV DIST FOLD CRUSH DECIM HALF TUBE
+ *   FUZZ) with AMT, DELAY (a send into Felucca's tempo delay, beside the track's), ROUTE and CHOKE (1..4: a slice fades
+ *   the part's other slices of its group).
  * ROUTE: DIRECT to the part as any engine, or into the part's MULTI bus (split low / mid / high), or straight into
- *   one band's shaper (LOW / MID / HIGH). The bus (shd_post, the engine's post hook: per part, after its voices) runs
- *   three shapers, a gate on each band, the band levels, a DC blocker, and the dry / wet MULTI mix (E6). The bands'
- *   types, drives, gates, levels and the two split points are the kit's too; DRIVE (E7) offsets every band's drive.
+ *   one of the four channels: a band's shaper (LOW / MID / HIGH) or FULL, a full-range one (clean as it starts). The
+ *   bus (shd_post, the engine's post hook: per part, after its voices) runs four shapers, a gate on each, their
+ *   levels, a DC blocker, and the dry / wet MULTI mix (E6). The channels' types, drives, gates, levels and the two
+ *   split points are the kit's too; DRIVE (E7) offsets every channel's drive. SENS (the kit's) sets how readily
+ *   AUTO finds hits (eng_slice.c slc_scan).
  * MODE PLAY (E4), ReCycle style: a note plays the whole loop from its slice, each slice starting where it sits in the
  *   loop, scaled to the tempo (BARS: the loop's length; AUTO: from the source's tempo, the kit's BPM as set on SLICE
  *   FX's BUS or else the one shd_tempo_scan found, and failing both the bars that put it in 80..160 BPM). A
@@ -26,12 +31,17 @@ static uint32_t beat_samples(void);               /* (fx.c: the song tempo or th
 
 enum { SHD_TRACK, SHD_ONE, SHD_GATE, SHD_LOOP };   /* a slice's MODE (TRACK: the track's E4) */
 enum { SHD_M_ONE, SHD_M_GATE, SHD_M_LOOP, SHD_M_PLAY };   /* the track's MODE (E4) */
-enum { SHD_DIRECT, SHD_MULTI, SHD_LOW, SHD_MID, SHD_HIGH, SHD_NROUTE };
-enum { SHD_D_OFF, SHD_D_SOFT, SHD_D_HARD, SHD_D_FOLD, SHD_D_CRUSH, SHD_D_DECIM, SHD_D_HALF, SHD_D_TUBE, SHD_NDRIVE };
-enum { SHD_F_OFF, SHD_F_LP, SHD_F_HP, SHD_F_BP };
+enum { SHD_DIRECT, SHD_MULTI, SHD_LOW, SHD_MID, SHD_HIGH, SHD_FULL, SHD_NROUTE };
+#define SHD_NCH 4u                                  /* the channels: LOW MID HIGH FULL */
+enum { SHD_D_OFF, SHD_D_SOFT, SHD_D_HARD, SHD_D_FOLD, SHD_D_CRUSH, SHD_D_DECIM, SHD_D_HALF, SHD_D_TUBE, SHD_D_FUZZ,
+       SHD_NDRIVE };
+enum { SHD_F_OFF, SHD_F_LP, SHD_F_HP, SHD_F_BP, SHD_F_COMBN, SHD_F_COMBP, SHD_NFILT };
+enum { SHD_FWD, SHD_REV, SHD_PING, SHD_NDIR };
 #define SHD_NSRC SLC_NSRC
 #define SHD_BPM_MIN 40u                             /* the kit's BPM (SLICE FX: BUS), 0 = AUTO */
 #define SHD_BPM_MAX 250u
+#define SHD_SENS_DEF 64u                            /* SENS: slc_scan as SLICE's */
+#define SHD_COMB 512u                               /* comb filters: samples of line per voice (90 Hz) */
 #define SHD_FADE 32u                                /* PLAY: samples of fade at a slice change */
 
 static const char *const N_SHD_MODE[] = {"ONE", "GATE", "LOOP", "PLAY"};
@@ -44,29 +54,34 @@ static const uint8_t SHD_DIV_CODE[] = {SLC_DIV_2, 0, SLC_DIV_6, 1, SLC_DIV_12, 2
 #define SHD_NDIV 9
 static uint32_t shd_div(const int16_t *p) { return SHD_DIV_CODE[clamp(p[P_E1], 0, SHD_NDIV - 1)]; }
 static const char *const N_SHD_SMODE[] = {"TRACK", "ONE", "GATE", "LOOP"};
-static const char *const N_SHD_FILT[] = {"OFF", "LP", "HP", "BP"};
-static const char *const N_SHD_DRIVE[] = {"OFF", "SOFT", "HARD", "FOLD", "CRUSH", "DECIM", "HALF", "TUBE"};
-static const char *const N_SHD_ROUTE[] = {"DIRECT", "MULTI", "LOW", "MID", "HIGH"};
+static const char *const N_SHD_FILT[] = {"OFF", "LP", "HP", "BP", "COMB-", "COMB+"};
+static const char *const N_SHD_DIR[] = {"FWD", "REV", "PING"};
+static const char *const N_SHD_DRIVE[] = {"OFF", "OVRDRV", "DIST", "FOLD", "CRUSH", "DECIM", "HALF", "TUBE", "FUZZ"};
+static const char *const N_SHD_ROUTE[] = {"DIRECT", "MULTI", "LOW", "MID", "HIGH", "FULL"};
 static const char *const N_SHD_CHOKE[] = {"OFF", "1", "2", "3", "4"};
 
 /* ---- the kit: per source, per slice (SLC_AUTO = 32 at most), and the bus */
 typedef struct {
     int8_t pitch;
-    uint8_t level, atk, dec, mode, rev, filt, cut, res, dtype, drv, route, choke, pad[3];
+    uint8_t level, atk, dec, mode, rev, filt, cut, res, dtype, drv, route, choke;
+    uint8_t sus, rel, dly;                          /* SUSTAIN, RELEASE (0: OFF, the track's), DELAY's send */
 } shd_sl_t;
 typedef struct {
     uint8_t lo, hi;                                 /* split points: 40 Hz .. 12 kHz */
-    uint8_t type[3], drive[3], gate[3], level[3];   /* low, mid, high */
-    uint8_t bpm, pad;                               /* the source's tempo (40..250), 0: AUTO (shd_tempo_scan) */
+    uint8_t type[SHD_NCH], drive[SHD_NCH], gate[SHD_NCH], level[SHD_NCH];   /* low, mid, high, full */
+    uint8_t bpm;                                    /* the source's tempo (40..250), 0: AUTO (shd_tempo_scan) */
+    uint8_t sens;                                   /* AUTO's hits: 0 fewest .. 127 most (SHD_SENS_DEF: SLICE's) */
+    uint8_t pad[4];
 } shd_bus_t;
 typedef struct {
     shd_sl_t sl[SLC_AUTO];
     shd_bus_t bus;
 } shd_kit_t;
-_Static_assert(sizeof(shd_sl_t) == 16u && sizeof(shd_bus_t) == 16u, "SHARD kit layout");
+_Static_assert(sizeof(shd_sl_t) == 16u && sizeof(shd_bus_t) == 24u, "SHARD kit layout");
 /* neutral at power-on (the slot scans then read the stored kits): every slice as recorded, DIRECT */
-#define SHD_SL_DEF {0, 100, 0, 127, SHD_TRACK, 0, SHD_F_OFF, 127, 0, SHD_D_OFF, 40, SHD_DIRECT, 0, {0, 0, 0}}
-#define SHD_BUS_DEF {51, 96, {SHD_D_TUBE, SHD_D_FOLD, SHD_D_CRUSH}, {40, 30, 60}, {0, 0, 0}, {100, 100, 90}, 0, 0}
+#define SHD_SL_DEF {0, 100, 0, 127, SHD_TRACK, SHD_FWD, SHD_F_OFF, 127, 0, SHD_D_OFF, 40, SHD_DIRECT, 0, 0, 0, 0}
+#define SHD_BUS_DEF {51, 96, {SHD_D_TUBE, SHD_D_FOLD, SHD_D_CRUSH, SHD_D_OFF}, {40, 30, 60, 40}, {0, 0, 0, 0}, \
+                     {100, 100, 90, 127}, 0, SHD_SENS_DEF, {0, 0, 0, 0}}
 #define SHD_KIT_DEF {{[0 ... SLC_AUTO - 1] = SHD_SL_DEF}, SHD_BUS_DEF}
 static shd_kit_t shd_kit[SHD_NSRC] = {[0 ... SHD_NSRC - 1] = SHD_KIT_DEF};
 static uint8_t shd_kit_save;                        /* bit k: user slot k's kit changed, to flash (slice_store.c) */
@@ -107,24 +122,28 @@ static void shd_kit_sane(shd_kit_t *k)
         if (s->atk > 127) s->atk = d.atk;
         if (s->dec > 127) s->dec = d.dec;
         if (s->mode > SHD_LOOP) s->mode = SHD_TRACK;
-        if (s->rev > 1) s->rev = 0;
-        if (s->filt > SHD_F_BP) s->filt = SHD_F_OFF;
+        if (s->rev >= SHD_NDIR) s->rev = SHD_FWD;
+        if (s->filt >= SHD_NFILT) s->filt = SHD_F_OFF;
         if (s->cut > 127) s->cut = d.cut;
         if (s->res > 127) s->res = 0;
         if (s->dtype >= SHD_NDRIVE) s->dtype = SHD_D_OFF;
         if (s->drv > 127) s->drv = d.drv;
         if (s->route >= SHD_NROUTE) s->route = SHD_DIRECT;
         if (s->choke > 4) s->choke = 0;
+        if (s->sus > 127) s->sus = 0;
+        if (s->rel > 127) s->rel = 0;
+        if (s->dly > 127) s->dly = 0;
     }
     if (k->bus.lo > 127) k->bus.lo = db.lo;
     if (k->bus.hi > 127) k->bus.hi = db.hi;
-    for (b = 0; b < 3; b++) {
+    for (b = 0; b < SHD_NCH; b++) {
         if (k->bus.type[b] >= SHD_NDRIVE) k->bus.type[b] = db.type[b];
         if (k->bus.drive[b] > 127) k->bus.drive[b] = db.drive[b];
         if (k->bus.gate[b] > 127) k->bus.gate[b] = 0;
         if (k->bus.level[b] > 127) k->bus.level[b] = db.level[b];
     }
     if (k->bus.bpm && (k->bus.bpm < SHD_BPM_MIN || k->bus.bpm > SHD_BPM_MAX)) k->bus.bpm = 0;
+    if (k->bus.sens > 127) k->bus.sens = SHD_SENS_DEF;
 }
 
 /* ---- the part's engine memory */
@@ -133,18 +152,21 @@ typedef struct {
     int32_t held;                                   /* DECIM's sample */
     uint32_t env;                                   /* the slice's envelope, 0 .. 1 << 30 */
     uint32_t clock, next, loop;                     /* PLAY: samples since the note, the next slice's start, the loop */
-    uint16_t hcnt, fadein;
-    uint8_t stage;                                  /* the slice's envelope: 0 attack, 1 decay */
+    uint16_t hcnt, fadein, cw;                      /* (cw: the comb line's write point) */
+    uint8_t stage;                                  /* the slice's envelope: 0 attack, 1 decay, 2 sustain, 3 release */
     uint8_t first, idle, choked;                    /* PLAY: the note's slice; waiting for the next slice; choked */
+    uint8_t pinged;                                 /* DIR PING: turned at least once */
 } shd_vx_t;
 typedef struct {
     int16_t rb[NVOICE][SLC_RB];                     /* reverse windows (as SLICE's) */
     shd_vx_t vx[NVOICE];
-    int32_t bus[4][CTL];                            /* MULTI, LOW, MID, HIGH: this block */
-    uint32_t used, tail;                            /* buses written this block; blocks of tail left */
+    int16_t comb[NVOICE][SHD_COMB];                 /* the comb filters' lines */
+    int32_t bus[1u + SHD_NCH][CTL];                 /* MULTI, LOW, MID, HIGH, FULL: this block */
+    int32_t dsend[CTL];                             /* DELAY: the slices' send this block (shard_send) */
+    uint32_t used, tail, dused;                     /* buses written this block; blocks of tail left; dsend written */
     int32_t lpl, lph, dcx, dcy;                     /* the split, the DC blocker */
-    int32_t fol[3], gain[3], held[3];
-    uint16_t cnt[3];
+    int32_t fol[SHD_NCH], gain[SHD_NCH], held[SHD_NCH];
+    uint16_t cnt[SHD_NCH];
 } shd_mem_t;
 ENG_MEM_FITS("SHARD", sizeof(shd_mem_t));
 static shd_mem_t *shd_mem(const track_t *t) { return (shd_mem_t *)ENG_MEM((uint32_t)(t - trk) % NPART); }
@@ -204,6 +226,7 @@ static int32_t shd_shape(uint32_t type, int32_t x, uint32_t drive, int32_t *held
         return *held;
     case SHD_D_HALF: y = p > 0 ? shd_soft(p) : shd_soft(p) >> 2; break;
     case SHD_D_TUBE: y = p >= 0 ? shd_soft(p) : (shd_soft(p + (p >> 1)) * 3) >> 2; break;
+    case SHD_D_FUZZ: y = shd_sat(shd_soft(shd_sat(p, 1 << 23) * 4), 26000) * 5 / 4; break;   /* near square */
     default: return x;
     }
     return (y * SHD_MAKEUP[drive]) >> 15;
@@ -378,11 +401,12 @@ static void shd_start(track_t *t, voice_t *v, const slc_src_t *s, uint32_t src, 
     shd_vx_t *x = shd_vx(t, v);
     const shd_sl_t *sl = &shd_kit[src].sl[j % SLC_AUTO];
     slc_bounds(s, div, j, &a, &b, &st);
-    rev = sl->rev != 0;
+    rev = sl->rev == SHD_REV;
     v->s[4] = (int32_t)(src | (st >> 24) << 3 | rev << 7 | j << 8 | div << 16);
     v->s[6] = 0;
     x->env = 0;
     x->stage = 0;
+    x->pinged = 0;
     x->idle = b <= a;
     if (rev) {
         v->ph[0] = b;
@@ -411,6 +435,8 @@ static void shard_note_on(track_t *t, voice_t *v)
     x->hcnt = 0;
     x->choked = 0;
     x->fadein = SHD_FADE;
+    x->cw = 0;
+    memset(shd_mem(t)->comb[(uint32_t)(v - t->v) % NVOICE], 0, sizeof shd_mem(t)->comb[0]);
     if (!s) {                                       /* no material: the sine (as SLICE) */
         v->s[4] = (int32_t)SLC_SINE;
         v->s[6] = 1;
@@ -470,6 +496,24 @@ static uint32_t shd_step(const int16_t *p, const shd_sl_t *sl, const slc_src_t *
     return (pow2_q16(clamp(m->pitch16 - v->pitch_cur + (p[P_E3] + sl->pitch) * 16, -1536, 576)) >> 8) * (s->rate >> 8);
 }
 
+/* DIR PING: the voice turns at its slice's end (to go back) or its start (forward again) */
+static void shd_turn(const slc_src_t *s, voice_t *v, slc_dec_t *d, uint32_t to_rev)
+{
+    uint32_t a, b, st;
+    slc_bounds_v(s, v, &a, &b, &st);
+    if (to_rev) {
+        v->s[4] = (int32_t)((uint32_t)v->s[4] | 1u << 7);
+        v->ph[0] = b;
+        v->ph[2] = a;
+        v->s[0] = 0x7FFFFFFF;                       /* no window yet */
+    } else {
+        v->s[4] = (int32_t)(((uint32_t)v->s[4] & ~(1u << 7 | 15u << 3)) | (st >> 24) << 3);
+        slc_dec_at(d, a, st);
+        v->ph[0] = a;
+        v->ph[2] = b;
+    }
+}
+
 static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const vmod_t *m)
 {
     const int16_t *p = t->p;
@@ -477,7 +521,7 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
     shd_vx_t *x = shd_vx(t, v);
     uint32_t pk = (uint32_t)v->s[4], i, frac = v->ph[1], stepq = 0, play, mode;
     const slc_src_t *s = v->s[6] == 2 || (pk & 7u) == SLC_SINE ? 0 : slc_get(pk & 7u);
-    int16_t *rb = mem->rb[(uint32_t)(v - t->v) % NVOICE];
+    int16_t *rb = mem->rb[(uint32_t)(v - t->v) % NVOICE], *cb = mem->comb[(uint32_t)(v - t->v) % NVOICE];
     const shd_sl_t *sl;
     slc_dec_t d;
     int32_t xin = 0;
@@ -542,20 +586,37 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
         }
         frac += stepq;
         while (frac >= 65536u) {
-            int loop = mode == SHD_M_LOOP && v->gate;
+            int loop = mode == SHD_M_LOOP && v->gate, ping = sl->rev == SHD_PING;
             frac -= 65536u;
             v->s[2] = v->s[3];
-            if (!(rev ? slc_rev(s, v, rb, loop, &xin) : slc_fwd(s, v, &d, loop, &xin))) {
-                x->idle = 1;                        /* the slice ended */
-                v->s[3] = 0;
-                break;
+            if (!(rev ? slc_rev(s, v, rb, loop && !ping, &xin) : slc_fwd(s, v, &d, loop && !ping, &xin))) {
+                int ok = 0;
+                if (ping && (loop || (!rev && !x->pinged))) {   /* PING: back (once), or to and fro (LOOP) */
+                    rev ^= 1u;
+                    x->pinged = 1;
+                    shd_turn(s, v, &d, rev);
+                    ok = rev ? slc_rev(s, v, rb, 0, &xin) : slc_fwd(s, v, &d, 0, &xin);
+                }
+                if (!ok) {
+                    x->idle = 1;                    /* the slice ended */
+                    v->s[3] = 0;
+                    break;
+                }
             }
             v->s[3] = xin;
         }
         if (x->idle)
             continue;
         y = v->s[2] + (((v->s[3] - v->s[2]) * (int32_t)(frac >> 1)) >> 15);
-        if (sl->filt) {                             /* the slice's filter: Chamberlin at 2x */
+        if (sl->filt >= SHD_F_COMBN) {              /* a feedback comb: CUT its pitch, RES its feedback (- odd) */
+            uint32_t dq = SHD_COMB_D[sl->cut & 127], di = dq >> 8, df = dq & 255u;
+            uint32_t r0 = (x->cw - di) & (SHD_COMB - 1u), r1 = (r0 - 1u) & (SHD_COMB - 1u);
+            int32_t dl = (cb[r0] * (int32_t)(256u - df) + cb[r1] * (int32_t)df) >> 7, gq = SHD_COMB_G[sl->res & 127];
+            int32_t w = shd_sat(y + (int32_t)(((int64_t)dl * (sl->filt == SHD_F_COMBN ? -gq : gq)) >> 15), 65535);
+            cb[x->cw] = (int16_t)(w >> 1);
+            x->cw = (uint16_t)((x->cw + 1u) & (SHD_COMB - 1u));
+            y = (int32_t)(((int64_t)w * (32768 - gq / 2)) >> 15);
+        } else if (sl->filt) {                      /* the slice's filter: Chamberlin at 2x */
             int32_t ff = SHD_SVF_F[sl->cut & 127], qq = SHD_SVF_Q[sl->res & 127], in = shd_sat(y, 65535), hi = 0, k;
             for (k = 0; k < 2; k++) {
                 x->lo = shd_sat(x->lo + ((ff * x->bd) >> 14), 65535);
@@ -566,7 +627,10 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
         }
         if (sl->dtype)
             y = shd_shape(sl->dtype, y, sl->drv, &x->held, &x->hcnt);
-        /* the slice's envelope: attack, then a squared decay (127: none) */
+        /* the slice's envelope: attack, a squared decay (127: none) to SUSTAIN, held; RELEASE (OFF: the track's) from
+         * the key's release (not ONE's) */
+        if (x->stage < 3u && sl->rel && !v->gate && mode != SHD_M_ONE)
+            x->stage = 3;
         if (!x->stage) {
             uint32_t st = SHD_ENV_STEP[sl->atk & 127];
             x->env = x->env + st >= (1u << 30) ? 1u << 30 : x->env + st;
@@ -575,8 +639,18 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
             g = (int32_t)(x->env >> 15);
         } else {
             uint32_t e;
-            if (sl->dec < 127u) {
-                uint32_t st = SHD_ENV_STEP[sl->dec & 127];
+            if (x->stage == 1u && sl->dec < 127u) {
+                uint32_t st = SHD_ENV_STEP[sl->dec & 127], fl = SHD_SUS_ENV[sl->sus & 127];
+                x->env = x->env > fl + st ? x->env - st : fl;
+                if (x->env == fl) {
+                    if (!fl) {
+                        x->idle = 1;
+                        continue;
+                    }
+                    x->stage = 2;
+                }
+            } else if (x->stage == 3u) {
+                uint32_t st = SHD_ENV_STEP[sl->rel & 127];
                 x->env = x->env > st ? x->env - st : 0;
                 if (!x->env) {
                     x->idle = 1;
@@ -597,7 +671,8 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
                 g = g * (int32_t)left / (int32_t)SHD_FADE;
         } else {                                    /* the last ~1.5 ms of a one-shot */
             uint32_t rem = rev ? v->ph[0] - v->ph[2] : v->ph[2] - d.pos;
-            if (!(mode == SHD_M_LOOP && v->gate) && rem < ((stepq * 64u) >> 16) + 1u) {
+            if (!(mode == SHD_M_LOOP && v->gate) && !(sl->rev == SHD_PING && !rev && !x->pinged) &&
+                rem < ((stepq * 64u) >> 16) + 1u) {
                 uint32_t left = (rem << 16) / (stepq ? stepq : 1u);
                 if (left < 64u)
                     g = g * (int32_t)left >> 6;
@@ -607,6 +682,10 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
             g = g * (int32_t)(n - i) / (int32_t)n;
         f = (int32_t)(((int64_t)y * g) >> 15);
         q = voice_amp(f, m, i) << 1;
+        if (sl->dly) {                              /* DELAY: the slice's send (fx.c shard_send) */
+            mem->dsend[i] += (int32_t)(((int64_t)q * ((int32_t)(sl->dly & 127) * 258)) >> 15);
+            mem->dused = 1;
+        }
         if (sl->route == SHD_DIRECT || sl->route >= SHD_NROUTE)
             out[i] += q;
         else {
@@ -631,10 +710,13 @@ static void shard_block(track_t *t)
     shd_mem_t *mem = shd_mem(t);
     uint32_t b, i;
     if (mem->used)
-        for (b = 0; b < 4u; b++)
+        for (b = 0; b <= SHD_NCH; b++)
             for (i = 0; i < CTL; i++)
                 mem->bus[b][i] = 0;
-    mem->used = 0;
+    if (mem->dused)
+        for (i = 0; i < CTL; i++)
+            mem->dsend[i] = 0;
+    mem->used = mem->dused = 0;
 }
 
 /* after the voices: the multiband distortion over the buses, into the part */
@@ -644,7 +726,7 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
     const shd_bus_t *bs = &shd_kit[slc_src_of(t->p)].bus;
     int32_t al = SHD_ONEPOLE[bs->lo & 127], ah = SHD_ONEPOLE[bs->hi & 127], mix = clamp(t->p[P_E6], 0, 127);
     int32_t bias = clamp(t->p[P_E7], -64, 63);
-    uint32_t i, b, dr[3];
+    uint32_t i, b, dr[SHD_NCH];
     if (mem->used)
         mem->tail = 64u;                            /* ~46 ms of shaper and gate tails */
     else if (!mem->tail)
@@ -656,7 +738,7 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
         al = ah;
         ah = tmp;
     }
-    for (b = 0; b < 3u; b++)
+    for (b = 0; b < SHD_NCH; b++)
         dr[b] = (uint32_t)clamp((int32_t)bs->drive[b] + bias, 0, 127);
     for (i = 0; i < n; i++) {
         int32_t xx = shd_sat(mem->bus[0][i], 1 << 17), split[3], wet = 0, dc;
@@ -665,8 +747,8 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
         split[0] = mem->lpl;
         split[1] = mem->lph - mem->lpl;
         split[2] = xx - mem->lph;
-        for (b = 0; b < 3u; b++) {
-            int32_t in = shd_sat(split[b] + mem->bus[b + 1u][i], 1 << 17), a = in < 0 ? -in : in, tg, y;
+        for (b = 0; b < SHD_NCH; b++) {             /* LOW MID HIGH: the split + their own; FULL: its own */
+            int32_t in = shd_sat((b < 3u ? split[b] : 0) + mem->bus[b + 1u][i], 1 << 17), a = in < 0 ? -in : in, tg, y;
             mem->fol[b] += a > mem->fol[b] ? (a - mem->fol[b]) >> 4 : -(mem->fol[b] >> 11);
             tg = !bs->gate[b] || mem->fol[b] > SHD_GATE_Q15[bs->gate[b] & 127] ? 32768 : 0;
             mem->gain[b] += (tg - mem->gain[b]) >> 7;

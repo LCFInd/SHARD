@@ -31,10 +31,10 @@ _Static_assert(sizeof(slc_rec_t) == 152u, "SLICE record layout");
 
 #if FELUCCA_SHARD
 /* SHARD's kit (eng_shard.c: per-slice settings and the bus) for the same slot, in the same sector after the slices'
- * record: magic "SHF1", the material (as slc_rec_t), the kit, a CRC. Written together with the slices' record (one
+ * record: magic "SHF2", the material (as slc_rec_t), the kit, a CRC. Written together with the slices' record (one
  * erase), read at the same scans; a kit that is not the slot's sample's is ignored (the kit stays neutral). */
 #define SHD_REC_OFF (SLC_REC_OFF + 0x200u)
-#define SHD_REC_MAGIC 0x31464853u                    /* "SHF1" */
+#define SHD_REC_MAGIC 0x32464853u                    /* "SHF2" (SHF1: the kit before SUSTAIN .. SENS) */
 typedef struct {
     uint32_t magic;
     uint32_t len, crc;
@@ -92,12 +92,14 @@ static void slc_store_load(uint32_t k)
         return;
 #if FELUCCA_SHARD
     {
-        static shd_rec_t kr;                         /* (544 bytes: off the main loop's stack) */
+        static shd_rec_t kr;                         /* (552 bytes: off the main loop's stack) */
         memcpy(&kr, smp_user_xip(k) + SHD_REC_OFF, sizeof kr);
         if (kr.magic == SHD_REC_MAGIC && kr.rcrc == st_crc32(&kr, sizeof kr - 4u) && kr.len == s->len &&
             kr.crc == ((const smp_user_hdr_t *)smp_user_xip(k))->crc) {
             shd_kit_sane(&kr.kit);
             shd_kit[k + 1u] = kr.kit;
+            if (kr.kit.bus.sens != SHD_SENS_DEF)
+                slc_rescan(k, kr.kit.bus.sens);      /* its AUTO slices at the kit's SENS */
         }
     }
 #endif

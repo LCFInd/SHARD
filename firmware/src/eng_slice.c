@@ -210,11 +210,14 @@ static void slc_bounds_v(const slc_src_t *s, const voice_t *v, uint32_t *a, uint
 
 /* ---- the slice table of a user slot (main loop) */
 /* the grid states and the AUTO slices of s (len samples; s->len stays 0 meanwhile): see the top */
-static void slc_scan(slc_src_t *s, uint32_t len)
+/* sens (0..127, SLC_SENS_DEF: as before SHARD's SENS): the hit thresholds x 2^((64 - sens) / 32) (x 4 at 0, about
+ * x 1 / 4 at 127) and the rise a hit needs, 7 / 4 of the follower, from 11 / 4 (0) to 5 / 4 (127) */
+#define SLC_SENS_DEF 64u
+static void slc_scan(slc_src_t *s, uint32_t len, uint32_t sens)
 {
     slc_dec_t d;
     uint32_t pos = 0, k = 0, gap = ((s->rate >> 4) * 44100u >> 12) / 20u, last = 0, h0 = 0, st0 = 0;
-    int32_t prev = 0, pkd = 0, pkr = 0, envd = 0, envr = 0, thd, thr;
+    int32_t prev = 0, pkd = 0, pkr = 0, envd = 0, envr = 0, thd, thr, rise;
     slc_dec_at(&d, 0, 0);
     while (pos++ < len) {                               /* pass 1: the largest step and sample */
         int32_t x = slc_dec_next(s, &d), a = x - prev;
@@ -224,8 +227,13 @@ static void slc_scan(slc_src_t *s, uint32_t len)
         pkr = a > pkr ? a : pkr;
         prev = x;
     }
-    thd = pkd / 12;
-    thr = pkr / 8;
+    {
+        int32_t q = 64 - (int32_t)(sens > 127u ? 127u : sens), e = q >> 5, fq = 256 + 8 * (q & 31);
+        fq = e >= 0 ? fq << e : fq >> -e;
+        thd = (pkd / 12) * fq >> 8;
+        thr = (pkr / 8) * fq >> 8;
+        rise = clamp(7 + q / 16, 5, 11);
+    }
     s->nauto = 1;
     s->apos[0] = 0;
     s->ast[0] = 0;
@@ -248,7 +256,7 @@ static void slc_scan(slc_src_t *s, uint32_t len)
         }
         /* a rise of the high-passed peak (hats, snares, clicks) or of the peak (low hits: a slow
          * follower, so a low tone's cycles do not look like rises) */
-        if (hs && ((hd > thd && hd * 4 > envd * 7) || (hr > thr && hr * 4 > envr * 7)) && h0 >= last + gap &&
+        if (hs && ((hd > thd && hd * 4 > envd * rise) || (hr > thr && hr * 4 > envr * rise)) && h0 >= last + gap &&
             s->nauto < SLC_AUTO) {
             s->apos[s->nauto] = h0;                     /* from the hop before: pre-roll */
             s->ast[s->nauto++] = st0;
@@ -259,6 +267,21 @@ static void slc_scan(slc_src_t *s, uint32_t len)
         h0 = hs;
         st0 = hst;
     }
+}
+
+/* slot k's AUTO slices again at sens (SHARD's SENS: slice_store.c at the kit's load, ui_slice.c after an edit): its
+ * voices stop meanwhile, as at a scan */
+static void slc_rescan(uint32_t k, uint32_t sens)
+{
+    slc_src_t *s = &slc_usr[k % SMP_USER_SLOTS];
+    uint32_t len = s->len;
+    if (!len)
+        return;
+    s->len = 0;
+    RING_PUBLISH();
+    slc_scan(s, len, sens);
+    RING_PUBLISH();
+    s->len = len;
 }
 
 /* smp_user_scan (eng_sample.c): valid 0 = the slot changes (SLICE voices on it stop), 1 = it is valid.
@@ -298,7 +321,7 @@ static void slc_user_scan(uint32_t k, int valid)
     if (!s->nseg)
         return;
     s->rate = usr_zone[k][0].rate;
-    slc_scan(s, at);
+    slc_scan(s, at, SLC_SENS_DEF);                  /* (SHARD's SENS, if the kit's is another: slc_rescan) */
     RING_PUBLISH();
     s->len = at;
     SLC_TEMPO_SCAN(k);

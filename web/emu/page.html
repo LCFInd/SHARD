@@ -174,6 +174,8 @@ canvas#lcd {
   border-radius: 6px; padding: 9px 10px;
 }
 .field input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.field.sens input { width: 170px; padding: 0; accent-color: var(--amber); background: none; border: 0; height: 34px; }
+.field output { color: var(--print-dim); font: 500 14px/1 var(--body); margin-left: 6px; }
 .seg { display: flex; border: 1px solid #454b4f; border-radius: 6px; overflow: hidden; }
 .seg button {
   font: 600 15px/1 var(--cond); color: var(--print-dim); background: var(--recess); border: 0; border-right: 1px solid #2f3437;
@@ -218,7 +220,8 @@ dl.map dd { margin: 0; color: var(--print-dim); line-height: 1.4; }
   .slots { grid-template-columns: 1fr; }
   .seg button { padding: 10px 8px; min-width: 0; flex: 1; }
   .seg { width: 100%; }
-  .opts .field:last-child { flex: 1 1 100%; }
+  .opts .field:nth-child(2) { flex: 1 1 100%; }
+  .field.sens, .field.sens input { width: 100%; }
   .slot { min-height: 0; }
   .keyhelp { display: none; }
 }
@@ -262,6 +265,8 @@ dl.map dd { margin: 0; color: var(--print-dim); line-height: 1.4; }
         <div class="field"><span id="divLabel">Slices</span>
           <div class="seg" id="divs" role="radiogroup" aria-labelledby="divLabel"></div>
         </div>
+        <label class="field sens"><span>Hit sensitivity <output id="sensOut">64</output></span>
+          <input id="sens" type="range" min="0" max="127" value="64"></label>
       </div>
       <div class="slots" id="slots"></div>
       <input type="file" id="file" accept=".wav,audio/wav,audio/x-wav" hidden>
@@ -278,7 +283,8 @@ dl.map dd { margin: 0; color: var(--print-dim); line-height: 1.4; }
         <dt>Buttons</dt><dd>Hold them as on the device: a held FX, GLO, SCL, EDIT or REC opens its layer.</dd>
         <dt class="keyhelp">Keyboard</dt><dd class="keyhelp">A to ' play C to F. Space is PLAY, Esc is HOME, [ and ] are OCT- and OCT+.</dd>
         <dt>SHARD</dt><dd>PRESETS picks SHARD after DRUM. EDIT steps through EDIT 1, EDIT 2, SLICES and SLICE FX.</dd>
-        <dt>Tempo</dt><dd>On the device it's on SLICE FX: turn KNOB 1 past the last slice to BUS, then BPM. AUTO is the tempo found.</dd>
+        <dt>Tempo</dt><dd>On the device it's on SLICE FX: turn KNOB 1 past the last slice to BUS, then BPM. AUTO is the tempo found. SENS is beside it.</dd>
+        <dt>Per slice</dt><dd>SLICE FX: KNOB 1 picks the slice, KNOB 2 the setting (envelope, DIR, FILTER with COMB, DRIVE, DELAY, ROUTE to LOW, MID, HIGH or FULL), KNOB 3 sets it.</dd>
       </dl>
       <div class="stat" style="margin-top:14px"><span id="audioInfo">Audio off</span><div class="meter" aria-hidden="true"><i id="meter"></i></div></div>
     </div>
@@ -450,6 +456,7 @@ function onMsg(m) {
   else if (m.type === "status") $("meter").style.width = Math.min(100, m.peak * 100) + "%";
   else if (m.type === "slot") slotLoaded(m);
   else if (m.type === "tempo") tempoChanged(m);
+  else if (m.type === "sens" && slotInfo[m.k]) { slotInfo[m.k].hits = m.hits; slotText(m.k); say(`USR${m.k + 1}: ${m.hits} hits found at sensitivity ${$("sens").value}.`); }
   else if (m.type === "div" && !m.ok) say("Slices apply to a track playing SHARD: select one first.");
   else if (m.type === "error") say("The firmware didn't start: " + m.msg);
 }
@@ -604,6 +611,12 @@ DIVS.forEach(([label, d]) => {
   });
   $("divs").appendChild(b);
 });
+let sensTimer = 0;
+$("sens").addEventListener("input", () => {
+  $("sensOut").textContent = $("sens").value;
+  clearTimeout(sensTimer);
+  if (lastSlot >= 0) sensTimer = setTimeout(() => send({ type: "sens", k: lastSlot, sens: +$("sens").value }), 250);
+});
 const bpmIn = () => { const v = Math.round(+$("bpm").value); return v >= 40 && v <= 250 ? v : 0; };
 $("bpm").addEventListener("change", () => {
   const v = bpmIn();
@@ -615,7 +628,8 @@ function slotText(k) {
   const i = slotInfo[k];
   if (!i) return;
   const tempo = i.bpm ? `${i.bpm} BPM, set` : i.found ? `${fmtBpm(i.found)} BPM, found` : "no tempo found";
-  slotEls[k].querySelector("em").textContent = `${i.name.slice(0, 22)}, ${i.secs} s, ${tempo}` + (i.cut ? " (cut to fit)" : "");
+  const hits = i.hits ? `, ${i.hits} hits` : "";
+  slotEls[k].querySelector("em").textContent = `${i.name.slice(0, 22)}, ${i.secs} s, ${tempo}${hits}` + (i.cut ? " (cut to fit)" : "");
 }
 function say(t) { $("msg").textContent = t; }
 for (let k = 0; k < 3; k++) {
@@ -646,7 +660,7 @@ async function loadFile(k, f) {
     const s = normalize(r), name = f.name.replace(/\.[^.]*$/, "");
     const { hdr, data } = buildSlot(name, s);
     const bpm = bpmIn();
-    send({ type: "slot", k, hdr, data, bpm, div: divPick });
+    send({ type: "slot", k, hdr, data, bpm, div: divPick, sens: +$("sens").value });
     slotInfo[k] = { name, secs: (s.length / SMP.RATE).toFixed(2), cut, bpm, found: 0 };
     lastSlot = k;
     slotEls[k].classList.add("full");
@@ -655,7 +669,7 @@ async function loadFile(k, f) {
 }
 function slotLoaded(m) {
   const i = slotInfo[m.k];
-  if (i) { i.found = m.found; slotText(m.k); }
+  if (i) { i.found = m.found; i.hits = m.hits; slotText(m.k); }
   const cut = i && i.cut ? " The slot holds 7.4 s, so the rest was cut." : "";
   const t = i && i.bpm ? ` at ${i.bpm} BPM` : m.found ? `, found at ${fmtBpm(m.found)} BPM` : ", no tempo found (type one in)";
   if (m.src) say(`Loaded into USR${m.k + 1}${t}. The selected track plays it now; press PLAY if it's stopped.${cut}`);

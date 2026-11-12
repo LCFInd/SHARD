@@ -336,3 +336,14 @@ EXPORT(emu_set_div) uint32_t emu_set_div(uint32_t d)
     ui.force = 1;
     return 1;
 }
+
+/* a user slot's SENS (0..127): kept in its kit, its AUTO slices found again; the number found */
+EXPORT(emu_sens_set) uint32_t emu_sens_set(uint32_t k, uint32_t sens)
+{
+    if (k >= SMP_USER_SLOTS)
+        return 0;
+    shd_kit[k + 1u].bus.sens = (uint8_t)(sens > 127u ? 127u : sens);
+    slc_rescan(k, shd_kit[k + 1u].bus.sens);
+    ui.force = 1;
+    return slc_usr[k].len ? slc_usr[k].nauto : 0u;
+}
