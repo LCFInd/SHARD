@@ -1060,6 +1060,10 @@ static uint32_t mix_split(void)
 }
 #endif
 
+#if FELUCCA_MANGLER
+static volatile uint8_t bnc_on;                          /* bounce.c renders (mix_block from the main loop): the audio
+                                                          * interrupt plays silence and mixes nothing (audio.c) */
+#endif
 static void mix_block(int32_t *out, uint32_t n)
 {
     uint32_t i;

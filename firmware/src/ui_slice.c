@@ -31,7 +31,7 @@ static int slice_page_ok(void)
     if (e == &ENG_SHARD)                             /* SHARD plays SLICE's material and slices (E0..E2 alike) */
         return 1;
 #endif
-    return e == &ENG_SLICE;
+    return ENG_REF_IS(e, ENG_SLICE);
 }
 static int slice_page_on(void)
 {
@@ -110,12 +110,13 @@ static slc_man_t *slice_edit_begin(uint32_t *k)
     uint32_t src, div, n, i, a, b, st;
     const slc_src_t *s = slice_src(&src, &div);
     slc_man_t *m;
-    if (!s || !src || src == SLC_SRC_PIANO) {
-        static const char *const EMPTY[3] = {"USR1 EMPTY", "USR2 EMPTY", "USR3 EMPTY"};
-        ui_message(src && src != SLC_SRC_PIANO ? EMPTY[src - 1u] : "SRC USR1-3 TO EDIT");
+    if (!s || slc_slot_of_src(src) >= SMP_USER_SLOTS) {
+        static const char *const EMPTY[4] = {"USR1 EMPTY", "USR2 EMPTY", "USR3 EMPTY", "USR4 EMPTY"};
+        ui_message(slc_slot_of_src(src) < SMP_USER_SLOTS ? EMPTY[slc_slot_of_src(src)] :
+                   SMP_USER_SLOTS > 3 ? "SRC USR1-4 TO EDIT" : "SRC USR1-3 TO EDIT");
         return 0;
     }
-    *k = src - 1u;
+    *k = slc_slot_of_src(src);
     if (div != SLC_DIV_MAN && slc_man_of(s)) {       /* the slot has slices set by hand: those, not the grid; this */
         TSEL->p[P_E1] = slice_div_man();             /* touch only shows them (its marker was another one) */
         ui_message("DIV MAN");
@@ -170,7 +171,7 @@ static void slice_knob(uint32_t slot, int32_t steps)
     j = j < n ? (j < m->n ? j : m->n - 1u) : m->n;   /* (a table cut short by SLC_MIN: the nearest) */
     {
         int32_t d = steps * (int32_t)((b - a) / SP_COLS ? (b - a) / SP_COLS : 1u);
-        const slc_src_t *s = slc_get(k + 1u);
+        const slc_src_t *s = slc_get(slc_src_of_slot(k));
         if (j < m->n)
             slc_man_move(s, m, j, d);
         else
@@ -215,7 +216,7 @@ static void slice_act(uint32_t c)
         j = slc_man_join(m, j);
     } else {
         uint32_t before = m->n;
-        j = slc_man_split(slc_get(k + 1u), m, j);
+        j = slc_man_split(slc_get(slc_src_of_slot(k)), m, j);
         if (m->n == before) {
             ui_message(before >= SLC_AUTO ? "32 SLICES AT MOST" : "SLICE TOO SHORT");
             return;
@@ -349,7 +350,7 @@ static void shd_sens_poll(void)                     /* ui_input, every frame */
         return;
     for (k = 0; k < SMP_USER_SLOTS; k++)
         if (shd_sens_pend >> k & 1u)
-            slc_rescan(k, shd_kit[k + 1u].bus.sens);
+            slc_rescan(k, shd_kit[slc_src_of_slot(k)].bus.sens);
     shd_sens_pend = 0;
     ui.force = 1;
 }
@@ -409,8 +410,8 @@ static int32_t shfx_get(const uint8_t *f, uint32_t k, int bus) { return !bus && 
 static void shfx_set(uint8_t *f, const shfx_desc_t *d, int32_t v) { *f = (uint8_t)(int8_t)clamp(v, d->min, d->max); }
 static void shfx_changed(uint32_t src)
 {
-    if (src && src != SLC_SRC_PIANO)
-        shd_kit_save |= (uint8_t)(1u << (src - 1u));   /* to flash with the sample when the page is left */
+    if (slc_slot_of_src(src) < SMP_USER_SLOTS)
+        shd_kit_save |= (uint8_t)(1u << slc_slot_of_src(src));   /* to flash with the sample when the page is left */
 }
 
 static void shfx_knob(uint32_t slot, int32_t steps)
@@ -439,12 +440,12 @@ static void shfx_knob(uint32_t slot, int32_t steps)
     }
     d = bus ? &SHFX_BUS[k] : &SHFX_SL[k];
     if (slot == 2u && bus && k == SHFX_SENS) {       /* SENS: a user slot's; BREAK's and PIANO's slices are fixed */
-        if (!src || src == SLC_SRC_PIANO || src > SMP_USER_SLOTS) {
+        if (slc_slot_of_src(src) >= SMP_USER_SLOTS) {
             ui_message("SENS: USER SAMPLES");
             return;
         }
         shfx_set(&kit->bus.sens, d, kit->bus.sens + steps);
-        shd_sens_pend |= (uint8_t)(1u << (src - 1u));
+        shd_sens_pend |= (uint8_t)(1u << slc_slot_of_src(src));
         shd_sens_at = fm1_ms;
     } else if (slot == 2u && bus && k == SHFX_BPM) { /* BPM: up from AUTO starts at the tempo found (else 120); */
         uint8_t *f = &kit->bus.bpm;                  /* below 40 is AUTO again */
@@ -512,7 +513,7 @@ static int shfx_card(uint32_t c, const char **lb, char *val, const char **u, int
         return 0;
     v = shfx_get(shfx_field(kit, j, bus, k), k, bus);
     *lb = c == 2u ? d->name : "ALL";
-    if (bus && k == SHFX_SENS && (!src || src == SLC_SRC_PIANO)) {
+    if (bus && k == SHFX_SENS && slc_slot_of_src(src) >= SMP_USER_SLOTS) {
         str_cpy(val, "FIXED", 12);                   /* (BREAK, PIANO: slices made with the firmware) */
         return 1;
     }

@@ -156,7 +156,7 @@ canvas#lcd {
 .bench { display: grid; grid-template-columns: 1.3fr 1fr; gap: 28px; margin-top: 28px; padding: 0 6px; }
 .bench h2 { font: 600 17px/1.2 var(--cond); letter-spacing: .06em; margin: 0 0 10px; color: var(--print); }
 .bench p { margin: 0 0 10px; font-size: 14px; line-height: 1.5; color: var(--print-dim); max-width: 60ch; }
-.slots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.slots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .slot {
   border: 1px dashed #4a5054; border-radius: 8px; padding: 12px; min-height: 86px; cursor: pointer;
   display: flex; flex-direction: column; gap: 6px; background: rgba(255,255,255,.02); color: inherit; text-align: left; font: inherit;
@@ -217,7 +217,7 @@ dl.map dd { margin: 0; color: var(--print-dim); line-height: 1.4; }
   .key.w { height: 120px; } .key.b { height: 74px; }
   .key .hint { display: none; }
   .bench { grid-template-columns: 1fr; }
-  .slots { grid-template-columns: 1fr; }
+  .slots { grid-template-columns: 1fr 1fr; }
   .seg button { padding: 10px 8px; min-width: 0; flex: 1; }
   .seg { width: 100%; }
   .opts .field:nth-child(2) { flex: 1 1 100%; }
@@ -259,7 +259,7 @@ dl.map dd { margin: 0; color: var(--print-dim); line-height: 1.4; }
   <section class="bench">
     <div>
       <h2>Load your own loops</h2>
-      <p>Drop a WAV on a slot, or tap one to pick a file. It's converted the way the Felucca editor does it (mono, 22.05 kHz, IMA ADPCM, up to 7.4 s). SHARD finds its tempo, so PLAY keeps it in time with the song. If the selected track plays SHARD, it switches to the slot.</p>
+      <p>Drop a WAV on a slot, or tap one to pick a file. USR4 is the slot the removed synth engines made room for. It's converted the way the Felucca editor does it (mono, 22.05 kHz, IMA ADPCM, up to 7.4 s). SHARD finds its tempo, so PLAY keeps it in time with the song. If the selected track plays SHARD, it switches to the slot.</p>
       <div class="opts">
         <label class="field"><span>Tempo</span><input id="bpm" type="number" inputmode="decimal" min="40" max="250" step="1" placeholder="Find it"></label>
         <div class="field"><span id="divLabel">Slices</span>
@@ -273,7 +273,7 @@ dl.map dd { margin: 0; color: var(--print-dim); line-height: 1.4; }
       <div class="msg" id="msg" role="status"></div>
       <div class="tools">
         <button type="button" id="resetDemo">Restart with the SHARD demo</button>
-        <button type="button" id="resetFactory">Restart as factory Felucca</button>
+        <button type="button" id="resetFactory">Restart with the power-on tracks</button>
       </div>
     </div>
     <div>
@@ -282,8 +282,9 @@ dl.map dd { margin: 0; color: var(--print-dim); line-height: 1.4; }
         <dt>Knobs</dt><dd>Drag up or down, scroll, or focus one and use the arrow keys.</dd>
         <dt>Buttons</dt><dd>Hold them as on the device: a held FX, GLO, SCL, EDIT or REC opens its layer.</dd>
         <dt class="keyhelp">Keyboard</dt><dd class="keyhelp">A to ' play C to F. Space is PLAY, Esc is HOME, [ and ] are OCT- and OCT+.</dd>
-        <dt>SHARD</dt><dd>PRESETS picks SHARD after DRUM. EDIT steps through EDIT 1, EDIT 2, SLICES and SLICE FX.</dd>
+        <dt>Engines</dt><dd>PRESETS offers SHARD, SAMPLE and GRAIN. On SHARD, EDIT steps through EDIT 1, EDIT 2, SLICES and SLICE FX.</dd>
         <dt>Tempo</dt><dd>On the device it's on SLICE FX: turn KNOB 1 past the last slice to BUS, then BPM. AUTO is the tempo found. SENS is beside it.</dd>
+        <dt>Bounce</dt><dd>Tap SAVE until BOUNCE. KNOB 1 picks the bars, KNOB 2 the tracks (MIX or one), KNOB 3 the slot; OCT+ renders it there, sliced and in tempo.</dd>
         <dt>Per slice</dt><dd>SLICE FX: KNOB 1 picks the slice, KNOB 2 the setting (envelope, DIR, FILTER with COMB, DRIVE, DELAY, ROUTE to LOW, MID, HIGH or FULL), KNOB 3 sets it.</dd>
       </dl>
       <div class="stat" style="margin-top:14px"><span id="audioInfo">Audio off</span><div class="meter" aria-hidden="true"><i id="meter"></i></div></div>
@@ -453,7 +454,7 @@ function onMsg(m) {
   if (m.type === "screen") drawScreen(m.px, m.off);
   else if (m.type === "leds") drawLeds(m.leds);
   else if (m.type === "ready") { $("pwr").classList.add("on"); $("pwrText").textContent = "On"; }
-  else if (m.type === "status") $("meter").style.width = Math.min(100, m.peak * 100) + "%";
+  else if (m.type === "status") { $("meter").style.width = Math.min(100, m.peak * 100) + "%"; slotsSeen(m.slots); }
   else if (m.type === "slot") slotLoaded(m);
   else if (m.type === "tempo") tempoChanged(m);
   else if (m.type === "sens" && slotInfo[m.k]) { slotInfo[m.k].hits = m.hits; slotText(m.k); say(`USR${m.k + 1}: ${m.hits} hits found at sensitivity ${$("sens").value}.`); }
@@ -490,7 +491,7 @@ async function powerOn() {
 }
 $("powerBtn").addEventListener("click", powerOn);
 $("resetDemo").addEventListener("click", () => { send({ type: "reset", demo: true }); say("Restarted with the SHARD demo."); });
-$("resetFactory").addEventListener("click", () => { send({ type: "reset", demo: false }); say("Restarted with Felucca's factory tracks."); });
+$("resetFactory").addEventListener("click", () => { send({ type: "reset", demo: false }); say("Restarted with the power-on tracks."); });
 
 /* ---------------------------------------------------------- user samples --- */
 /* web/editor.html's port of tools/sampleio.py: WAV -> mono 22.05 kHz int16 -> IMA ADPCM slot */
@@ -592,7 +593,7 @@ function buildSlot(name, s) {
   return { hdr, data };
 }
 
-const slotEls = [], slotInfo = [null, null, null];
+const slotEls = [], slotInfo = [null, null, null, null];
 let slotPick = 0, lastSlot = -1;
 /* the slices: SHARD's DIV list (0 "2" .. 6 "32", 7 AUTO); Hits = AUTO, one per onset */
 const DIVS = [["Hits", 7], ["2", 0], ["4", 1], ["6", 2], ["8", 3], ["12", 4], ["16", 5]];
@@ -627,12 +628,12 @@ const fmtBpm = (b10) => (b10 / 10).toFixed(b10 % 10 ? 1 : 0);
 function slotText(k) {
   const i = slotInfo[k];
   if (!i) return;
-  const tempo = i.bpm ? `${i.bpm} BPM, set` : i.found ? `${fmtBpm(i.found)} BPM, found` : "no tempo found";
+  const tempo = i.bounced ? "the song's tempo" : i.bpm ? `${i.bpm} BPM, set` : i.found ? `${fmtBpm(i.found)} BPM, found` : "no tempo found";
   const hits = i.hits ? `, ${i.hits} hits` : "";
   slotEls[k].querySelector("em").textContent = `${i.name.slice(0, 22)}, ${i.secs} s, ${tempo}${hits}` + (i.cut ? " (cut to fit)" : "");
 }
 function say(t) { $("msg").textContent = t; }
-for (let k = 0; k < 3; k++) {
+for (let k = 0; k < 4; k++) {
   const el = document.createElement("button");
   el.type = "button";
   el.className = "slot";
@@ -674,6 +675,25 @@ function slotLoaded(m) {
   const t = i && i.bpm ? ` at ${i.bpm} BPM` : m.found ? `, found at ${fmtBpm(m.found)} BPM` : ", no tempo found (type one in)";
   if (m.src) say(`Loaded into USR${m.k + 1}${t}. The selected track plays it now; press PLAY if it's stopped.${cut}`);
   else say(`Loaded into USR${m.k + 1}${t}. Pick SHARD in PRESETS and set SRC to USR${m.k + 1} on EDIT 1 to play it.${cut}`);
+}
+/* what the firmware's slots hold: a bounce (SAVE > BOUNCE) fills one the page did not load */
+const slotLen = [0, 0, 0, 0];
+function slotsSeen(lens) {
+  if (!lens) return;
+  lens.forEach((n, k) => {
+    if (n === slotLen[k]) return;
+    slotLen[k] = n;
+    const i = slotInfo[k];
+    if (n && (!i || Math.abs(+i.secs * 22050 - n) > 600)) {
+      slotInfo[k] = { name: "Bounced on the FM-1", secs: (n / 22050).toFixed(2), cut: false, bpm: 0, found: 0, bounced: true };
+      slotEls[k].classList.add("full");
+      slotText(k);
+    } else if (!n && i) {
+      slotInfo[k] = null;
+      slotEls[k].classList.remove("full");
+      slotEls[k].querySelector("em").textContent = "Empty. Drop a WAV here.";
+    }
+  });
 }
 function tempoChanged(m) {
   const i = slotInfo[m.k];

@@ -93,7 +93,8 @@ static int mom_turn(uint32_t k, int32_t s)
     } else {
         if (act_cols() || lock_held() || !(pg->scope == SC_TRACK || pg->scope == SC_ENGINE || pg->scope == SC_GLOBAL) ||
             pg->graph == GR_EVENTS || pg->graph == GR_SONG || pg->graph == GR_BROWSE || pg->graph == GR_USER ||
-            pg->graph == GR_PATS || (pg->graph == GR_SLICES && k < 2u) || pg->graph == GR_SHFX || (pg->graph == GR_MOD && k == 0u))
+            pg->graph == GR_PATS || (pg->graph == GR_SLICES && k < 2u) || pg->graph == GR_SHFX || pg->graph == GR_BOUNCE ||
+            (pg->graph == GR_MOD && k == 0u))
             return 0;
         d = page_desc(pg, k, &vp);
     }
@@ -1032,6 +1033,12 @@ static void edit_param(uint32_t slot, int32_t steps)
         return;
     }
 #endif
+#if FELUCCA_MANGLER
+    if (pg->graph == GR_BOUNCE) {                        /* BOUNCE: BARS FROM TO (bounce.c) */
+        bnc_knob(slot, steps);
+        return;
+    }
+#endif
 #if FELUCCA_SLICE
     if (pg->graph == GR_SLICES && slot < 2u) {           /* SLICES: KNOB 1 the marker, 2 moves it (ui_slice.c) */
         if (slice_page_ok())                              /* (the engine changed before ui_draw left the page) */
@@ -1107,6 +1114,12 @@ static void act_do(void)
                      c == 2u ? CF_DEL_ROW : CF_CLEAR_SONG, c == 2u ? ui.song_row : song.sel);
         return;
     }
+#if FELUCCA_MANGLER
+    if (cur_page()->graph == GR_BOUNCE) {               /* SAVE > BOUNCE (bounce.c): says what stops it, or bounces */
+        bnc_go();
+        return;
+    }
+#endif
     if (cur_page()->graph == GR_SONG) {
         if (song.playing || chain_busy() || seq_counting()) transport_req = 2;
         else chain_play_ui();
@@ -1326,7 +1339,7 @@ static void presets_turn(int32_t s)
         edit_param(0, s);                                 /* KNOB 1's (STEP: STOP TO EDIT while a song plays) */
         ui.hot_col = 0;
         ui.hot_t = 40;
-    } else if (g != GR_TOOLS && g != GR_SLICES && g != GR_SHFX) {
+    } else if (g != GR_TOOLS && g != GR_SLICES && g != GR_SHFX && g != GR_BOUNCE) {
         preset_step(s);
     }
 }
@@ -1852,7 +1865,8 @@ static void ui_input(void)
         }
         if (ui.home || pg->scope == SC_STEP || pg->scope == SC_TRK || page_desc(pg, k, &hv) ||
             ((pg->graph == GR_USER || pg->graph == GR_MOD || pg->graph == GR_PATS) && k == 0u)
-            || pg->graph == GR_SONG || (pg->graph == GR_SLICES && k < 2u) || pg->graph == GR_SHFX || fop_page(pg->graph)) {   /* (not an empty
+            || pg->graph == GR_SONG || (pg->graph == GR_SLICES && k < 2u) || pg->graph == GR_SHFX ||
+            (pg->graph == GR_BOUNCE && k < 3u) || fop_page(pg->graph)) {   /* (not an empty
                                                                                                           * column) */
             ui.hot_col = (uint8_t)k;
             ui.hot_t = 40;

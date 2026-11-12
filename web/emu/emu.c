@@ -8,7 +8,7 @@
 #define FELUCCA_CDC 1
 #define __attribute__(x)
 #define EXPORT(name)
-static uint32_t host_slots[3u * 0x14000u / 4u];          /* USR1..3, as the flash at 0xA0000 */
+static uint32_t host_slots[4u * 0x14000u / 4u];          /* USR1..3, as the flash at 0xA0000 */
 #define SMP_USER_XIP(k) ((const uint8_t *)host_slots + (k) * SMP_USER_SIZE)
 #include "felucca_tables.h"
 #include "../../firmware/bsp/chip/libc.c"
@@ -342,8 +342,15 @@ EXPORT(emu_sens_set) uint32_t emu_sens_set(uint32_t k, uint32_t sens)
 {
     if (k >= SMP_USER_SLOTS)
         return 0;
-    shd_kit[k + 1u].bus.sens = (uint8_t)(sens > 127u ? 127u : sens);
-    slc_rescan(k, shd_kit[k + 1u].bus.sens);
+    shd_kit[slc_src_of_slot(k)].bus.sens = (uint8_t)(sens > 127u ? 127u : sens);
+    slc_rescan(k, shd_kit[slc_src_of_slot(k)].bus.sens);
     ui.force = 1;
     return slc_usr[k].len ? slc_usr[k].nauto : 0u;
 }
+
+/* user slot k's SHARD / SLICE SRC (USR4: 5, after PIANO) */
+EXPORT(emu_src_of_slot) uint32_t emu_src_of_slot(uint32_t k) { return slc_src_of_slot(k); }
+EXPORT(emu_slots) uint32_t emu_slots(void) { return SMP_USER_SLOTS; }
+
+/* user slot k's samples (0 = empty), as the firmware has it now (an upload, a bounce) */
+EXPORT(emu_slot_len) uint32_t emu_slot_len(uint32_t k) { return k < SMP_USER_SLOTS && usr_nz[k] ? slc_usr[k].len : 0u; }

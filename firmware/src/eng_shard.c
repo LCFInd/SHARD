@@ -349,7 +349,7 @@ static uint32_t shd_tempo_of(const slc_src_t *s, uint8_t *o)
 static void shd_tempo_scan(uint32_t k)
 {
     if (k < SMP_USER_SLOTS)
-        shd_det_bpm10[1u + k] = (uint16_t)shd_tempo_of(&slc_usr[k], shd_onset);
+        shd_det_bpm10[slc_src_of_slot(k)] = (uint16_t)shd_tempo_of(&slc_usr[k], shd_onset);
 }
 /* the source's tempo in 0.1 BPM: the kit's, else the one found; 0 = unknown */
 static uint32_t shd_bpm10(uint32_t src)

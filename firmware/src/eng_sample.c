@@ -39,11 +39,18 @@ static uint32_t pow2_q16(int32_t d16)
 
 /* ---- user sample slots (loaded from the web editor into flash, see web/EDITOR_PROTOCOL.md)
  * 3 slots of 80 KiB at flash 0xA0000.. (Felucca data region), read through the plain XIP
- * window. Slot = header (magic, count, name, data length, CRC32) + up to 16 zones in the
+ * window. The mangler (FELUCCA_MANGLER) adds USR4 at 0xE7000..0xFAFFF: FM6's voice-bank sector (no FM6 here) and
+ * the spare flash above it that fm1_flash.h keeps for a firmware's own data (FL_XDATA1); its sectors' bytes 0xF00..
+ * must never read as an update record (smp_rec_guard). Slot = header (magic, count, name, data length, CRC32) + up to 16 zones in the
  * smp_zone_t layout (off relative to the slot's data at +512) + IMA ADPCM data. */
 #include "../bsp/chip/fm1_xip.h"   /* relative: hostsim includes this file too */
+#if FELUCCA_MANGLER
+#define SMP_USER_SLOTS 4
+#else
 #define SMP_USER_SLOTS 3
+#endif
 #define SMP_USER_BASE 0xA0000u
+#define SMP_USER4_BASE 0xE7000u                     /* USR4 (the mangler) */
 #define SMP_USER_SIZE 0x14000u
 #define SMP_USER_DATA 512u
 #define SMP_USER_MAGIC 0x504D5346u                  /* "FSMP" */
@@ -58,10 +65,44 @@ typedef struct {
 } smp_user_hdr_t;                                   /* 32 + 16 x 28 = 480 B, data at +512 */
 static smp_zone_t usr_zone[SMP_USER_SLOTS][16];     /* RAM copy, off rebased onto SMP_DATA */
 static uint8_t usr_nz[SMP_USER_SLOTS];
+#if FELUCCA_MANGLER
+static const char *const SMP_ALL_NAMES[SMP_NALL] = {SMP_SET_NAMES_INIT, "USR1", "USR2", "USR3", "USR4"};
+#else
 static const char *const SMP_ALL_NAMES[SMP_NALL] = {SMP_SET_NAMES_INIT, "USR1", "USR2", "USR3"};
+#endif
+/* slot k's flash offset */
+static inline uint32_t smp_user_off(uint32_t k) { return k < 3u ? SMP_USER_BASE + k * SMP_USER_SIZE : SMP_USER4_BASE; }
+_Static_assert(SMP_USER_SLOTS < 4 || SMP_USER4_BASE + SMP_USER_SIZE <= 0xFC000u, "USR4 below Felucca's globals");
+/* bytes about to be programmed at flash offset off: the update loader (and so, presumably, the SPL) takes a 4 KiB
+ * sector's bytes 0xF00.. for an update record when 6..7 there read "AT" and 0..1 hold a CRC-16 (0x1021, from 0) of the 78
+ * after them, not 0; the loader then erases the sector (ldr_core.c). Sample data that happens to read so (about once in
+ * 2^32 sectors) gets one bit of byte 0xF06 flipped: a step of one ADPCM code. A write that covers 0xF00..0xF4F whole is
+ * checked (the editor's 256-byte writes and the bounce's sectors do); USR4 only: the loader skips Felucca's store */
+static uint32_t smp_crc16(const uint8_t *p, uint32_t n)
+{
+    uint32_t c = 0, i;
+    while (n--) {
+        c ^= (uint32_t)*p++ << 8;
+        for (i = 0; i < 8u; i++)
+            c = c & 0x8000u ? (c << 1) ^ 0x1021u : c << 1;
+        c &= 0xFFFFu;
+    }
+    return c;
+}
+static void smp_rec_guard(uint32_t off, uint8_t *buf, uint32_t n)
+{
+    uint32_t a = (off & ~0xFFFu) + 0xF00u;
+    for (; a + 80u <= off + n; a += 0x1000u)
+        if (a >= off) {
+            uint8_t *r = buf + (a - off);
+            uint32_t c = (uint32_t)r[0] | (uint32_t)r[1] << 8;
+            if (r[6] == 0x41u && r[7] == 0x54u && c && c == smp_crc16(r + 2, 78))
+                r[6] ^= 1u;
+        }
+}
 
 #ifndef SMP_USER_XIP                                /* host tests: a RAM image of the slots */
-#define SMP_USER_XIP(k) fm1_xip_ptr(SMP_USER_BASE + (k) * SMP_USER_SIZE)
+#define SMP_USER_XIP(k) fm1_xip_ptr(smp_user_off(k))
 #endif
 static const uint8_t *smp_user_xip(uint32_t k) { return SMP_USER_XIP(k); }
 #if FELUCCA_SLICE

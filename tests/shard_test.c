@@ -14,7 +14,7 @@
  * 7. demos into DEMO_DIR: BREAK in PLAY at 120 and 90 BPM, a resequenced kit with routing, the user loop in PLAY. */
 #include <stdarg.h>
 #include <stdint.h>
-static uint32_t host_slots[3u * 0x14000u / 4u];          /* USR1..3, as the flash at 0xA0000 */
+static uint32_t host_slots[4u * 0x14000u / 4u];          /* USR1..3, as the flash at 0xA0000 */
 #define SMP_USER_XIP(k) ((const uint8_t *)host_slots + (k) * SMP_USER_SIZE)
 #define main hostsim_main
 #include "hostsim.c"
@@ -29,24 +29,48 @@ static int transport_busy(void) { return host_busy; }
 static int slice_page_on(void) { return host_page; }
 static void ui_message(const char *s) { snprintf(host_msg, sizeof host_msg, "%s", s); }
 static int st_read(uint32_t off, void *dst, uint32_t n) { (void)off; (void)dst; (void)n; return -1; }
+/* the flash's slots in host_slots: USR1..3 from 0xA0000, USR4 (the mangler) at 0xE7000; 0 = not a slot */
+static uint8_t *host_flash(uint32_t off, uint32_t n)
+{
+    uint32_t k;
+    for (k = 0; k < 4u; k++) {
+        uint32_t b = k < 3u ? SMP_USER_BASE + k * 0x14000u : 0xE7000u;
+        if (off >= b && off + n <= b + 0x14000u)
+            return (uint8_t *)host_slots + k * 0x14000u + (off - b);
+    }
+    return 0;
+}
 static int st_erase(uint32_t off)
 {
-    if (off < SMP_USER_BASE || off + 0x1000u > SMP_USER_BASE + sizeof host_slots || (off & 0xFFFu))
+    uint8_t *p = host_flash(off, 0x1000u);
+    if (!p || (off & 0xFFFu))
         return -8;
-    memset((uint8_t *)host_slots + (off - SMP_USER_BASE), 0xFF, 0x1000u);
+    memset(p, 0xFF, 0x1000u);
     return 0;
 }
 static int st_prog(uint32_t off, const void *src, uint32_t n)
 {
     uint32_t i;
-    if (off < SMP_USER_BASE || off + n > SMP_USER_BASE + sizeof host_slots)
+    uint8_t *p = host_flash(off, n);
+    if (!p)
         return -8;
     for (i = 0; i < n; i++)
-        ((uint8_t *)host_slots)[off - SMP_USER_BASE + i] &= ((const uint8_t *)src)[i];
+        p[i] &= ((const uint8_t *)src)[i];
     return 0;
 }
+/* bounce.c (the mangler): what it needs of the UI */
+#if FELUCCA_MANGLER
+static struct { uint8_t force; } ui;
+static char host_said[40];
+static void ui_say(const char *a, const char *b) { snprintf(host_said, sizeof host_said, "%s%s", a, b); }
+static void ui_draw(void) {}
+static void fm1_wdt_feed(void) {}
+#endif
 #include "../firmware/src/storage.c"
 #include "../firmware/src/slice_store.c"
+#if FELUCCA_MANGLER
+#include "../firmware/src/bounce.c"
+#endif
 
 static int fails;
 static void check(const char *what, int ok, const char *fmt, ...)
@@ -318,10 +342,23 @@ int main(int argc, char **argv)
     int ok;
 
     /* 1 */
+#if FELUCCA_MANGLER
+    check("the mangler: SHARD (15), SAMPLE, GRAIN offered, in that order", ENGINES[ENGI_SHARD] == &ENG_SHARD &&
+          NENG_SHOWN == 3u + FELUCCA_ADPCM && eng_vis(0) == ENGI_SHARD && eng_vis(1) == ENGI_SAMPLE &&
+          eng_vis(2) == ENGI_GRAIN, "%u shown", NENG_SHOWN);
+    for (ok = 1, i = 0; i < NENGINES; i++)
+        ok &= eng_ok(i) == (i == ENGI_SHARD || i == ENGI_SAMPLE || i == ENGI_GRAIN || (FELUCCA_ADPCM && i == ENGI_ADPCM)) &&
+              (eng_ok(i) || ENGINES[i]->note_on != 0);
+    check("the mangler: every synth engine's number reserved (never offered, silent)", ok, 0);
+    for (ok = 1, i = 0; i < NPART; i++)
+        ok &= eng_ok(trk_def_engine(i));
+    check("the mangler: the power-on tracks play SHARD / GRAIN", ok, 0);
+#else
     check("SHARD is engine 15, after DRUM in the shown order", ENGINES[ENGI_SHARD] == &ENG_SHARD &&
           eng_rank(ENGI_SHARD) == eng_rank(ENGI_DRUM) + 1u, 0);
     check("engine 14 reserved without ADPCM: never offered", FELUCCA_ADPCM || (!eng_ok(14) && NENG_SHOWN == 14u),
           "%u shown", NENG_SHOWN);
+#endif
     for (ok = 1, i = 0; i < NENG_SHOWN; i++)
         ok &= eng_vis(i) != 14u || FELUCCA_ADPCM;
     check("the order lists no reserved engine", ok, 0);
@@ -835,6 +872,148 @@ int main(int argc, char **argv)
             check("FULL, clean: about as loud as DIRECT", ef > ed * 0.8 && ef < ed * 1.25, "%.3g against %.3g", ef, ed);
         }
     }
+#if FELUCCA_MANGLER
+    {   /* USR4 (the mangler): flash 0xE7000, SHARD's SRC 5 (after PIANO), its kit and tempo; SAMPLE / GRAIN's SET 8 */
+        static double x[22050 * 4];
+        static int16_t y[22050 * 4];
+        uint32_t m = make_loop(x, NELEM(x), 128, "XHHHXHHHXHHHXHHH", 2, 0);
+        uint8_t rec[0x1000];
+        slot_pcm(3, y, to_pcm(x, y, m));
+        check("USR4: at 0xE7000, below the globals, SRC 5, a slot of its own", smp_user_off(3) == 0xE7000u &&
+              smp_user_off(2) == 0xC8000u && slc_src_of_slot(3) == 5u && slc_slot_of_src(5) == 3u &&
+              slc_slot_of_src(4) >= SMP_USER_SLOTS && slc_get(5) == &slc_usr[3] && !strcmp(N_SLC_SRC[5], "USR4") &&
+              !strcmp(SMP_ALL_NAMES[SMP_NSETS + 3], "USR4"), 0);
+        check("USR4: scanned, its tempo found (2 bars at 128)", slc_usr[3].nauto > 4u && shd_det_bpm10[5] >= 1275u &&
+              shd_det_bpm10[5] <= 1285u, "%u slices, %u", slc_usr[3].nauto, shd_det_bpm10[5]);
+        fresh(0, SHD_M_ONE, SHD_DIV_AUTO);
+        T->p[P_E0] = 5;
+        trk_note_on(T, 60, 110);
+        out_peak = 0;
+        blocks(50);
+        check("USR4: SHARD plays it", out_peak > 2000, "peak %d", out_peak);
+        voices_off();
+        /* the update loader's record test (ldr_core.c): a sector's 0xF00.. never reads as one in written sample data */
+        memset(rec, 0x41, sizeof rec);
+        smp_rec_guard(0xE7000u, rec, sizeof rec);
+        ok = rec[0xF06] == 0x41u;                                /* "AA..": no record (no "AT", no CRC): untouched */
+        rec[0xF06] = 0x41; rec[0xF07] = 0x54;
+        {
+            uint32_t c = smp_crc16(rec + 0xF02, 78);
+            rec[0xF00] = (uint8_t)c; rec[0xF01] = (uint8_t)(c >> 8);
+            ok &= c != 0u;
+        }
+        smp_rec_guard(0xE7000u, rec, sizeof rec);
+        ok &= rec[0xF06] == 0x40u;
+        check("USR4: data that would read as an update record is changed by a bit; other data is not", ok, 0);
+        memset((uint8_t *)host_slots + 3u * SMP_USER_SIZE, 0, SMP_USER_SIZE);
+        smp_user_scan(3);
+    }
+#endif
+#if FELUCCA_MANGLER
+    {   /* BOUNCE (bounce.c): the sequence into a slot */
+        static int32_t live[FS * 4];
+        uint32_t n22, f, i2;
+        int32_t o[2 * CTL], prev = 0, odd = 0;
+        double sab = 0, saa = 0, sbb = 0;
+        slc_dec_t d;
+        fresh(0, SHD_M_PLAY, SHD_DIV_AUTO);                    /* track 1: SHARD RECYCLE playing BREAK's slices */
+        for (i = 0; i < NSTEP; i++)
+            T->step[i].time = ST_REST;
+        for (i = 0; i < 16u; i++) {
+            uint8_t nn = PATTERNS[10].note[i];
+            put_step(T, i, 1u, &nn, ST_NOTE, 0u);
+        }
+        T->p[P_SLEN] = 16;
+        song.g[G_BPM] = 120;
+        for (i = 1; i < NTRK; i++)
+            trk[i].p[P_MUTE] = 1;
+        trk[2].p[P_MUTE] = 0;                                  /* (a track left on, but empty) */
+        bnc.bars = 1;                                          /* 2 bars */
+        bnc.from = 0;
+        bnc.to = 1;                                            /* USR2 */
+        n22 = bnc_len();
+        check("BOUNCE: 2 bars at 120 BPM is 4 s (88,200 samples at 22,050 Hz), within the slot", n22 == 88200u &&
+              bnc_want() == n22 && !bnc_why(), "%u", n22);
+        ok = bnc_go() == 0;
+        check("BOUNCE: done, said, the transport stopped, the audio back, the mutes as they were",
+              ok && !strcmp(host_said, "BOUNCED TO USR2") && !song.playing && !bnc_on && trk[1].p[P_MUTE] == 1 &&
+              trk[2].p[P_MUTE] == 0 && !trk[0].p[P_MUTE], "%s", host_said);
+        check("BOUNCE: the slot holds it (one zone, 22,050 Hz, BOUNCE2) and SHARD sliced it", usr_nz[1] == 1u &&
+              slc_usr[1].len == n22 && !memcmp(((const smp_user_hdr_t *)SMP_USER_XIP(1))->name, "BOUNCE2", 7) &&
+              slc_usr[1].nauto > 8u, "%u samples, %u slices", slc_usr[1].len, slc_usr[1].nauto);
+        check("BOUNCE: the kit's BPM is the song's, the tempo found agrees", shd_kit[2].bus.bpm == 120u &&
+              shd_det_bpm10[2] >= 1195u && shd_det_bpm10[2] <= 1205u, "%u, %u", shd_kit[2].bus.bpm, shd_det_bpm10[2]);
+        /* the same sequence played live, its second time through, decimated as the bounce does: the slot's sound */
+        fresh(0, SHD_M_PLAY, SHD_DIV_AUTO);
+        for (i = 0; i < NSTEP; i++)
+            T->step[i].time = ST_REST;
+        for (i = 0; i < 16u; i++) {
+            uint8_t nn = PATTERNS[10].note[i];
+            put_step(T, i, 1u, &nn, ST_NOTE, 0u);
+        }
+        T->p[P_SLEN] = 16;
+        song.g[G_BPM] = 120;
+        for (i = 1; i < NTRK; i++)
+            trk[i].p[P_MUTE] = 1;
+        song.master_q12 = MASTER_FULL;
+        seq_start();
+        for (f = 0; f < 2u * n22; f += CTL)
+            mix_block(o, CTL);
+        seq_stop();
+        seq_start();
+        for (f = 0; f < 2u * n22; f += CTL) {
+            mix_block(o, CTL);
+            for (i2 = 0; i2 < CTL; i2++) {
+                int32_t m2 = (o[2u * i2] + o[2u * i2 + 1u]) >> 1;
+                if ((f + i2) & 1u) {
+                    live[(f + i2) >> 1] = (prev + 2 * odd + m2) >> 2;
+                    prev = m2;
+                } else
+                    odd = m2;
+            }
+        }
+        seq_stop();
+        slc_dec_at(&d, 0, 0);
+        for (f = 0; f < n22; f++) {
+            int32_t x2 = slc_dec_next(&slc_usr[1], &d), y2 = clamp(live[f], -32768, 32767);
+            sab += (double)x2 * y2; saa += (double)x2 * x2; sbb += (double)y2 * y2;
+        }
+        check("BOUNCE: the slot sounds as the sequence does (the second time through)", sab / sqrt(saa * sbb + 1) > 0.97 &&
+              saa > 1e12, "correlation %.4f", sab / sqrt(saa * sbb + 1));
+        /* what stops it */
+        T->p[P_E0] = 2;                                        /* track 1 plays USR2 */
+        bnc.from = 0;
+        check("BOUNCE: not into a slot a track it renders plays", bnc_why() && !strcmp(bnc_why(), "USR2 PLAYS IN IT") &&
+              bnc_go() == 1 && usr_nz[1] == 1u, "%s", bnc_why() ? bnc_why() : "-");
+        T->p[P_MUTE] = 1;
+        check("BOUNCE: a muted track does not count (MIX: the tracks not muted)", !bnc_why(), 0);
+        T->p[P_MUTE] = 0;
+        bnc.from = 3;
+        check("BOUNCE: FROM T3 renders track 3 alone (track 1 on USR2 does not count)", !bnc_why(), 0);
+        bnc.from = 0;
+        T->p[P_E0] = 0;
+        song.g[G_CLOCK] = 1;
+        check("BOUNCE: the internal clock only", bnc_why() != 0, 0);
+        song.g[G_CLOCK] = 0;
+        /* longer than the slot: cut at 7.38 s, no BPM (not whole bars) */
+        song.g[G_BPM] = 60;
+        bnc.bars = 3;                                          /* 8 bars at 60: 32 s */
+        bnc.to = 3;                                            /* USR4 */
+        check("BOUNCE: 8 bars at 60 BPM: cut to what the slot holds beside its records", bnc_len() == BNC_MAX && BNC_MAX == 154624u && bnc_want() > bnc_len(),
+              "%u of %u", bnc_len(), bnc_want());
+        shd_kit[5].bus.bpm = 0;
+        ok = bnc_go() == 0;
+        check("BOUNCE: into USR4, cut: the slot full, no BPM set", ok && slc_usr[3].len == BNC_MAX && slc_rec_room(3) &&
+              shd_kit[5].bus.bpm == 0u, "%u", slc_usr[3].len);
+        song.g[G_BPM] = 120;
+        for (i = 0; i < 2u; i++) {
+            memset((uint8_t *)host_slots + (1u + 2u * i) * SMP_USER_SIZE, 0, SMP_USER_SIZE);
+            smp_user_scan(1u + 2u * i);
+        }
+        for (i = 0; i < NTRK; i++)
+            trk[i].p[P_MUTE] = 0;
+    }
+#endif
     {   /* SENS: more hits found as it rises, on a slot (USR3: hats, snares, kicks) */
         static double x[22050 * 4];
         static int16_t y[22050 * 4];

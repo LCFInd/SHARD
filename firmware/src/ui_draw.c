@@ -1176,6 +1176,18 @@ static void draw_columns(void)
         return;
     }
 #endif
+#if FELUCCA_MANGLER
+    if (cur_page()->graph == GR_BOUNCE) {                /* BOUNCE: BARS FROM TO, then the action (bounce.c) */
+        for (c = 0; c < 3u; c++) {
+            const char *lb, *u;
+            int32_t r;
+            bnc_card(c, &lb, val, &u, &r);
+            draw_column(c, lb, val, u, VAL(c), r, ICON_AUTO);
+        }
+        draw_act_column(3, "BOUNCE", T_THEME, ICON_AUTO);
+        return;
+    }
+#endif
 #if FELUCCA_SHARD
     if (cur_page()->graph == GR_SHFX) {                  /* SLICE FX: SLICE PARAM VALUE ALL (ui_slice.c) */
         for (c = 0; c < 4u; c++) {

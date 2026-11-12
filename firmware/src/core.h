@@ -42,6 +42,15 @@
 #if FELUCCA_SHARD && !FELUCCA_SLICE
 #error "FELUCCA_SHARD needs FELUCCA_SLICE (SHARD plays SLICE's material)"
 #endif
+#ifndef FELUCCA_MANGLER
+#define FELUCCA_MANGLER 1        /* the sample mangler: SHARD, SAMPLE and GRAIN only. The synth engines (ANALOG PHASE LOFI
+                                  * VOICE TRIO WHEEL PHYS DRUM NOISE FM6) and SLICE as an engine are not built; their
+                                  * numbers stay reserved (silent, never offered), so stored sounds keep their places.
+                                  * FELUCCA_MANGLER=0 builds Felucca's full set (the upstream tests use it) */
+#endif
+#if FELUCCA_MANGLER && !FELUCCA_SHARD
+#error "FELUCCA_MANGLER needs FELUCCA_SHARD"
+#endif
 #if FELUCCA_SHARD
 #define NENGINES 16              /* SLICE (13), ADPCM (14, or reserved without FELUCCA_ADPCM), SHARD (15) */
 #else
@@ -51,9 +60,13 @@
 #define ENGI_ADPCM 14u
 #define ENGI_SHARD 15u
 #define ENGI_DIGITAL 1u          /* reserved without FELUCCA_FM4: never selectable (eng_ok), its sounds load as FM6 */
+#if FELUCCA_MANGLER
+#define NENG_SHOWN (3 + FELUCCA_ADPCM)   /* SHARD, SAMPLE, GRAIN (and ADPCM when built) */
+#else
 #define NENG_SHOWN (NENGINES - !FELUCCA_FM4 - (FELUCCA_SHARD && !FELUCCA_ADPCM))   /* the engines one can pick: PRESETS,
                                                 * the EDIT layer, the editor, in the display order of engines.c ENGINE_ORDER
                                                 * (14 reserved when SHARD is built without ADPCM) */
+#endif
 #define UP_SLOTS 32u             /* user presets (upreset.c) */
 
 /* ------------------------------------------------------- parameters --- */
@@ -151,6 +164,7 @@ static int drum_from_phys(uint32_t engine, int16_t *e)
  * ENGI_DRUM now); projects (project.c proj_perc), user presets (upreset.c up_migrate), factory preset 4 and
  * favourites (ui.c, settings_persist.c). Idempotent */
 #define ENGI_SAMPLE 4u
+#define ENGI_GRAIN 8u
 #define SMP_SET_PERC 4u
 #define DRUM_KIT_E {0, 64, 70, 64, 64, 100, 0, 0}   /* {KIT STD, TUNE, TONE, DECY, SNAP, ACC, KICK PUNCH, DRV} */
 static int drum_from_perc(uint32_t engine, int16_t *e)

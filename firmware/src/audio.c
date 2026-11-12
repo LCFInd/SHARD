@@ -41,6 +41,13 @@ static __attribute__((noinline)) void uac_tap_q15(int32_t *out, uint32_t n)
 static void audio_block(int32_t *out, uint32_t n)       /* mix (fx.c), then Q15 -> 24 bit */
 {
     uint32_t i;
+#if FELUCCA_MANGLER
+    if (bnc_on) {                                       /* SAVE > BOUNCE renders in the main loop: quiet meanwhile */
+        for (i = 0; i < 2u * n; i++)
+            out[i] = 0;
+        return;
+    }
+#endif
     mix_block(out, n);
 #if FELUCCA_UAC
     if (uac.feed)                                       /* the USB audio input: the same master output */

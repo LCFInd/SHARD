@@ -690,7 +690,7 @@ static void graph_slices(void)
     }
 #endif
     cv_text(12, 104, &AF_M, t, T_MID);                  /* the slice's detail (M): its capitals rows 108 .. 118 */
-    cv_text_r(228, 104, &AF_M, N_SLC_SRC[src], src && src != SLC_SRC_PIANO ? T_THEME : T_DIM, T_SURF);
+    cv_text_r(228, 104, &AF_M, N_SLC_SRC[src], slc_slot_of_src(src) < SMP_USER_SLOTS ? T_THEME : T_DIM, T_SURF);
 }
 #endif
 
@@ -1239,13 +1239,16 @@ static uint32_t graph_signature(void)
     if (pg->graph == GR_EVENTS)                      /* AUTOMATION: the rows, the one selected, + ADD's place, PLAY,
                                                       * QUANTIZE */
         h = (h ^ ev_sig()) * 16777619u;
+#if FELUCCA_MANGLER
+    if (pg->graph == GR_BOUNCE) h = (h ^ bnc_sig()) * 16777619u;
+#endif
 #if FELUCCA_SLICE
     if ((pg->graph == GR_SLICES || pg->graph == GR_SHFX) && slice_page_ok()) h ^= slice_sig();
 #if FELUCCA_SHARD
     if (pg->graph == GR_SHFX && slice_page_ok()) h = (h ^ shfx_sig()) * 16777619u;
 #endif
 #endif
-    if (pg->scope == SC_ENGINE && (ENGINES[t->eng_req % NENGINES] == &ENG_WHEEL || t->eng_req % NENGINES == ENGI_FM6 ||
+    if (pg->scope == SC_ENGINE && (ENG_REF_IS(ENGINES[t->eng_req % NENGINES], ENG_WHEEL) || t->eng_req % NENGINES == ENGI_FM6 ||
                                    (FELUCCA_FM4 && t->eng_req % NENGINES == ENGI_DIGITAL)))
         h ^= (ui.hot_t ? ui.hot_col + 1u : 0u) * 65537u;
     if ((pg->scope == SC_ENGINE || fop_page(pg->graph)) && t->eng_req % NENGINES == ENGI_FM6)   /* the patch (PAT's algorithm,
@@ -1331,6 +1334,53 @@ static void panel_note(const char *a, const char *b, const char *c)
     if (b) note_line(60, b, T_MID);
     if (c) note_line(82, c, T_DIM);
 }
+#if FELUCCA_MANGLER
+/* SAVE > BOUNCE (bounce.c): what it will make (bars, tempo, seconds, the slot) or why not; while it runs, how far */
+static void bnc_secs(char *b, uint32_t n22)          /* "7.38 S" */
+{
+    fmt_fix(b, (int32_t)(n22 * 100u / 22050u), 2);
+    if (b[0] == '.') {
+        uint32_t i = str_len(b) + 1u;
+        for (; i; i--)
+            b[i] = b[i - 1u];
+        b[0] = '0';
+    }
+    str_cpy(b + str_len(b), " S", 4);
+}
+static void graph_bounce(void)
+{
+    char a[24], b[32], c[28], t[12];
+    const char *why;
+    uint32_t want = bnc_want(), len = bnc_len(), k = bnc.to % SMP_USER_SLOTS;
+    if (bnc.busy) {
+        int32_t w = (int32_t)(200u * bnc.pct / 100u);
+        panel_note(bnc.busy == 1u ? "RUNNING IN" : bnc.busy == 2u ? "RECORDING" : "WRITING", 0, 0);
+        cv_rrect(20, 66, 200, 10, 3, T_RAISE, T_SURF);
+        if (w > 0)
+            cv_rrect(20, 66, w, 10, 3, T_ACCENT, T_SURF);
+        return;
+    }
+    fmt_int(a, BNC_BARS[bnc.bars & 3u]);
+    str_cpy(a + str_len(a), bnc.bars ? " BARS AT " : " BAR AT ", sizeof a - str_len(a));
+    fmt_int(t, song.g[G_BPM]);
+    str_cpy(a + str_len(a), t, sizeof a - str_len(a));
+    str_cpy(a + str_len(a), " BPM", sizeof a - str_len(a));
+    bnc_secs(b, want);
+    if (len < want) {
+        str_cpy(b + str_len(b), ": CUT TO ", sizeof b - str_len(b));
+        bnc_secs(t, len);
+        str_cpy(b + str_len(b), t, sizeof b - str_len(b));
+    }
+    why = bnc_why();
+    if (why)
+        str_cpy(c, why, sizeof c);
+    else {
+        str_cpy(c, usr_nz[k] ? "REPLACES " : "INTO ", sizeof c);
+        str_cpy(c + str_len(c), SMP_ALL_NAMES[SMP_NSETS + k], sizeof c - str_len(c));
+    }
+    panel_note(a, b, c);
+}
+#endif
 /* the same title led by an icon (16 px, the accent's: the header message's, ui_draw.c draw_head) in the middle of
  * the panel: the title's capitals centred up and down in it, the icon's ink on them; across, the pair centred by
  * its ink */
@@ -2343,6 +2393,12 @@ static void draw_graph(void)
             cv_oy = 0;
             panel_note("TURN TO PICK", "[OCT+] CONFIRM", 0);
             break;
+#if FELUCCA_MANGLER
+        case GR_BOUNCE:
+            cv_oy = 0;
+            graph_bounce();
+            break;
+#endif
 #if FELUCCA_SLICE
         case GR_SLICES:
         case GR_SHFX:                                   /* (SHARD's SLICE FX: the same view, ui_slice.c) */
@@ -2358,7 +2414,7 @@ static void draw_graph(void)
             if (fop_ok()) graph_fm6env(t, c);
             break;
         default:
-            if (pg->scope == SC_ENGINE && ENGINES[t->eng_req % NENGINES] == &ENG_WHEEL) graph_wheel(t, c);
+            if (pg->scope == SC_ENGINE && ENG_REF_IS(ENGINES[t->eng_req % NENGINES], ENG_WHEEL)) graph_wheel(t, c);
             else if (pg->scope == SC_ENGINE && ENGINES[t->eng_req % NENGINES] == &ENG_SAMPLE && sample_wave.ready) graph_sample(c);
             else if (pg->scope == SC_ENGINE && t->eng_req % NENGINES == ENGI_FM6) graph_fm6(t, c, 6u);   /* EDIT 1 and 2 */
 #if FELUCCA_FM4

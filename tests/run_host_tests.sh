@@ -200,7 +200,9 @@ cd "$(dirname "$0")/.."
 OUT=build/host
 mkdir -p "$OUT"
 # the hardware layer: firmware/hal, then felucca-bsp (firmware/bsp: chip/, boards/fm1/), as tools/build.py
-HALI="-Ifirmware/hal -Ifirmware/bsp/chip -Ifirmware/bsp/boards/fm1 -Ifirmware/src"   # (src: uac_fir.h, which bsp/chip/usb.c includes)
+HALI="-Ifirmware/hal -Ifirmware/bsp/chip -Ifirmware/bsp/boards/fm1 -Ifirmware/src -DFELUCCA_MANGLER=0"   # (src: uac_fir.h,
+# which bsp/chip/usb.c includes. FELUCCA_MANGLER=0: these suites test Felucca's full engine set; the mangler build,
+# the default, is tested at the end: tests/mangler_test.sh)
 CC="${CC:-cc} -O1 -Wall -Wno-unused-function $HALI"
 fail=0
 run() { echo "== $1"; shift; "$@" || fail=1; }
@@ -403,7 +405,7 @@ if [ -f build/gen/felucca_tables.h ]; then
     run "second core: 4 parts of every preset, mixes: bit for bit on one core and on two, every split" \
         "$OUT/dualcore_test"
     if [ -n "$TSAN" ]; then                     # TSAN=1: the same under ThreadSanitizer (~6 min): shared state
-        TSAN_CC="cc -O1 -g -w -Ibuild/gen -Ifirmware/src -fsanitize=thread -pthread"
+        TSAN_CC="cc -O1 -g -w -DFELUCCA_MANGLER=0 -Ibuild/gen -Ifirmware/src -fsanitize=thread -pthread"
         $TSAN_CC -o "$OUT/dualcore_tsan" tests/dualcore_test.c -lm
         run "second core under ThreadSanitizer: 4 parts of every preset, mixes" \
             env TSAN_OPTIONS=halt_on_error=1 "$OUT/dualcore_tsan"
@@ -538,6 +540,23 @@ if command -v node >/dev/null 2>&1; then
     run "web backup: capture, validation before writes, restore order" node web/test_backup.mjs
 else
     echo "== skip web tests (no node)"
+fi
+
+
+# the sample mangler: the default build (FELUCCA_MANGLER=1: SHARD, SAMPLE, GRAIN; the synth engines' numbers reserved).
+# The suites above test Felucca's full set (HALI: FELUCCA_MANGLER=0); these, the mangler's own: SHARD's test (its
+# engine table, the power-on tracks) and the UI renders' lint and alignment over every page and value
+MCC="${CC%% *} -O1 -Wall -Wno-unused-function -Ifirmware/hal -Ifirmware/bsp/chip -Ifirmware/bsp/boards/fm1 -Ifirmware/src"
+if $MCC -O2 -w -Ibuild/gen -o "$OUT/shard_test_m" tests/shard_test.c -lm; then
+    run "the mangler: SHARD, SAMPLE and GRAIN only (shard_test)" "$OUT/shard_test_m" build/slice_demo/loop build/shard_demo_m
+else
+    echo "the mangler: shard_test does not build"; fail=1
+fi
+if $MCC -w "-DFELUCCA_VERSION=\"$FV\"" -Ibuild/gen -Itests -o "$OUT/ui_render_m" tests/ui_render.c -lm; then
+    mkdir -p build/ui_mangler/ppm
+    run "the mangler: UI renders, layout lint and alignment" "$OUT/ui_render_m" build/ui_mangler build/ui_slot
+else
+    echo "the mangler: ui_render does not build"; fail=1
 fi
 
 [ $fail -eq 0 ] && echo "ALL HOST TESTS PASSED" || { echo "HOST TESTS FAILED"; exit 1; }

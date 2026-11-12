@@ -805,7 +805,11 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
        S_MENU_SELECT, S_PROJECT_ERASE, S_CONFIRM_ERASE_PROJ, S_TOOLS_CLEAN, S_CONFIRM_CLEAN,
        S_MENU_MIDI_TRACK, S_MENU_MIDI_TCH_UNUSED, S_MENU_MIDI_AUTO, S_HOME_TRACKS_MIDI, S_MIXER_MIDI, S_EDIT_PHASE_FOLD,
        S_SHFX_SLICE, S_SHFX_BUS, S_SHFX_ENUM, S_SHFX_NOFILE, S_SHARD_EDIT1, S_SHARD_EDIT2, S_SHARD_PRESETS,
-       S_SHARD_SLICES, S_SHARD_HOME, S_COUNT };
+       S_SHARD_SLICES, S_SHARD_HOME,
+#if FELUCCA_MANGLER
+       S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY,
+#endif
+       S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
     "phrases", "project", "tools", "song_empty", "song", "step", "auto_steps", "auto_add_chance", "automation", "drum",
     "drum_hand", "drum_cym", "mixer", "mixer_from_home", "mixer_pan", "env", "env_dest", "lfo", "mod", "fx", "slicer", "dly", "scl", "chord", "chord_wide", "chord_off", "chord_kit", "arp",
@@ -838,7 +842,11 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "menu_select", "project_erase", "confirm_erase_project", "tools_clean", "confirm_clean",
     "menu_midi_track", "menu_midi_channels_unused", "menu_midi_auto_select", "home_tracks_midi", "mixer_midi", "edit_phase_fold",
     "shard_slice_fx", "shard_slice_fx_bus", "shard_slice_fx_route", "shard_slice_fx_nofile", "shard_edit1", "shard_edit2",
-    "shard_presets", "shard_slices", "shard_home"};
+    "shard_presets", "shard_slices", "shard_home",
+#if FELUCCA_MANGLER
+    "bounce", "bounce_used", "bounce_busy",
+#endif
+};
 
 /* the STEP page's piano roll (ui_graph.c graph_roll) on track 1, stopped unless said: an empty pattern; ACID in
  * A minor; POLY chords (Am7 F C G, tied); a line with ties, slides and accents in C major; LEN 32 on its second
@@ -1015,6 +1023,9 @@ static void setup(int s)
     memset(kb_chn, 0, sizeof kb_chn);               /* no key held (roll_playing holds one) */
     state();
     memset(drum_mute, 0, sizeof drum_mute);          /* (1.4.1: no DRUM lane muted) */
+#if FELUCCA_MANGLER
+    bnc.busy = 0;                                    /* (BOUNCE's progress: its own screen only) */
+#endif
     switch (s) {
     case S_HOME: song.octave = 2; song.rec = 1; usb.config = 1; break;
     case S_HOME_IDLE: song.playing = 0; song.batt_raw = 570; ui.hot_col = 1; ui.hot_t = 30; break;
@@ -1681,6 +1692,12 @@ static void setup(int s)
     case S_SHARD_PRESETS: eng(ENGI_SHARD); go_page(GR_BROWSE); break;
     case S_SHARD_SLICES: eng(ENGI_SHARD); go_page(GR_SLICES); sp.sel = 5; ui.msg_t = 0; break;
     case S_SHARD_HOME: eng(ENGI_SHARD); song.playing = 1; break;
+#endif
+#if FELUCCA_MANGLER
+    case S_BOUNCE: go_page(GR_BOUNCE); bnc.bars = 3; bnc.from = 0; bnc.to = 1; ui.hot_col = 0; ui.hot_t = 30; break;
+    case S_BOUNCE_USED:                                /* a track it renders plays the slot: why not, no OCT+ */
+        eng(ENGI_SHARD); TSEL->p[P_E0] = 2; go_page(GR_BOUNCE); bnc.bars = 1; bnc.from = 1; bnc.to = 1; break;
+    case S_BOUNCE_BUSY: go_page(GR_BOUNCE); bnc.to = 3; bnc.busy = 2; bnc.pct = 62; break;
 #endif
     default: break;
     }

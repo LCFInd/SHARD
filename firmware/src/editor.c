@@ -76,7 +76,7 @@ static uint32_t ed_unpack7(const uint8_t *a, uint32_t na, uint8_t *out, uint32_t
     return na ? 0u : n;
 }
 static uint8_t ed_smp_buf[512] __attribute__((aligned(4), section(".pool")));
-static uint32_t ed_smp_slot(uint32_t k) { return SMP_USER_BASE + k * SMP_USER_SIZE; }
+static uint32_t ed_smp_slot(uint32_t k) { return smp_user_off(k); }
 static void ed_smp_inval(uint32_t k)
 {
     fm1_irq_off();
@@ -625,6 +625,8 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
                 audio_silence();
                 rc = fl_erase4k(ed_smp_slot(a[0]) + off, &took) ? 2u : 0u;
             }
+            smp_rec_guard(ed_smp_slot(a[0]) + off, ed_smp_buf, len);   /* (USR4: never an update record; in the
+                                                                     * one-in-2^32 case the data CRC then fails) */
             if (!rc && fl_write(ed_smp_slot(a[0]) + off, ed_smp_buf, len))
                 rc = 3;
         }

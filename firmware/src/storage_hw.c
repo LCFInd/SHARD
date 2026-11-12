@@ -29,7 +29,12 @@ static void audio_silence(void)                 /* IRQs off: the DMA would loop 
  * of felucca-bsp's FL_XDATA1 (a firmware's own data), which Felucca uses for nothing else */
 #define ST_VBANK_LO 0x000E7000u
 #define ST_VBANK_HI 0x000E8000u
+#if FELUCCA_MANGLER                             /* the mangler: no bank; USR4 (eng_sample.c) from 0xE7000, its last
+                                                 * sector holding its slices' and kit's records (slice_store.c) */
+#define ST_OK(off, n) (FL_STORE_OK(off, n) || FL_IN(off, n, SMP_USER4_BASE, SMP_USER4_BASE + SMP_USER_SIZE))
+#else
 #define ST_OK(off, n) (FL_STORE_OK(off, n) || FL_IN(off, n, ST_VBANK_LO, ST_VBANK_HI))
+#endif
 static int st_erase(uint32_t off)
 {
     uint32_t took, f;

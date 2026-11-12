@@ -50,7 +50,7 @@ static void fm6_bank_changed(void)
             fm6_adopt(tr);
 }
 
-#if FELUCCA_FLASH
+#if FELUCCA_FLASH && !FELUCCA_MANGLER          /* (the mangler: 0xE7000 is USR4, eng_sample.c; no FM6, no bank) */
 _Static_assert(FVB_LEN <= ST_PAYLOAD_MAX, "the payload fits st_buf");
 static uint32_t fvb_stage(void) { return st_sector(OBJ_AUTOSAVE, fvb_tx.copy); }
 

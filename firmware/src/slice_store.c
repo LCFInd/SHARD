@@ -45,12 +45,12 @@ _Static_assert(SHD_REC_OFF - SLC_REC_OFF >= sizeof(slc_rec_t) && SHD_REC_OFF + s
                "SHARD record in the slot's last sector");
 static void shd_rec_make(uint32_t k, shd_rec_t *r)
 {
-    const slc_src_t *s = slc_get(k + 1u);
+    const slc_src_t *s = slc_get(slc_src_of_slot(k));
     memset(r, 0, sizeof *r);
     r->magic = SHD_REC_MAGIC;
     r->len = s ? s->len : 0u;
     r->crc = ((const smp_user_hdr_t *)smp_user_xip(k))->crc;
-    r->kit = shd_kit[k + 1u];
+    r->kit = shd_kit[slc_src_of_slot(k)];
     r->rcrc = st_crc32(r, sizeof *r - 4u);
 }
 #endif
@@ -65,7 +65,7 @@ static int slc_rec_room(uint32_t k)
 /* what slot k's record should hold now (its MAN slices in use, or none: n = 0) */
 static void slc_rec_make(uint32_t k, slc_rec_t *r)
 {
-    const slc_src_t *s = slc_get(k + 1u);
+    const slc_src_t *s = slc_get(slc_src_of_slot(k));
     const slc_man_t *m = s ? slc_man_of(s) : 0;
     memset(r, 0, sizeof *r);
     r->magic = SLC_REC_MAGIC;
@@ -83,10 +83,10 @@ static void slc_rec_make(uint32_t k, slc_rec_t *r)
 static void slc_store_load(uint32_t k)
 {
     const slc_rec_t *r = (const slc_rec_t *)(smp_user_xip(k) + SLC_REC_OFF);
-    const slc_src_t *s = slc_get(k + 1u);
+    const slc_src_t *s = slc_get(slc_src_of_slot(k));
     slc_rec_t c;
 #if FELUCCA_SHARD
-    shd_kit_default(&shd_kit[k + 1u]);               /* new material: a neutral kit, unless the stored one is its */
+    shd_kit_default(&shd_kit[slc_src_of_slot(k)]);               /* new material: a neutral kit, unless the stored one is its */
 #endif
     if (!s || !slc_rec_room(k))
         return;
@@ -97,7 +97,7 @@ static void slc_store_load(uint32_t k)
         if (kr.magic == SHD_REC_MAGIC && kr.rcrc == st_crc32(&kr, sizeof kr - 4u) && kr.len == s->len &&
             kr.crc == ((const smp_user_hdr_t *)smp_user_xip(k))->crc) {
             shd_kit_sane(&kr.kit);
-            shd_kit[k + 1u] = kr.kit;
+            shd_kit[slc_src_of_slot(k)] = kr.kit;
             if (kr.kit.bus.sens != SHD_SENS_DEF)
                 slc_rescan(k, kr.kit.bus.sens);      /* its AUTO slices at the kit's SENS */
         }
@@ -114,7 +114,7 @@ static void slc_store_load(uint32_t k)
 static int slc_store_write(uint32_t k)
 {
     slc_rec_t r;
-    uint32_t off = SMP_USER_BASE + k * SMP_USER_SIZE + SLC_REC_OFF;
+    uint32_t off = smp_user_off(k) + SLC_REC_OFF;
     if (!usr_nz[k])                                  /* emptied or being uploaded meanwhile: nothing to keep */
         return 0;
     if (!slc_rec_room(k))
