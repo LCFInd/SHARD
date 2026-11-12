@@ -23,6 +23,12 @@ static uint8_t *fav_bit(uint32_t engine, uint32_t preset, uint8_t *mask)   /* th
         return &favorites.factory[15][13];
     }
 #endif
+#if FELUCCA_SHARD
+    if (engine == ENGI_SHARD && preset < 8u) {        /* SHARD (15): the last byte of SLICE's row (SLICE has 2 presets) */
+        *mask = (uint8_t)(1u << preset);
+        return &favorites.factory[13][31];
+    }
+#endif
     return 0;
 }
 static int favorite_has(uint32_t engine, uint32_t preset)

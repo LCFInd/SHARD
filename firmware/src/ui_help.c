@@ -35,6 +35,7 @@ static const struct { const char *title, *hint; } HELP_PAGE[] = {
     {"LANES", H_LANES},
     {"LANES 2", H_LANES},
     {"SLICES", "[K1]SLICE[K2]MOVE[OCT+]SPLIT, JOIN"},
+    {"SLICE FX", "[K1]SLICE, BUS[K2]PARAM[K4]ALL"},   /* (SHARD: ui_slice.c) */
     {"OPERATOR", H_FMOP},
     {"OP ENV", H_FMOP},
     {"OPERATOR 2", H_FMOP},

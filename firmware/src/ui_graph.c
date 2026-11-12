@@ -1230,7 +1230,10 @@ static uint32_t graph_signature(void)
                                                       * QUANTIZE */
         h = (h ^ ev_sig()) * 16777619u;
 #if FELUCCA_SLICE
-    if (pg->graph == GR_SLICES && slice_page_ok()) h ^= slice_sig();
+    if ((pg->graph == GR_SLICES || pg->graph == GR_SHFX) && slice_page_ok()) h ^= slice_sig();
+#if FELUCCA_SHARD
+    if (pg->graph == GR_SHFX && slice_page_ok()) h = (h ^ shfx_sig()) * 16777619u;
+#endif
 #endif
     if (pg->scope == SC_ENGINE && (ENGINES[t->eng_req % NENGINES] == &ENG_WHEEL || t->eng_req % NENGINES == ENGI_FM6 ||
                                    (FELUCCA_FM4 && t->eng_req % NENGINES == ENGI_DIGITAL)))
@@ -1270,7 +1273,7 @@ static const char *eng_abbr(const char *name)
                                        {"SAMPLE", "SMPL"}, {"VOICE", "VOCL"}, {"TRIO", "TRIO"}, {"WHEEL", "WHEL"},
                                        {"GRAIN", "GRAN"}, {"PHYS", "PHYS"}, {"DRUM", "DRUM"},
                                        {"NOISE", "NOIS"}, {"FM6", "FM6"}, {"SLICE", "SLCE"},
-                                       {"ADPCM", "ADPC"}};
+                                       {"ADPCM", "ADPC"}, {"SHARD", "SHRD"}};
     uint32_t i;
     for (i = 0; i < sizeof A / sizeof A[0]; i++)
         if (str_eq(name, A[i][0]))
@@ -2332,6 +2335,7 @@ static void draw_graph(void)
             break;
 #if FELUCCA_SLICE
         case GR_SLICES:
+        case GR_SHFX:                                   /* (SHARD's SLICE FX: the same view, ui_slice.c) */
             cv_oy = 0;
             graph_slices();
             break;

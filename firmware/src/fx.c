@@ -872,6 +872,12 @@ static const uint16_t ENG_VCOST[NENGINES] = {163, FELUCCA_FM4 ? 181 : 0, 162, 67
 #endif
 #if FELUCCA_ADPCM
                                              168,      /* ADPCM (ORGAN, 1693 instructions / sample at 8 notes) */
+#elif FELUCCA_SHARD
+                                             0,        /* 14 reserved */
+#endif
+#if FELUCCA_SHARD
+                                             190,      /* SHARD: SLICE's decoder + filter, drive, envelope (an estimate
+                                                        * until tests/regress.c measures it) */
 #endif
 };
 #endif

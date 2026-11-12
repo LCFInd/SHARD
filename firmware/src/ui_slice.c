@@ -24,8 +24,19 @@ static struct {
     int8_t lo[SP_COLS], hi[SP_COLS];                 /* per column: smallest / largest sample >> 9 */
 } sp;
 
-static int slice_page_ok(void) { return ENGINES[TSEL->eng_req % NENGINES] == &ENG_SLICE; }
-static int slice_page_on(void) { return !ui.home && cur_page()->graph == GR_SLICES && slice_page_ok(); }
+static int slice_page_ok(void)
+{
+    const engine_t *e = ENGINES[TSEL->eng_req % NENGINES];
+#if FELUCCA_SHARD
+    if (e == &ENG_SHARD)                             /* SHARD plays SLICE's material and slices (E0..E2 alike) */
+        return 1;
+#endif
+    return e == &ENG_SLICE;
+}
+static int slice_page_on(void)
+{
+    return !ui.home && (cur_page()->graph == GR_SLICES || cur_page()->graph == GR_SHFX) && slice_page_ok();
+}
 
 /* the source the selected part plays, its DIV; 0 = no material (an empty slot: the sine, as slice_note_on) */
 static const slc_src_t *slice_src(uint32_t *src, uint32_t *div)
@@ -273,6 +284,187 @@ static uint32_t slice_sig(void)
         h = (h ^ slice_mark(i)) * 16777619u;
     return h;
 }
+
+#if FELUCCA_SHARD
+/* SLICE FX (EDIT family, a SHARD track only; after SLICES): each slice's settings and the bus (eng_shard.c's kit).
+ *   KNOB 1  SLICE  the slice (1..n), then BUS (the multiband distortion); a key pressed picks its slice
+ *   KNOB 2  PARAM  what to set: PITCH LEVEL ATTACK DECAY MODE REV FILTER CUT RES DRIVE AMT ROUTE CHOKE; on BUS
+ *                  the split points (XLOW, XHIGH) and each band's (L M H) TYPE DRV GATE LVL
+ *   KNOB 3  VALUE  the slice's (or the bus's) value
+ *   KNOB 4  ALL    every slice's value moves by the same steps (BUS: none)
+ * The kit is the source's: a user slot's is kept with its sample when the page is left (slice_store.c, once
+ * stopped); BREAK's and PIANO's last until the power goes. Slices past 32 (none: SLC_AUTO) share the last's. */
+typedef struct {
+    const char *name;
+    int16_t min, max;
+    const char *const *names;
+    const char *unit;
+} shfx_desc_t;
+static const shfx_desc_t SHFX_SL[13] = {
+    {"PITCH", -24, 24, 0, "ST"}, {"LEVEL", 0, 127, 0, ""}, {"ATTACK", 0, 127, 0, ""}, {"DECAY", 0, 127, 0, ""},
+    {"MODE", 0, 3, N_SHD_SMODE, ""}, {"REV", 0, 1, N_SLC_REV, ""}, {"FILTER", 0, 3, N_SHD_FILT, ""},
+    {"CUT", 0, 127, 0, ""}, {"RES", 0, 127, 0, ""}, {"DRIVE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""},
+    {"AMT", 0, 127, 0, ""}, {"ROUTE", 0, SHD_NROUTE - 1, N_SHD_ROUTE, ""}, {"CHOKE", 0, 4, N_SHD_CHOKE, ""},
+};
+static const shfx_desc_t SHFX_BUS[14] = {           /* (6 letters at most: the cards) */
+    {"XLOW", 0, 127, 0, ""}, {"XHIGH", 0, 127, 0, ""},
+    {"L TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"L DRV", 0, 127, 0, ""}, {"L GATE", 0, 127, 0, ""},
+    {"L LVL", 0, 127, 0, ""}, {"M TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"M DRV", 0, 127, 0, ""},
+    {"M GATE", 0, 127, 0, ""}, {"M LVL", 0, 127, 0, ""}, {"H TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""},
+    {"H DRV", 0, 127, 0, ""}, {"H GATE", 0, 127, 0, ""}, {"H LVL", 0, 127, 0, ""},
+};
+static uint8_t shfx_sl_param, shfx_bus_param;
+
+/* the kit of the selected part's source; *bus 1 on the BUS marker, *j the slice */
+static shd_kit_t *shfx_kit(uint32_t *src, uint32_t *j, int *bus)
+{
+    uint32_t div, n = slice_count();
+    slice_src(src, &div);
+    *j = slice_sel();
+    *bus = *j >= n;
+    return *src < SHD_NSRC ? &shd_kit[*src] : 0;
+}
+/* the byte of slice j's setting k, or the bus's k */
+static uint8_t *shfx_field(shd_kit_t *kit, uint32_t j, int bus, uint32_t k)
+{
+    shd_sl_t *s;
+    if (bus) {
+        shd_bus_t *b = &kit->bus;
+        return k == 0u ? &b->lo : k == 1u ? &b->hi : (k - 2u) % 4u == 0u ? &b->type[(k - 2u) / 4u] :
+               (k - 2u) % 4u == 1u ? &b->drive[(k - 2u) / 4u] : (k - 2u) % 4u == 2u ? &b->gate[(k - 2u) / 4u] :
+               &b->level[(k - 2u) / 4u];
+    }
+    s = &kit->sl[j % SLC_AUTO];
+    switch (k) {
+    case 0: return (uint8_t *)&s->pitch;
+    case 1: return &s->level;
+    case 2: return &s->atk;
+    case 3: return &s->dec;
+    case 4: return &s->mode;
+    case 5: return &s->rev;
+    case 6: return &s->filt;
+    case 7: return &s->cut;
+    case 8: return &s->res;
+    case 9: return &s->dtype;
+    case 10: return &s->drv;
+    case 11: return &s->route;
+    default: return &s->choke;
+    }
+}
+static int32_t shfx_get(const uint8_t *f, uint32_t k, int bus) { return !bus && k == 0u ? (int8_t)*f : *f; }
+static void shfx_set(uint8_t *f, const shfx_desc_t *d, int32_t v) { *f = (uint8_t)(int8_t)clamp(v, d->min, d->max); }
+static void shfx_changed(uint32_t src)
+{
+    if (src && src != SLC_SRC_PIANO)
+        shd_kit_save |= (uint8_t)(1u << (src - 1u));   /* to flash with the sample when the page is left */
+}
+
+static void shfx_knob(uint32_t slot, int32_t steps)
+{
+    uint32_t src, j, n = slice_count(), i;
+    int bus;
+    shd_kit_t *kit = shfx_kit(&src, &j, &bus);
+    const shfx_desc_t *d;
+    uint32_t k;
+    if (!n || !kit) {                                /* no material: says why (as SLICES) */
+        if (slot)
+            ui_message("SAMPLE NOT FOUND");
+        return;
+    }
+    if (slot == 0u) {
+        sp.sel = (uint8_t)clamp((int32_t)j + steps, 0, (int32_t)n);
+        return;
+    }
+    k = bus ? shfx_bus_param : shfx_sl_param;
+    if (slot == 1u) {
+        if (bus)
+            shfx_bus_param = (uint8_t)clamp((int32_t)k + steps, 0, NELEM(SHFX_BUS) - 1);
+        else
+            shfx_sl_param = (uint8_t)clamp((int32_t)k + steps, 0, NELEM(SHFX_SL) - 1);
+        return;
+    }
+    d = bus ? &SHFX_BUS[k] : &SHFX_SL[k];
+    if (slot == 2u) {
+        uint8_t *f = shfx_field(kit, j, bus, k);
+        shfx_set(f, d, shfx_get(f, k, bus) + steps);
+    } else if (!bus) {                               /* ALL: every slice by the same steps */
+        for (i = 0; i < n && i < SLC_AUTO; i++) {
+            uint8_t *f = shfx_field(kit, i, 0, k);
+            shfx_set(f, d, shfx_get(f, k, 0) + steps);
+        }
+    } else
+        return;
+    shfx_changed(src);
+}
+
+/* card c: its label, value text, unit and gauge (0..1000, -1 none); 0 = an empty card */
+static int shfx_card(uint32_t c, const char **lb, char *val, const char **u, int32_t *r)
+{
+    uint32_t src, j, n = slice_count(), k;
+    int bus, v;
+    shd_kit_t *kit = shfx_kit(&src, &j, &bus);
+    const shfx_desc_t *d;
+    *u = "";
+    *r = -1;
+    if (!n || !kit)
+        return 0;
+    k = bus ? shfx_bus_param : shfx_sl_param;
+    d = bus ? &SHFX_BUS[k] : &SHFX_SL[k];
+    if (c == 0u) {
+        *lb = "SLICE";
+        if (bus)
+            str_cpy(val, "BUS", 8);
+        else
+            fmt_int(val, (int32_t)j + 1);
+        *u = bus ? "" : "/";
+        if (!bus) {
+            static char nn[8];
+            nn[0] = '/';
+            fmt_int(nn + 1, (int32_t)n);
+            *u = nn;
+        }
+        return 1;
+    }
+    if (c == 1u) {
+        *lb = "PARAM";
+        str_cpy(val, d->name, 12);
+        return 1;
+    }
+    if (c == 3u && bus)
+        return 0;
+    v = shfx_get(shfx_field(kit, j, bus, k), k, bus);
+    *lb = c == 2u ? d->name : "ALL";
+    if (d->names)
+        str_cpy(val, d->names[clamp(v, d->min, d->max) - d->min], 12);
+    else if (!bus && k == 3u && v >= 127)
+        str_cpy(val, "NONE", 12);                    /* DECAY 127: no decay */
+    else {
+        if (d->min < 0 && v > 0) {
+            val[0] = '+';
+            fmt_int(val + 1, v);
+        } else
+            fmt_int(val, v);
+        *u = d->unit;
+    }
+    *r = d->max > d->min ? (v - d->min) * 1000 / (d->max - d->min) : -1;
+    return 1;
+}
+
+/* graph_signature: the kit's bytes the cards show */
+static uint32_t shfx_sig(void)
+{
+    uint32_t src, j, n = slice_count(), h = shfx_sl_param * 31u + shfx_bus_param * 131u, i;
+    int bus;
+    shd_kit_t *kit = shfx_kit(&src, &j, &bus);
+    if (!kit)
+        return h;
+    for (i = 0; i < n && i < SLC_AUTO; i++)
+        h = (h ^ *shfx_field(kit, i, 0, shfx_sl_param)) * 16777619u;
+    for (i = 0; i < NELEM(SHFX_BUS); i++)
+        h = (h ^ *shfx_field(kit, 0, 1, i)) * 16777619u;
+    return h;
+}
+#endif
 #else
 static int slice_page_ok(void) { return 0; }
 static int slice_page_on(void) { return 0; }

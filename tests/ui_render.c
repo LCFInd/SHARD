@@ -803,7 +803,8 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
        S_DETAIL, S_DETAIL_PLAYING, S_DETAIL_REST, S_DETAIL_DRUM, S_ROLL_MARKS, S_DRUM_MARKS, S_HELP_DETAIL,
        S_DETAIL_COND, S_DETAIL_FILL, S_AUTO_COND, S_GLO_FILL, S_SEQ_EUCLID, S_SEQ_EUCLID_DRUM, S_SEQ_EUCLID_64,
        S_MENU_SELECT, S_PROJECT_ERASE, S_CONFIRM_ERASE_PROJ, S_TOOLS_CLEAN, S_CONFIRM_CLEAN,
-       S_MENU_MIDI_TRACK, S_MENU_MIDI_TCH_UNUSED, S_MENU_MIDI_AUTO, S_HOME_TRACKS_MIDI, S_MIXER_MIDI, S_EDIT_PHASE_FOLD, S_COUNT };
+       S_MENU_MIDI_TRACK, S_MENU_MIDI_TCH_UNUSED, S_MENU_MIDI_AUTO, S_HOME_TRACKS_MIDI, S_MIXER_MIDI, S_EDIT_PHASE_FOLD,
+       S_SHFX_SLICE, S_SHFX_BUS, S_SHFX_ENUM, S_SHFX_NOFILE, S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
     "phrases", "project", "tools", "song_empty", "song", "step", "auto_steps", "auto_add_chance", "automation", "drum",
     "drum_hand", "drum_cym", "mixer", "mixer_from_home", "mixer_pan", "env", "env_dest", "lfo", "mod", "fx", "slicer", "dly", "scl", "chord", "chord_wide", "chord_off", "chord_kit", "arp",
@@ -834,7 +835,8 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "detail_cond", "detail_fill", "auto_cond", "layer_glo_fill", "layer_seq_euclid", "layer_seq_euclid_drum",
     "layer_seq_euclid_64",
     "menu_select", "project_erase", "confirm_erase_project", "tools_clean", "confirm_clean",
-    "menu_midi_track", "menu_midi_channels_unused", "menu_midi_auto_select", "home_tracks_midi", "mixer_midi", "edit_phase_fold"};
+    "menu_midi_track", "menu_midi_channels_unused", "menu_midi_auto_select", "home_tracks_midi", "mixer_midi", "edit_phase_fold",
+    "shard_slice_fx", "shard_slice_fx_bus", "shard_slice_fx_route", "shard_slice_fx_nofile"};
 
 /* the STEP page's piano roll (ui_graph.c graph_roll) on track 1, stopped unless said: an empty pattern; ACID in
  * A minor; POLY chords (Am7 F C G, tied); a line with ties, slides and accents in C major; LEN 32 on its second
@@ -1657,6 +1659,22 @@ static void setup(int s)
         break;
     case S_SLICES_NOFILE: eng(13u); TSEL->p[P_E0] = 2; go_page(GR_SLICES); ui.msg_t = 0; break;   /* USR2 empty: SAMPLE NOT FOUND */
 #endif
+#if FELUCCA_SHARD
+    /* EDIT > SLICE FX (SHARD): BREAK's AUTO slices, slice 4's PITCH turned (KNOB 3 hot); the BUS's LOW TYPE; slice 2's
+     * ROUTE (an enum); an empty USR2 */
+    case S_SHFX_SLICE:
+        eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 3; shfx_sl_param = 0; shfx_knob(2, -5); ui.msg_t = 0;
+        ui.hot_col = 2; ui.hot_t = 30;
+        break;
+    case S_SHFX_BUS:
+        eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 0; shfx_knob(0, 40); shfx_bus_param = 2; ui.msg_t = 0;
+        ui.hot_col = 1; ui.hot_t = 30;
+        break;
+    case S_SHFX_ENUM:
+        eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 1; shfx_sl_param = 11; shfx_knob(2, 1); ui.msg_t = 0;
+        break;
+    case S_SHFX_NOFILE: eng(ENGI_SHARD); TSEL->p[P_E0] = 2; go_page(GR_SHFX); ui.msg_t = 0; break;
+#endif
     default: break;
     }
 }
@@ -1773,6 +1791,42 @@ static void sweep_motion(void)
     lint();
     memset(&motion, 0, sizeof motion);
 }
+#if FELUCCA_SHARD
+/* SHARD's SLICE FX: every parameter of a slice and of the bus at every value (the cards' names and values), lint */
+static void sweep_shard(void)
+{
+    uint32_t k, src, j;
+    int bus;
+    int32_t v;
+    char name[64];
+    for (bus = 0; bus < 2; bus++) {
+        uint32_t np = bus ? NELEM(SHFX_BUS) : NELEM(SHFX_SL);
+        for (k = 0; k < np; k++) {
+            const shfx_desc_t *d = bus ? &SHFX_BUS[k] : &SHFX_SL[k];
+            for (v = d->min; v <= d->max; v++) {
+                shd_kit_t *kit;
+                int b2;
+                state();
+                pal(UI_GREY_INDEX);
+                eng(ENGI_SHARD);
+                go_page(GR_SHFX);
+                sp.sel = (uint8_t)(bus ? slice_count() : 2u);
+                shfx_sl_param = (uint8_t)(bus ? 0u : k);
+                shfx_bus_param = (uint8_t)(bus ? k : 0u);
+                kit = shfx_kit(&src, &j, &b2);
+                shfx_set(shfx_field(kit, j, bus, k), d, v);
+                ui.msg_t = 0;
+                ui.hot_col = 2; ui.hot_t = 30;
+                snprintf(name, sizeof name, "SHARD/SLICE FX %s %s=%d", bus ? "BUS" : "SLICE", d->name, (int)v);
+                cur_name = name;
+                draw(-1);
+                lint();
+            }
+        }
+    }
+    shd_init();
+}
+#endif
 static void sweep_columns(void)
 {
     uint32_t e, i, c, esync_pass = 0;
@@ -1908,6 +1962,9 @@ static void sweep_columns(void)
             lint();
         }
     }
+#if FELUCCA_SHARD
+    sweep_shard();
+#endif
 }
 
 /* the rolling digits (ui_draw.c roll_*): the old GLOBAL page's four (1.2: a page over HOME > CLOCK, whose KNOB 4 is

@@ -35,12 +35,25 @@
 #if FELUCCA_ADPCM && !FELUCCA_SLICE
 #error "FELUCCA_ADPCM needs FELUCCA_SLICE (ADPCM is engine 14, after SLICE)"
 #endif
+#ifndef FELUCCA_SHARD
+#define FELUCCA_SHARD 1          /* the SHARD engine (eng_shard.c), engine 15: slices with their own settings, PLAY, the
+                                  * multiband distortion; built on SLICE's material and decoder */
+#endif
+#if FELUCCA_SHARD && !FELUCCA_SLICE
+#error "FELUCCA_SHARD needs FELUCCA_SLICE (SHARD plays SLICE's material)"
+#endif
+#if FELUCCA_SHARD
+#define NENGINES 16              /* SLICE (13), ADPCM (14, or reserved without FELUCCA_ADPCM), SHARD (15) */
+#else
 #define NENGINES (13 + FELUCCA_SLICE + FELUCCA_ADPCM)   /* SLICE (13), then ADPCM (14): the other engines keep their
                                                          * numbers */
+#endif
 #define ENGI_ADPCM 14u
+#define ENGI_SHARD 15u
 #define ENGI_DIGITAL 1u          /* reserved without FELUCCA_FM4: never selectable (eng_ok), its sounds load as FM6 */
-#define NENG_SHOWN (NENGINES - !FELUCCA_FM4)   /* the engines one can pick: PRESETS, the EDIT layer, the editor,
-                                                * in the display order of engines.c ENGINE_ORDER */
+#define NENG_SHOWN (NENGINES - !FELUCCA_FM4 - (FELUCCA_SHARD && !FELUCCA_ADPCM))   /* the engines one can pick: PRESETS,
+                                                * the EDIT layer, the editor, in the display order of engines.c ENGINE_ORDER
+                                                * (14 reserved when SHARD is built without ADPCM) */
 #define UP_SLOTS 32u             /* user presets (upreset.c) */
 
 /* ------------------------------------------------------- parameters --- */

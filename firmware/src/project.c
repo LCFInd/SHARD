@@ -1189,6 +1189,9 @@ static uint32_t persist_retry_ms;
 
 static void persist_boot(void)                    /* before settings_init / panel_init */
 {
+#if FELUCCA_SHARD
+    shd_init();                                    /* SHARD's kits neutral before the slot scans read the stored ones */
+#endif
 #if FELUCCA_FLASH
     persist_t p;
     uint32_t f = irq_save();

@@ -1176,6 +1176,18 @@ static void draw_columns(void)
         return;
     }
 #endif
+#if FELUCCA_SHARD
+    if (cur_page()->graph == GR_SHFX) {                  /* SLICE FX: SLICE PARAM VALUE ALL (ui_slice.c) */
+        for (c = 0; c < 4u; c++) {
+            const char *lb, *u;
+            int32_t r;
+            int on = slice_page_ok() && shfx_card(c, &lb, val, &u, &r);
+            draw_column(c, on ? lb : "", on ? val : "", on ? u : "", on ? VAL(c) : T_DIM, on ? r : -1,
+                        c ? ICON_AUTO : ICON_SLICE);
+        }
+        return;
+    }
+#endif
     if (fop_page(cur_page()->graph)) {                   /* FM6: OP, then three of its bytes (ui_fm6op.c) */
         for (c = 0; c < 4u; c++) {
             const char *lb, *u;

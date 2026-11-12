@@ -29,6 +29,32 @@ typedef struct {
 } slc_rec_t;
 _Static_assert(sizeof(slc_rec_t) == 152u, "SLICE record layout");
 
+#if FELUCCA_SHARD
+/* SHARD's kit (eng_shard.c: per-slice settings and the bus) for the same slot, in the same sector after the slices'
+ * record: magic "SHF1", the material (as slc_rec_t), the kit, a CRC. Written together with the slices' record (one
+ * erase), read at the same scans; a kit that is not the slot's sample's is ignored (the kit stays neutral). */
+#define SHD_REC_OFF (SLC_REC_OFF + 0x200u)
+#define SHD_REC_MAGIC 0x31464853u                    /* "SHF1" */
+typedef struct {
+    uint32_t magic;
+    uint32_t len, crc;
+    shd_kit_t kit;
+    uint32_t rcrc;
+} shd_rec_t;
+_Static_assert(SHD_REC_OFF - SLC_REC_OFF >= sizeof(slc_rec_t) && SHD_REC_OFF + sizeof(shd_rec_t) <= SMP_USER_SIZE,
+               "SHARD record in the slot's last sector");
+static void shd_rec_make(uint32_t k, shd_rec_t *r)
+{
+    const slc_src_t *s = slc_get(k + 1u);
+    memset(r, 0, sizeof *r);
+    r->magic = SHD_REC_MAGIC;
+    r->len = s ? s->len : 0u;
+    r->crc = ((const smp_user_hdr_t *)smp_user_xip(k))->crc;
+    r->kit = shd_kit[k + 1u];
+    r->rcrc = st_crc32(r, sizeof *r - 4u);
+}
+#endif
+
 /* slot k's sample leaves its last sector free (the record can go there) */
 static int slc_rec_room(uint32_t k)
 {
@@ -59,8 +85,22 @@ static void slc_store_load(uint32_t k)
     const slc_rec_t *r = (const slc_rec_t *)(smp_user_xip(k) + SLC_REC_OFF);
     const slc_src_t *s = slc_get(k + 1u);
     slc_rec_t c;
+#if FELUCCA_SHARD
+    shd_kit_default(&shd_kit[k + 1u]);               /* new material: a neutral kit, unless the stored one is its */
+#endif
     if (!s || !slc_rec_room(k))
         return;
+#if FELUCCA_SHARD
+    {
+        static shd_rec_t kr;                         /* (544 bytes: off the main loop's stack) */
+        memcpy(&kr, smp_user_xip(k) + SHD_REC_OFF, sizeof kr);
+        if (kr.magic == SHD_REC_MAGIC && kr.rcrc == st_crc32(&kr, sizeof kr - 4u) && kr.len == s->len &&
+            kr.crc == ((const smp_user_hdr_t *)smp_user_xip(k))->crc) {
+            shd_kit_sane(&kr.kit);
+            shd_kit[k + 1u] = kr.kit;
+        }
+    }
+#endif
     memcpy(&c, r, sizeof c);                         /* (one read of the flash) */
     if (c.magic != SLC_REC_MAGIC || c.rcrc != st_crc32(&c, sizeof c - 4u) || c.len != s->len ||
         c.crc != ((const smp_user_hdr_t *)smp_user_xip(k))->crc || !c.n)
@@ -78,11 +118,23 @@ static int slc_store_write(uint32_t k)
     if (!slc_rec_room(k))
         return 1;
     slc_rec_make(k, &r);
+#if FELUCCA_SHARD
+    {
+        static shd_rec_t kr;
+        shd_rec_make(k, &kr);
+        if (!memcmp(&r, smp_user_xip(k) + SLC_REC_OFF, sizeof r) && !memcmp(&kr, smp_user_xip(k) + SHD_REC_OFF, sizeof kr))
+            return 0;                                /* unchanged: no erase cycle */
+        if (st_erase(off) || st_prog(off, &r, sizeof r) || st_prog(off + (SHD_REC_OFF - SLC_REC_OFF), &kr, sizeof kr))
+            return 2;
+        return 3;
+    }
+#else
     if (!memcmp(&r, smp_user_xip(k) + SLC_REC_OFF, sizeof r))
         return 0;                                    /* unchanged: no erase cycle */
     if (st_erase(off) || st_prog(off, &r, sizeof r))
         return 2;
     return 3;
+#endif
 }
 
 /* main loop: the slices asked for, once the transport stops */
@@ -90,19 +142,28 @@ static void slc_store_poll(void)
 {
     uint32_t k;
     int rc = 0, w = 0;
-    if (!slc_man_save || transport_busy() || slice_page_on())   /* (written once the page is left) */
+    uint32_t ask = slc_man_save;
+#if FELUCCA_SHARD
+    ask |= shd_kit_save;                             /* (the kit too: once SLICE FX is left: slice_page_on) */
+#endif
+    if (!ask || transport_busy() || slice_page_on())   /* (written once the page is left) */
         return;
     for (k = 0; k < SMP_USER_SLOTS; k++)
-        if ((slc_man_save >> k) & 1u) {
+        if ((ask >> k) & 1u) {
             int r = flash_ok ? slc_store_write(k) : 0;
             w |= r == 3;
             rc = r != 3 && r > rc ? r : rc;
         }
+#if FELUCCA_SHARD
+    if (w && !slc_man_save)
+        w = 2;                                       /* only the kit changed */
+    shd_kit_save = 0;
+#endif
     slc_man_save = 0;
     if (rc)
         ui_message(rc == 1 ? "TOO LONG TO SAVE" : "SAVE ERROR");
     else if (w)
-        ui_message("SLICES SAVED");
+        ui_message(w == 2 ? "KIT SAVED" : "SLICES SAVED");
 }
 
 static void slc_store_boot(void) { slc_man_load = slc_store_load; }   /* persist_boot: before the slot scans */

@@ -128,6 +128,10 @@
 #                   settings and levels), no offset, level, stereo, echo density / ringing / flutter against ROOM, SPRING
 #                   and COMB8 (8 combs + 4 allpasses, host only, for comparison), model changes both ways, cost; the
 #                   listening set in build/reverb_demo/ (drums, pluck, piano: dry and each model at SIZE 40 / 90 / 127).
+# SHARD (tests/shard_test.c): the engine table (15, 14 reserved), ONE / GATE / LOOP, PLAY's slices at their places at 120
+#                   and 90 BPM and round the loop, pitch independent of tempo, per-slice LEVEL PITCH DECAY REV, every FILTER x
+#                   DRIVE bounded, CHOKE, MULTI at MIX 0 == DIRECT bit for bit, every route and shaper bounded, the bus tail,
+#                   the kit stored beside the MAN slices (kept, damaged, another sample's), junk in range; build/shard_demo/.
 # SLICE (tests/slice_test.c): slice tables, AUTO onsets of a user-slot loop, reverse, keys, modes, the MAN slices
 #                   (SLICES page) and their store in the slot (src/slice_store.c); the presets and the loop;
 #                   demos in build/slice_demo/.
@@ -473,6 +477,13 @@ if [ -f build/gen/felucca_tables.h ]; then
         $CC -O2 -w -Ibuild/gen -Ifirmware/src -o "$OUT/slice_test" tests/slice_test.c -lm
         run "SLICE: tables, onsets, reverse, keys, modes, MAN slices and their store, demos" "$OUT/slice_test" \
             build/slice_demo/loop build/slice_demo
+        # SHARD (on SLICE's material): PLAY's timing, per-slice settings, routing and the bus, the kit's store
+        if grep -q '^#define FELUCCA_SHARD 1' firmware/src/core.h; then
+            mkdir -p build/shard_demo
+            $CC -O2 -w -Ibuild/gen -Ifirmware/src -o "$OUT/shard_test" tests/shard_test.c -lm
+            run "SHARD: PLAY timing, per-slice settings, routing and the multiband bus, the kit's store, demos" \
+                "$OUT/shard_test" build/slice_demo/loop build/shard_demo
+        fi
     else
         echo "== SLICE: build/ was made with FELUCCA_SLICE=0 (no BREAK); run ./build.sh without it first"
         fail=1

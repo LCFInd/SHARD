@@ -47,6 +47,27 @@ static uint8_t eng_mem_owner[NPART];       /* engine index + 1 whose state is in
 #if FELUCCA_ADPCM
 #include "eng_adpcm.c"           /* ADPCM: BRR waves and an FIR echo, its DSP ported from snes_spc (adpcm_dsp.c, LGPL-2.1+) */
 #endif
+#if FELUCCA_SHARD
+#include "eng_shard.c"           /* SHARD: per-slice settings, PLAY, the multiband distortion (on SLICE's material) */
+#if !FELUCCA_ADPCM
+static void adpcm_gone_note_on(struct track *t, voice_t *v) { (void)t; v->active = 0; }
+static void adpcm_gone_render(struct track *t, voice_t *v, int32_t *out, uint32_t n, const vmod_t *m)
+{
+    (void)t; (void)out; (void)n; (void)m;
+    v->active = 0;
+}
+static const engine_t ENG_ADPCM_GONE = {   /* 14 reserved (ADPCM not built): never offered (eng_ok), silent */
+    .name = "-",
+    .page_title = {"-", "-"},
+    .edit = {{"-", F_INT, 0, 0, 0, 0, 0}, {"-", F_INT, 0, 0, 0, 0, 0}, {"-", F_INT, 0, 0, 0, 0, 0},
+             {"-", F_INT, 0, 0, 0, 0, 0}, {"-", F_INT, 0, 0, 0, 0, 0}, {"-", F_INT, 0, 0, 0, 0, 0},
+             {"-", F_INT, 0, 0, 0, 0, 0}, {"-", F_INT, 0, 0, 0, 0, 0}},
+    .note_on = adpcm_gone_note_on,
+    .render = adpcm_gone_render,
+    .knob = {P_E0, P_E1, P_E2, P_E3},
+};
+#endif
+#endif
 
 /* the editor protocol, user presets and projects store these indices: append, never reorder */
 static const engine_t *const ENGINES[NENGINES] = {
@@ -72,6 +93,11 @@ static const engine_t *const ENGINES[NENGINES] = {
 #endif
 #if FELUCCA_ADPCM
     &ENG_ADPCM,                  /* 14 (ENGI_ADPCM; FELUCCA_ADPCM=0 builds without it) */
+#elif FELUCCA_SHARD
+    &ENG_ADPCM_GONE,             /* 14: reserved for ADPCM (SHARD keeps its number 15 either way) */
+#endif
+#if FELUCCA_SHARD
+    &ENG_SHARD,                  /* 15 (ENGI_SHARD) */
 #endif
 };
 
@@ -106,7 +132,7 @@ static const char *snd_missing(const track_t *t, uint32_t *code)
     const engine_t *e = ENGINES[eng_idx(t->eng_req)];
     uint32_t si = (uint32_t)t->p[P_E0] % SMP_NALL;
 #if FELUCCA_SLICE
-    if (e == &ENG_SLICE) {
+    if (e == &ENG_SLICE || (FELUCCA_SHARD && t->eng_req % NENGINES == ENGI_SHARD)) {
         si = slc_src_of(t->p);
         *code = 64u + si;
         return slc_get(si) ? 0 : N_SLC_SRC[si];
@@ -133,6 +159,9 @@ static const uint8_t ENGINE_ORDER[NENG_SHOWN] = {
     13,                          /* SLICE */
 #endif
     10,                          /* DRUM */
+#if FELUCCA_SHARD
+    15,                          /* SHARD: after DRUM, so the EDIT layer's keys keep the engines above (ui_layer.c) */
+#endif
 #if FELUCCA_ADPCM
     14,                          /* ADPCM (1.8): last, so the EDIT layer's white keys keep the 13 above (ui_layer.c LY_ENG_KEYS) */
 #endif
@@ -140,7 +169,10 @@ static const uint8_t ENGINE_ORDER[NENG_SHOWN] = {
 
 /* the engines one can pick (engine 1 only with FELUCCA_FM4), in ENGINE_ORDER: eng_ok(e), the n-th of them
  * eng_vis(n), e's place among them eng_rank(e), the next / previous one eng_step(e, dir) (wraps) */
-static int eng_ok(uint32_t e) { return e < NENGINES && (FELUCCA_FM4 || e != ENGI_DIGITAL); }
+static int eng_ok(uint32_t e)
+{
+    return e < NENGINES && (FELUCCA_FM4 || e != ENGI_DIGITAL) && (FELUCCA_ADPCM || !FELUCCA_SHARD || e != ENGI_ADPCM);
+}
 static uint32_t eng_vis(uint32_t n) { return ENGINE_ORDER[n % NENG_SHOWN]; }
 static uint32_t eng_rank(uint32_t e)
 {

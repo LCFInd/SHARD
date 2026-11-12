@@ -1,0 +1,63 @@
+# SHARD on Felucca
+
+SHARD is a slice-loop engine for the M-VAVE FM-1. This branch adds it to
+[Felucca](https://github.com/hugelton/Felucca) as engine 15, built on Felucca's SLICE engine. SHARD uses the same
+material, slices, decoder and storage as SLICE.
+
+Felucca's four tracks are SHARD's four channels, and Felucca's step sequencer drives them. That sequencer already
+has ratchets, chance, swing, conditions and parameter locks. SHARD adds the following:
+
+| | |
+|---|---|
+| **Per-slice settings** | PITCH, LEVEL, ATTACK, DECAY, MODE (track / ONE / GATE / LOOP), REV, FILTER (LP / HP / BP) with CUT and RES, DRIVE (SOFT HARD FOLD CRUSH DECIM HALF TUBE) with AMT, ROUTE, CHOKE (1–4) |
+| **PLAY mode** | ReCycle style. A note plays the whole loop from its slice, and each slice starts at its place in the loop, scaled to the tempo. Changing the tempo moves the slices, not the pitch. BARS: AUTO, 1, 2, 4 or 8 |
+| **Multiband distortion** | Ohmnicide style, per track. Slices routed to MULTI are split into low, mid and high bands. Each band has its own shaper, drive, gate and level. A slice can also feed one band directly (LOW / MID / HIGH). MULTI (E7) is the wet mix; DRIVE (E8) offsets every band's drive |
+| **The kit** | A source's per-slice settings and bus settings. A user slot's kit is saved with its sample, in the same sector as SLICE's hand-set slices. The BREAK and PIANO kits last until power-off |
+
+## On the device
+
+- **PRESETS:** pick SHARD (after DRUM). The presets are RECYCLE (PLAY), CHOP KIT (ONE) and SHRED (GATE, 32nds).
+- **EDIT 1 (SHRD):** SRC, DIV, START, PTCH. This is the same layout as SLICE.
+- **EDIT 2 (PLAY):** MODE, BARS, MULTI, DRIVE.
+- **SLICES:** set the slices by hand, as with SLICE.
+- **SLICE FX:**
+
+  | Control | Does |
+  |---|---|
+  | KNOB 1 | Picks a slice, or BUS after the last one. A key also picks its slice |
+  | KNOB 2 | Picks the parameter |
+  | KNOB 3 | Sets the value for the picked slice |
+  | KNOB 4 | Moves every slice's value by the same amount |
+
+  The kit is saved when you leave the page, once the transport is stopped ("KIT SAVED").
+
+## Build
+
+Build it as Felucca: see `BUILDING.md`. On macOS this uses Docker; on Linux x86-64 it runs natively.
+`FELUCCA_SHARD=0` builds without SHARD. Engine 14 stays reserved for ADPCM either way.
+
+## Tests
+
+`tests/run_tests.sh` runs `tests/shard_test.c` after the SLICE test. That test checks:
+
+- the engine table
+- ONE, GATE and LOOP
+- PLAY's slice timing at 120 and 90 BPM, and that pitch doesn't change with tempo
+- per-slice LEVEL, PITCH, DECAY and REV, every filter × drive combination, and CHOKE
+- that MULTI at mix 0 equals DIRECT bit for bit, and that every route and shaper stays bounded
+- the kit's storage beside the hand-set slices
+
+`tests/ui_render.c` renders the SLICE FX page and checks every parameter and value against the layout lint.
+`tests/run_host_tests.sh` is `run_tests.sh` without the steps that need a built package.
+
+## Status
+
+All of Felucca's host tests pass with SHARD in, and Felucca's existing golden renders are unchanged. SHARD itself
+has **not yet run on an FM-1**. Check these on hardware, in order:
+
+1. CPU load. On the host, SHARD with 8 notes in PLAY costs about the same as ANALOG, roughly 4× SLICE.
+2. RAM. The kits take 2.6 KB, and the engine memory stays within ENG_MEM_PART.
+3. The kit save on real flash.
+
+The web editor bundled in this tree (`web/editor.html`) knows about engine 15. The separate Felucca-WebApp editor
+doesn't yet, so it can't edit kits.
