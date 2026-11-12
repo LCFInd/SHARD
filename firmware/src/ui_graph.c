@@ -679,6 +679,16 @@ static void graph_slices(void)
     slice_time(u, j < n ? slice_mark(j + 1u) - slice_mark(j) : len - mb);
     str_cpy(t + 4, u, sizeof t - 4);
     str_cpy(t + str_len(t), " S", sizeof t - str_len(t));
+#if FELUCCA_SHARD
+    if (j >= n && cur_page()->graph == GR_SHFX) {    /* SLICE FX's BUS: the source's tempo (set, or found) */
+        uint32_t b10 = shd_bpm10(src);
+        str_cpy(t, "BPM ", sizeof t);
+        if (b10)
+            fmt_fix(t + 4, (int32_t)b10, 1);
+        else
+            str_cpy(t + 4, "--", sizeof t - 4);
+    }
+#endif
     cv_text(12, 104, &AF_M, t, T_MID);                  /* the slice's detail (M): its capitals rows 108 .. 118 */
     cv_text_r(228, 104, &AF_M, N_SLC_SRC[src], src && src != SLC_SRC_PIANO ? T_THEME : T_DIM, T_SURF);
 }

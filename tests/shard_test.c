@@ -236,6 +236,79 @@ static void demo(const char *dir, const char *file, uint32_t bpm, uint32_t bars,
     check("demo bounded and audible", peak > 2000 && peak < 32767, "%s", file);
 }
 
+
+/* 8: tempo. A user slot (k) from 16-bit PCM at 22.05 kHz, IMA ADPCM as tools/sampleio.py, then scanned */
+static void slot_pcm(uint32_t k, const int16_t *x, uint32_t n)
+{
+    smp_user_hdr_t *h = (smp_user_hdr_t *)((uint8_t *)host_slots + k * SMP_USER_SIZE);
+    uint8_t *d = (uint8_t *)h + SMP_USER_DATA;
+    int32_t pred = 0, idx = 0;
+    uint32_t i;
+    memset(h, 0, SMP_USER_SIZE);
+    n = n < 2u * (SMP_USER_SIZE - SMP_USER_DATA) ? n : 2u * (SMP_USER_SIZE - SMP_USER_DATA);   /* (what a slot holds) */
+    for (i = 0; i < n; i++) {
+        int32_t step = IMA_STEP[idx], diff = x[i] - pred, vd = step >> 3, code = 0;
+        if (diff < 0) { code = 8; diff = -diff; }
+        if (diff >= step) { code |= 4; diff -= step; vd += step; }
+        if (diff >= step >> 1) { code |= 2; diff -= step >> 1; vd += step >> 1; }
+        if (diff >= step >> 2) { code |= 1; vd += step >> 2; }
+        pred = clamp(code & 8 ? pred - vd : pred + vd, -32768, 32767);
+        idx = clamp(idx + IMA_IDX[code & 7], 0, 88);
+        d[i >> 1] |= (uint8_t)(i & 1u ? code << 4 : code);
+    }
+    h->magic = SMP_USER_MAGIC;
+    h->version = 1;
+    h->nz = 1;
+    memcpy(h->name, "TEMPO", 5);
+    h->data_len = (n + 1u) / 2u;
+    h->zone[0].n = n;
+    h->zone[0].le = n - 1u;
+    h->zone[0].rate = 32768u;
+    h->zone[0].root16 = 60 * 16;
+    h->zone[0].hi = 127;
+    smp_user_scan(k);
+}
+/* drums at 22.05 kHz: 0 kick, 1 snare, 2 closed hat, added at t seconds */
+static uint32_t rnd_s = 1;
+static double rnd1(void) { rnd_s = rnd_s * 1103515245u + 12345u; return ((rnd_s >> 8) & 0xFFFF) / 32768.0 - 1.0; }
+static void hit(double *x, uint32_t n, double t, int what, double g)
+{
+    uint32_t i0 = (uint32_t)(t * 22050.0), i;
+    double ph = 0, hp = 0, prev = 0;
+    for (i = 0; i < 22050u * 4u / 10u && i0 + i < n; i++) {
+        double u = i / 22050.0, v;
+        if (what == 0) { ph += 2 * M_PI * (50 + 120 * exp(-u * 40)) / 22050.0; v = sin(ph) * exp(-u * 9); }
+        else if (what == 1) { double r = rnd1(); v = (r * 0.8 + sin(2 * M_PI * 190 * u) * 0.4) * exp(-u * 18); }
+        else { double r = rnd1(); hp = r - prev; prev = r; v = hp * exp(-u * 70) * 0.6; }
+        x[i0 + i] += v * g;
+    }
+}
+/* pattern: 16 steps a bar, a char per step: K kick, S snare, H hat, X kick + hat, Y snare + hat, . rest */
+static uint32_t make_loop(double *x, uint32_t cap, double bpm, const char *pat, uint32_t bars, double tail)
+{
+    double six = 60.0 / bpm / 4.0;
+    uint32_t n = (uint32_t)((bars * 16 * six + tail) * 22050.0), b, i, len = (uint32_t)strlen(pat);
+    n = n < cap ? n : cap;
+    memset(x, 0, n * sizeof *x);
+    for (b = 0; b < bars; b++)
+        for (i = 0; i < 16u; i++) {
+            char c = pat[(b * 16u + i) % len];
+            double t = (b * 16u + i) * six;
+            if (c == 'K' || c == 'X') hit(x, n, t, 0, 1.0);
+            if (c == 'S' || c == 'Y') hit(x, n, t, 1, 0.8);
+            if (c == 'H' || c == 'X' || c == 'Y') hit(x, n, t, 2, 0.5);
+        }
+    return n;
+}
+static uint32_t to_pcm(const double *x, int16_t *y, uint32_t n)
+{
+    double pk = 1e-9;
+    uint32_t i;
+    for (i = 0; i < n; i++) pk = fabs(x[i]) > pk ? fabs(x[i]) : pk;
+    for (i = 0; i < n; i++) y[i] = (int16_t)(x[i] / pk * 30000.0);
+    return n;
+}
+
 int main(int argc, char **argv)
 {
     const char *loop = argc > 1 ? argv[1] : "build/slice_demo/loop";
@@ -265,22 +338,87 @@ int main(int argc, char **argv)
     shd_init();
     smp_user_scan(0);
     check("USR1 scanned", slc_get(1) != 0, "%u samples", slc_usr[0].len);
+    check("tempo: USR1's loop (2 bars at 96 BPM, swung) found as 96", shd_det_bpm10[1] >= 955u && shd_det_bpm10[1] <= 965u,
+          "%u.%u BPM", shd_det_bpm10[1] / 10u, shd_det_bpm10[1] % 10u);
+    {   /* 8: tempo of made loops in USR3 */
+        static double x[22050 * 8];
+        static int16_t y[22050 * 8];
+        static const struct { const char *name, *pat; double bpm, tail; uint32_t bars, lo10, hi10, alt_lo10, alt_hi10; } L[] = {
+            {"4 on the floor 128, 2 bars", "XHHHXHHHXHHHXHHH", 128, 0, 2, 1278, 1282, 0, 0},
+            {"house 124, offbeat hats, 2 bars", "K.H.K.H.K.H.K.H.", 124, 0, 2, 1238, 1242, 0, 0},
+            {"break 95, 2 bars", "K.H.S.HKH.KHS.H.", 95, 0, 2, 948, 952, 0, 0},
+            {"hip hop 88, 2 bars", "K..HS.K.H.KHS..H", 88, 0, 2, 878, 882, 1758, 1762},
+            {"drum and bass 174, 4 bars", "K.H.S.HHH.K.S.H.", 174, 0, 4, 1738, 1742, 868, 872},
+            {"techno 140, 1 bar", "XHHHYHHHXHHHYHHH", 140, 0, 1, 1398, 1402, 0, 0},
+            {"112, 1 bar with a 0.3 s tail (not whole beats)", "K.H.S.H.K.H.S.H.", 112, 0.3, 1, 1100, 1140, 0, 0},
+            {"slow 72, 1 bar", "K...S...K.K.S...", 72, 0, 1, 718, 722, 1438, 1442},
+        };
+        for (i = 0; i < NELEM(L); i++) {
+            uint32_t m = make_loop(x, NELEM(x), L[i].bpm, L[i].pat, L[i].bars, L[i].tail), f;
+            slot_pcm(2, y, to_pcm(x, y, m));
+            f = shd_det_bpm10[3];
+            snprintf(path, sizeof path, "tempo: %s", L[i].name);
+            check(path, (f >= L[i].lo10 && f <= L[i].hi10) || (f >= L[i].alt_lo10 && f <= L[i].alt_hi10),
+                  "%u.%u BPM", f / 10u, f % 10u);
+        }
+        for (i = 0; i < 22050u * 3u; i++)                              /* a pad: no tempo */
+            y[i] = (int16_t)(sin(2 * M_PI * 220 * i / 22050.0) * 12000 * (0.6 + 0.4 * sin(2 * M_PI * 0.3 * i / 22050.0)));
+        slot_pcm(2, y, 22050u * 3u);
+        check("tempo: a held tone has none", shd_det_bpm10[3] == 0u, "%u", shd_det_bpm10[3]);
+        /* PLAY's loop from the tempo: 2 bars at 128 played at 128 = the sample's own length (x 2: 22.05 kHz) */
+        {
+            uint32_t m = make_loop(x, NELEM(x), 128, "XHHHXHHHXHHHXHHH", 2, 0), l;
+            slot_pcm(2, y, to_pcm(x, y, m));
+            fresh(0, SHD_M_PLAY, SHD_DIV_AUTO);
+            T->p[P_E0] = 3;
+            song.g[G_BPM] = 128;
+            l = shd_loop_len(T->p, slc_get(3));
+            check("tempo: BARS AUTO plays the found tempo's loop at the song's (128 at 128: its own length)",
+                  l + 16u >= 2u * m && l <= 2u * m + 16u, "%u for %u", l, 2u * m);
+            shd_kit[3].bus.bpm = 64;
+            l = shd_loop_len(T->p, slc_get(3));
+            check("tempo: the kit's BPM 64 overrides it (half the beats: half as long)", l + 16u >= m && l <= m + 16u, "%u", l);
+            shd_kit[3].bus.bpm = 0;
+            T->p[P_E5] = 2;                                            /* BARS 2: as set, the tempo aside */
+            l = shd_loop_len(T->p, slc_get(3));
+            check("tempo: BARS 2 is two bars at the song's tempo", l == 8u * beat_samples(), "%u", l);
+        }
+        {   /* 2, 6, 12 equal slices: on the grid, exact, with the right decoder state */
+            static const uint8_t C[3] = {SLC_DIV_2, SLC_DIV_6, SLC_DIV_12}, N[3] = {2, 6, 12};
+            const slc_src_t *u = slc_get(3);
+            uint32_t c, a, b, st;
+            for (ok = 1, c = 0; c < 3u; c++) {
+                ok &= slc_count(u, C[c]) == N[c];
+                for (k = 0; k < N[c]; k++) {
+                    slc_bounds(u, C[c], k, &a, &b, &st);
+                    ok &= a == k * u->len / N[c] && b == (k + 1u) * u->len / N[c] && st == slc_state_at(u, a);
+                }
+            }
+            check("DIV 2 / 6 / 12: equal slices, exact starts and decoder states", ok, 0);
+            for (ok = 1, c = 0; c < SHD_NDIV; c++)
+                ok &= c >= SHD_DIV_AUTO || slc_count(u, SHD_DIV_CODE[c]) == (uint32_t)atoi(N_SHD_DIV[c]);
+            check("SHARD's DIV list: 2 4 6 8 12 16 32 slices", ok, 0);
+        }
+        memset((uint8_t *)host_slots + 2u * SMP_USER_SIZE, 0, SMP_USER_SIZE);
+        smp_user_scan(2);
+        check("tempo: an emptied slot has none", shd_det_bpm10[3] == 0u, 0);
+    }
 
     /* 2 */
-    fresh(1, SHD_M_ONE, SLC_DIV_AUTO);
+    fresh(1, SHD_M_ONE, SHD_DIV_AUTO);
     trk_note_on(T, 61, 110);                                   /* slice 1 of BREAK's AUTO slices */
     blocks(1);
     check("ONE: a note plays its slice", nvoices() == 1u && shd_slice_of(first_voice()) == 1u, 0);
     trk_note_off(T, 61);
     blocks(400);
     check("ONE: the slice plays to its end, then the voice ends", nvoices() == 0u && out_peak > 2000, "peak %d", out_peak);
-    fresh(1, SHD_M_GATE, 2);
+    fresh(1, SHD_M_GATE, 5);
     trk_note_on(T, 60, 110);
     blocks(20);
     trk_note_off(T, 60);
     blocks(100);
     check("GATE: the release ends the voice", nvoices() == 0u, 0);
-    fresh(1, SHD_M_LOOP, 3);                                   /* 32 slices: short ones */
+    fresh(1, SHD_M_LOOP, 6);                                   /* 32 slices: short ones */
     trk_note_on(T, 60, 110);
     blocks(2000);
     check("LOOP: a held slice keeps sounding", nvoices() == 1u, 0);
@@ -292,7 +430,7 @@ int main(int argc, char **argv)
     for (k = 0; k < 2u; k++) {
         uint32_t bpm = k ? 90u : 120u, nb = slc_count(&SLC_BREAK, SLC_DIV_AUTO), worst = 0;
         double scale = (double)FS * 120.0 / bpm / ((double)((SLC_BREAK.rate >> 4) * 44100u >> 12));
-        fresh(0, SHD_M_PLAY, SLC_DIV_AUTO);
+        fresh(0, SHD_M_PLAY, SHD_DIV_AUTO);
         song.g[G_BPM] = (int16_t)bpm;
         check("PLAY: BARS AUTO puts BREAK at 1 bar (120 BPM)", shd_bars(T->p, &SLC_BREAK) == 1u, 0);
         trk_note_on(T, 60, 110);
@@ -314,7 +452,7 @@ int main(int argc, char **argv)
     {   /* the pitch does not follow the tempo: the first slice (before 120 BPM's second) the same at 120 and 90 */
         static int32_t a[RUN_N], b[RUN_N];
         uint32_t f, diff = 0, upto = (uint32_t)(SLC_BREAK.apos[1] * (double)FS / ((SLC_BREAK.rate >> 4) * 44100u >> 12)) - 64u;
-        fresh(0, SHD_M_PLAY, SLC_DIV_AUTO);
+        fresh(0, SHD_M_PLAY, SHD_DIV_AUTO);
         in_child(run_tempo, 120, a, RUN_N);
         in_child(run_tempo, 90, b, RUN_N);
         for (f = 0; f < upto; f++)
@@ -325,12 +463,12 @@ int main(int argc, char **argv)
     /* 4: per-slice settings */
     {
         double e0, e1;
-        fresh(1, SHD_M_ONE, 2);
+        fresh(1, SHD_M_ONE, 5);
         trk_note_on(T, 60, 110);
         blocks(200);
         e0 = out_energy;
         trk_note_off(T, 60);
-        fresh(1, SHD_M_ONE, 2);
+        fresh(1, SHD_M_ONE, 5);
         shd_kit[0].sl[0].level = 50;
         trk_note_on(T, 60, 110);
         blocks(200);
@@ -340,7 +478,7 @@ int main(int argc, char **argv)
     {
         uint32_t len[2];
         for (k = 0; k < 2u; k++) {
-            fresh(1, SHD_M_ONE, 2);
+            fresh(1, SHD_M_ONE, 5);
             shd_kit[0].sl[0].pitch = k ? 12 : 0;
             trk_note_on(T, 60, 110);
             for (len[k] = 0; nvoices() && len[k] < 2000u; len[k]++)
@@ -350,7 +488,7 @@ int main(int argc, char **argv)
               "%u / %u blocks", len[1], len[0]);
     }
     {
-        fresh(1, SHD_M_ONE, 2);
+        fresh(1, SHD_M_ONE, 5);
         shd_kit[0].sl[0].dec = 40;
         trk_note_on(T, 60, 110);
         for (n = 0; nvoices() && n < 2000u; n++)
@@ -360,7 +498,7 @@ int main(int argc, char **argv)
     {   /* REV: the voice reads backwards: its first source sample is the slice's last */
         voice_t *v;
         uint32_t a, b, st;
-        fresh(1, SHD_M_ONE, 2);
+        fresh(1, SHD_M_ONE, 5);
         shd_kit[0].sl[3].rev = 1;
         trk_note_on(T, 63, 110);
         v = first_voice();
@@ -372,7 +510,7 @@ int main(int argc, char **argv)
     for (ok = 1, k = 0; k < 4u; k++) {
         uint32_t ty;
         for (ty = 0; ty < SHD_NDRIVE; ty++) {
-            fresh(1, SHD_M_LOOP, 2);
+            fresh(1, SHD_M_LOOP, 5);
             for (i = 0; i < SLC_AUTO; i++) {
                 shd_kit[0].sl[i].filt = (uint8_t)k;
                 shd_kit[0].sl[i].res = 127;
@@ -389,7 +527,7 @@ int main(int argc, char **argv)
     check("every FILTER x DRIVE at full resonance and drive, 8 voices: bounded", ok, 0);
     {
         voice_t *v0;
-        fresh(1, SHD_M_LOOP, 2);
+        fresh(1, SHD_M_LOOP, 5);
         shd_kit[0].sl[0].choke = shd_kit[0].sl[1].choke = 2;
         trk_note_on(T, 60, 110);
         blocks(4);
@@ -403,7 +541,7 @@ int main(int argc, char **argv)
     {
         static int32_t a[RUN_N], b[RUN_N];
         uint32_t f, diff = 0;
-        fresh(1, SHD_M_ONE, 2);
+        fresh(1, SHD_M_ONE, 5);
         in_child(run_route, SHD_DIRECT, a, RUN_N);
         in_child(run_route, SHD_MULTI, b, RUN_N);
         for (f = 0; f < RUN_N; f++)
@@ -413,7 +551,7 @@ int main(int argc, char **argv)
     for (ok = 1, k = SHD_MULTI; k < SHD_NROUTE; k++) {
         uint32_t ty;
         for (ty = 0; ty < SHD_NDRIVE; ty++) {
-            fresh(1, SHD_M_LOOP, 2);
+            fresh(1, SHD_M_LOOP, 5);
             T->p[P_E7] = 63;
             for (i = 0; i < 3u; i++) {
                 shd_kit[0].bus.type[i] = (uint8_t)ty;
@@ -497,12 +635,12 @@ int main(int argc, char **argv)
         char cmd[600];
         snprintf(cmd, sizeof cmd, "mkdir -p %s", dir);
         if (system(cmd)) {}
-        fresh(0, SHD_M_PLAY, SLC_DIV_AUTO);
+        fresh(0, SHD_M_PLAY, SHD_DIV_AUTO);
         T->p[P_SGATE] = 127;
         T->p[P_SLEN] = 16;
-        demo(dir, "play_break_120.wav", 120, 4, SHD_M_PLAY, SLC_DIV_AUTO, 0, ONE, 16);
-        demo(dir, "play_break_90.wav", 90, 4, SHD_M_PLAY, SLC_DIV_AUTO, 0, ONE, 16);
-        fresh(1, SHD_M_ONE, 2);
+        demo(dir, "play_break_120.wav", 120, 4, SHD_M_PLAY, SHD_DIV_AUTO, 0, ONE, 16);
+        demo(dir, "play_break_90.wav", 90, 4, SHD_M_PLAY, SHD_DIV_AUTO, 0, ONE, 16);
+        fresh(1, SHD_M_ONE, 5);
         shd_kit[0].sl[1].rev = 1;
         shd_kit[0].sl[3].pitch = -5;
         shd_kit[0].sl[3].route = SHD_LOW;
@@ -512,10 +650,10 @@ int main(int argc, char **argv)
         shd_kit[0].sl[7].route = SHD_HIGH; shd_kit[0].sl[7].dec = 70;
         shd_kit[0].sl[8].pitch = 7; shd_kit[0].sl[8].route = SHD_MID;
         T->p[P_E7] = 20;
-        demo(dir, "kit_break_routed.wav", 128, 4, SHD_M_ONE, 2, 0, CHOP, 16);
-        fresh(0, SHD_M_PLAY, SLC_DIV_AUTO);
+        demo(dir, "kit_break_routed.wav", 128, 4, SHD_M_ONE, 5, 0, CHOP, 16);
+        fresh(0, SHD_M_PLAY, SHD_DIV_AUTO);
         T->p[P_SGATE] = 127;
-        demo(dir, "play_usr_loop_110.wav", 110, 4, SHD_M_PLAY, SLC_DIV_AUTO, 1, ONE, 16);
+        demo(dir, "play_usr_loop_110.wav", 110, 4, SHD_M_PLAY, SHD_DIV_AUTO, 1, ONE, 16);
     }
     printf(fails ? "shard: %d FAILED\n" : "shard: all passed\n", fails);
     return fails != 0;

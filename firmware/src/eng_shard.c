@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* SHARD: a slice-loop engine with per-slice sound design and an Ohmnicide-style multiband distortion.
  *
- * Built on SLICE (eng_slice.c): the same material (SRC: BREAK, USR1..3, PIANO), the same slices (DIV: 4..32 equal,
- * AUTO, MAN from the SLICES page) and the same IMA ADPCM decoder, checkpoints and reverse windows. What SHARD adds:
+ * Built on SLICE (eng_slice.c): the same material (SRC: BREAK, USR1..3, PIANO), the same slices (DIV: 2 4 6 8 12 16 32
+ * equal, AUTO, MAN from the SLICES page) and the same IMA ADPCM decoder, checkpoints and reverse windows. What SHARD adds:
  *
  * Per-slice settings (the "kit", one per source, kept with a user slot's sample: shard_store in slice_store.c):
  *   PITCH (-24..+24 st), LEVEL, ATTACK, DECAY (its own envelope, restarted by each slice), MODE (TRACK / ONE / GATE /
@@ -13,7 +13,8 @@
  *   three shapers, a gate on each band, the band levels, a DC blocker, and the dry / wet MULTI mix (E6). The bands'
  *   types, drives, gates, levels and the two split points are the kit's too; DRIVE (E7) offsets every band's drive.
  * MODE PLAY (E4), ReCycle style: a note plays the whole loop from its slice, each slice starting where it sits in the
- *   loop, scaled to the tempo (BARS: the loop's length; AUTO picks the bars that put its tempo in 80..160 BPM). A
+ *   loop, scaled to the tempo (BARS: the loop's length; AUTO: from the source's tempo, the kit's BPM as set on SLICE
+ *   FX's BUS or else the one shd_tempo_scan found, and failing both the bars that put it in 80..160 BPM). A
  *   tempo change moves the slices, never the pitch; slices that end early leave a gap (DECAY / LOOP fill it). Each
  *   slice keeps its own settings. The loop repeats while the note is held.
  *
@@ -29,10 +30,19 @@ enum { SHD_DIRECT, SHD_MULTI, SHD_LOW, SHD_MID, SHD_HIGH, SHD_NROUTE };
 enum { SHD_D_OFF, SHD_D_SOFT, SHD_D_HARD, SHD_D_FOLD, SHD_D_CRUSH, SHD_D_DECIM, SHD_D_HALF, SHD_D_TUBE, SHD_NDRIVE };
 enum { SHD_F_OFF, SHD_F_LP, SHD_F_HP, SHD_F_BP };
 #define SHD_NSRC SLC_NSRC
+#define SHD_BPM_MIN 40u                             /* the kit's BPM (SLICE FX: BUS), 0 = AUTO */
+#define SHD_BPM_MAX 250u
 #define SHD_FADE 32u                                /* PLAY: samples of fade at a slice change */
 
 static const char *const N_SHD_MODE[] = {"ONE", "GATE", "LOOP", "PLAY"};
 static const char *const N_SHD_BARS[] = {"AUTO", "1", "2", "4", "8"};
+/* DIV (E1): SLICE's codes (eng_slice.c SLC_DIV_*) in the order of the slice counts */
+static const char *const N_SHD_DIV[] = {"2", "4", "6", "8", "12", "16", "32", "AUTO", "MAN"};
+static const uint8_t SHD_DIV_CODE[] = {SLC_DIV_2, 0, SLC_DIV_6, 1, SLC_DIV_12, 2, 3, SLC_DIV_AUTO, SLC_DIV_MAN};
+#define SHD_DIV_AUTO 7
+#define SHD_DIV_MAN 8
+#define SHD_NDIV 9
+static uint32_t shd_div(const int16_t *p) { return SHD_DIV_CODE[clamp(p[P_E1], 0, SHD_NDIV - 1)]; }
 static const char *const N_SHD_SMODE[] = {"TRACK", "ONE", "GATE", "LOOP"};
 static const char *const N_SHD_FILT[] = {"OFF", "LP", "HP", "BP"};
 static const char *const N_SHD_DRIVE[] = {"OFF", "SOFT", "HARD", "FOLD", "CRUSH", "DECIM", "HALF", "TUBE"};
@@ -47,7 +57,7 @@ typedef struct {
 typedef struct {
     uint8_t lo, hi;                                 /* split points: 40 Hz .. 12 kHz */
     uint8_t type[3], drive[3], gate[3], level[3];   /* low, mid, high */
-    uint8_t pad[2];
+    uint8_t bpm, pad;                               /* the source's tempo (40..250), 0: AUTO (shd_tempo_scan) */
 } shd_bus_t;
 typedef struct {
     shd_sl_t sl[SLC_AUTO];
@@ -56,7 +66,7 @@ typedef struct {
 _Static_assert(sizeof(shd_sl_t) == 16u && sizeof(shd_bus_t) == 16u, "SHARD kit layout");
 /* neutral at power-on (the slot scans then read the stored kits): every slice as recorded, DIRECT */
 #define SHD_SL_DEF {0, 100, 0, 127, SHD_TRACK, 0, SHD_F_OFF, 127, 0, SHD_D_OFF, 40, SHD_DIRECT, 0, {0, 0, 0}}
-#define SHD_BUS_DEF {51, 96, {SHD_D_TUBE, SHD_D_FOLD, SHD_D_CRUSH}, {40, 30, 60}, {0, 0, 0}, {100, 100, 90}, {0, 0}}
+#define SHD_BUS_DEF {51, 96, {SHD_D_TUBE, SHD_D_FOLD, SHD_D_CRUSH}, {40, 30, 60}, {0, 0, 0}, {100, 100, 90}, 0, 0}
 #define SHD_KIT_DEF {{[0 ... SLC_AUTO - 1] = SHD_SL_DEF}, SHD_BUS_DEF}
 static shd_kit_t shd_kit[SHD_NSRC] = {[0 ... SHD_NSRC - 1] = SHD_KIT_DEF};
 static uint8_t shd_kit_save;                        /* bit k: user slot k's kit changed, to flash (slice_store.c) */
@@ -114,6 +124,7 @@ static void shd_kit_sane(shd_kit_t *k)
         if (k->bus.gate[b] > 127) k->bus.gate[b] = 0;
         if (k->bus.level[b] > 127) k->bus.level[b] = db.level[b];
     }
+    if (k->bus.bpm && (k->bus.bpm < SHD_BPM_MIN || k->bus.bpm > SHD_BPM_MAX)) k->bus.bpm = 0;
 }
 
 /* ---- the part's engine memory */
@@ -198,6 +209,133 @@ static int32_t shd_shape(uint32_t type, int32_t x, uint32_t drive, int32_t *held
     return (y * SHD_MAKEUP[drive]) >> 15;
 }
 
+/* ---- the source's tempo. shd_tempo_scan (main loop: a user slot's scan, after slc_scan) finds the tempo of a rhythmic
+ * sample: per hop (~7 ms) the rise of its level and of its first difference (hits, as slc_scan's onsets), as a
+ * byte per hop (at most SHD_TF hops: longer hops for a longer sample); the autocorrelation of that onset curve; for
+ * each tempo 60..200 BPM in 0.5 BPM steps the score at the beat (interpolated between whole lags) plus half the score
+ * at two beats, x 7/8 outside 80..160 (the half- and double-time doubt goes to the usual range). The best tempo is
+ * kept when it stands out (its score 1.2 x the mean of all); then, if the sample is within 3 % of a whole number of
+ * beats at it, it is set to exactly that (a loop cut on the beat, its usual case, repeats seamlessly in PLAY): a
+ * multiple of 4 beats first, then 2, then any. 0: no tempo found (silence, a single hit, a pad). RAM: SHD_TF bytes. */
+#define SHD_TF 1024u
+static uint16_t shd_det_bpm10[SHD_NSRC] = {1200, 0, 0, 0, 0};   /* found, in 0.1 BPM (BREAK: one bar at 120) */
+static uint8_t shd_onset[SHD_TF];
+static uint32_t shd_src_hz(const slc_src_t *s) { return (s->rate >> 4) * 44100u >> 12; }
+
+/* the onset curve's circular autocorrelation (a loop repeats: the end meets the start) less its mean squared, at lag
+ * l16 / 16 hops (linear between whole lags), per hop */
+static int32_t shd_acf(const uint8_t *o, uint32_t n, uint32_t l16, int32_t mean)
+{
+    uint32_t l = (l16 >> 4) % n, f = l16 & 15u, i, j = l, k = (l + 1u) % n;
+    int32_t a = 0, b = 0;
+    for (i = 0; i < n; i++) {
+        int32_t x = (int32_t)o[i] - mean;
+        a += x * ((int32_t)o[j] - mean);
+        b += x * ((int32_t)o[k] - mean);
+        j = j + 1u == n ? 0u : j + 1u;
+        k = k + 1u == n ? 0u : k + 1u;
+    }
+    a /= (int32_t)n;
+    b /= (int32_t)n;
+    return (a * (int32_t)(16u - f) + b * (int32_t)f) / 16;
+}
+/* a tempo's score: the beat, two beats, four beats (a bar) and the half beat, from the curve's covariance */
+static int32_t shd_beat_score(const uint8_t *o, uint32_t n, uint32_t l16, int32_t mean)
+{
+    return shd_acf(o, n, l16, mean) + shd_acf(o, n, 2u * l16, mean) + shd_acf(o, n, 4u * l16, mean) / 2 +
+           shd_acf(o, n, l16 / 2u, mean) / 2;
+}
+
+static uint32_t shd_tempo_of(const slc_src_t *s, uint8_t *o)
+{
+    slc_dec_t d;
+    uint32_t len = s->len, hz = shd_src_hz(s), hop, n, i, pos, pass, top = 1, best = 0, b10, sum = 0;
+    int32_t prev = 0, ed = 0, er = 0, mean, var, best_s = -0x7FFFFFFF, lvl = 0;
+    if (!len || !hz)
+        return 0;
+    hop = hz / 150u;                                    /* ~6.7 ms */
+    if (len / hop > SHD_TF)
+        hop = (len + SHD_TF - 1u) / SHD_TF;
+    n = len / hop;
+    if (n < 32u)
+        return 0;
+    for (pass = 0; pass < 2u; pass++) {                 /* 1: the largest rise; 2: the curve, scaled to it */
+        slc_dec_at(&d, 0, 0);
+        prev = ed = er = 0;
+        for (i = 0; i < n; i++) {
+            int32_t hd = 0, hr = 0, r;
+            for (pos = 0; pos < hop; pos++) {
+                int32_t x = slc_dec_next(s, &d), a = x - prev;
+                prev = x;
+                hd += a < 0 ? -a : a;
+                hr += x < 0 ? -x : x;
+            }
+            hd /= (int32_t)hop;
+            hr /= (int32_t)hop;
+            r = (hd > ed ? hd - ed : 0) + (hr > er ? (hr - er) / 4 : 0);
+            ed = hd;
+            er = hr;
+            if (!pass) {
+                top = (uint32_t)r > top ? (uint32_t)r : top;
+                lvl = hr > lvl ? hr : lvl;
+            } else {                                    /* square-root compressed: soft hits count, loud ones less */
+                uint32_t q = (uint32_t)r * 65025u / top, z = 0, bit;
+                for (bit = 1u << 14; bit; bit >>= 1)
+                    if ((z | bit) * (z | bit) <= q)
+                        z |= bit;
+                o[i] = (uint8_t)(z > 255u ? 255u : z);
+                sum += o[i];
+            }
+        }
+        if (!pass && (int32_t)top * 16 < lvl)        /* no rise of note against its level: no hits (a held tone) */
+            return 0;
+    }
+    mean = (int32_t)(sum / n);
+    var = shd_acf(o, n, 0, mean);
+    if (var <= 0)
+        return 0;
+    for (b10 = 600; b10 <= 2000u; b10 += 5u) {         /* the beat: 600 * hops per s / b10 hops (x 16) */
+        uint32_t l16 = (uint32_t)((uint64_t)hz * 16u * 600u / ((uint64_t)hop * b10));
+        int32_t sc = shd_beat_score(o, n, l16, mean);
+        if (b10 < 800u || b10 > 1600u)
+            sc -= (sc > 0 ? sc : -sc) / 8;
+        if (sc > best_s) {
+            best_s = sc;
+            best = b10;
+        }
+    }
+    if (!best || best_s * 4 < var * 3)                  /* (3 of the 3.5 a perfect pulse scores: under 1 in 4 of it) */
+        return 0;
+    {   /* a whole number of beats, if the sample is within 3 % of one: exactly that */
+        static const uint8_t M[3] = {4, 2, 1};
+        uint64_t beats1000 = (uint64_t)len * best * 1000u / (600u * hz);   /* the sample's beats x 1000 */
+        uint32_t m;
+        for (m = 0; m < 3u; m++) {
+            uint64_t q = M[m] * 1000u, k = (beats1000 + q / 2u) / q * q;
+            if (k && (beats1000 > k ? beats1000 - k : k - beats1000) * 100u <= 3u * k) {
+                uint32_t exact = (uint32_t)((k / 1000u) * 600u * hz * 10u / len);   /* x 10: 0.01 BPM */
+                if (exact >= 6000u && exact <= 20000u)
+                    return (exact + 5u) / 10u;
+            }
+        }
+    }
+    return best;
+}
+
+/* smp_user_scan (eng_sample.c, via slc_user_scan): slot k's tempo; none while it has no material */
+static void shd_tempo_scan(uint32_t k)
+{
+    if (k < SMP_USER_SLOTS)
+        shd_det_bpm10[1u + k] = (uint16_t)shd_tempo_of(&slc_usr[k], shd_onset);
+}
+/* the source's tempo in 0.1 BPM: the kit's, else the one found; 0 = unknown */
+static uint32_t shd_bpm10(uint32_t src)
+{
+    if (src >= SHD_NSRC)
+        return 0;
+    return shd_kit[src].bus.bpm ? shd_kit[src].bus.bpm * 10u : shd_det_bpm10[src];
+}
+
 /* ---- PLAY: the loop's length and where slice k starts in it (samples), from the note's slice f */
 static uint32_t shd_bars(const int16_t *p, const slc_src_t *s)
 {
@@ -205,8 +343,8 @@ static uint32_t shd_bars(const int16_t *p, const slc_src_t *s)
     uint32_t b = B[clamp(p[P_E5], 0, 4)], hz, best = 1, k;
     if (b)
         return b;
-    hz = (s->rate >> 4) * 44100u >> 12;             /* (as slc_scan) */
-    for (k = 1; k <= 16; k <<= 1) {                 /* AUTO: the bars that put the loop at 80..160 BPM */
+    hz = shd_src_hz(s);
+    for (k = 1; k <= 16; k <<= 1) {                 /* no tempo: the bars that put the loop at 80..160 BPM */
         uint32_t bpm = (uint32_t)((uint64_t)k * 240u * hz / (s->len ? s->len : 1u));
         best = k;
         if (bpm >= 80u)
@@ -214,7 +352,17 @@ static uint32_t shd_bars(const int16_t *p, const slc_src_t *s)
     }
     return best;
 }
-static uint32_t shd_loop_len(const int16_t *p, const slc_src_t *s) { return shd_bars(p, s) * 4u * beat_samples(); }
+/* BARS AUTO with a tempo: the sample's beats at its tempo, played at the song's (beat_samples) */
+static uint32_t shd_loop_len(const int16_t *p, const slc_src_t *s)
+{
+    uint32_t b10 = clamp(p[P_E5], 0, 4) ? 0u : shd_bpm10(slc_src_of(p)), hz = shd_src_hz(s);
+    if (b10 && hz) {
+        uint32_t l = (uint32_t)((uint64_t)s->len * b10 * beat_samples() / (600u * (uint64_t)hz));
+        if (l)
+            return l;
+    }
+    return shd_bars(p, s) * 4u * beat_samples();
+}
 static uint32_t shd_at(const slc_src_t *s, uint32_t div, uint32_t f, uint32_t k, uint32_t loop)
 {
     uint32_t a, b, st, a0, len = s->len ? s->len : 1u;
@@ -251,7 +399,7 @@ static void shd_start(track_t *t, voice_t *v, const slc_src_t *s, uint32_t src, 
 static void shard_note_on(track_t *t, voice_t *v)
 {
     const int16_t *p = t->p;
-    uint32_t src = slc_src_of(p), div = (uint32_t)clamp(p[P_E1], 0, SLC_DIV_MAN), j, i;
+    uint32_t src = slc_src_of(p), div = shd_div(p), j, i;
     const slc_src_t *s = slc_get(src);
     shd_vx_t *x = shd_vx(t, v);
     v->ph[1] = 0;
@@ -301,7 +449,7 @@ static int32_t shard_amp(track_t *t, voice_t *v, int32_t adsr)
 /* PLAY: the loop moves on to the next slice (or round to the note's) */
 static void shd_advance(track_t *t, voice_t *v, const slc_src_t *s, shd_vx_t *x)
 {
-    uint32_t pk = (uint32_t)v->s[4], src = pk & 7u, div = (pk >> 16) & 7u, n = slc_count(s, div);
+    uint32_t pk = (uint32_t)v->s[4], src = pk & 7u, div = (pk >> 16) & 15u, n = slc_count(s, div);
     uint32_t k = (shd_slice_of(v) + 1u) % (n ? n : 1u), k2;
     if (k == x->first)                              /* round the loop: the clock from its start again */
         x->clock = x->clock >= x->loop ? x->clock - x->loop : 0u;
@@ -536,9 +684,9 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
 
 /* three factory sounds on BREAK; the kit (per-slice settings) is the source's, edited on SLICE FX */
 static const preset_t SHARD_PRESETS[] = {
-    {"RECYCLE", {0, SLC_DIV_AUTO, 0, 0, SHD_M_PLAY, 0, 127, 0}, {0, 127, 127, 20}, 0, 0, FX(0, 0, 0, 10), PAT(11)},
-    {"CHOP KIT", {0, SLC_DIV_AUTO, 0, 0, SHD_M_ONE, 0, 127, 0}, {0, 127, 127, 30}, 0, 0, FX(0, 0, 0, 12), PAT(9)},
-    {"SHRED", {0, 2, 0, 0, SHD_M_GATE, 0, 127, 24}, {0, 127, 127, 12}, 0, 0, FX(0, 0, 20, 10), PAT(10)},
+    {"RECYCLE", {0, SHD_DIV_AUTO, 0, 0, SHD_M_PLAY, 0, 127, 0}, {0, 127, 127, 20}, 0, 0, FX(0, 0, 0, 10), PAT(11)},
+    {"CHOP KIT", {0, SHD_DIV_AUTO, 0, 0, SHD_M_ONE, 0, 127, 0}, {0, 127, 127, 30}, 0, 0, FX(0, 0, 0, 12), PAT(9)},
+    {"SHRED", {0, 5, 0, 0, SHD_M_GATE, 0, 127, 24}, {0, 127, 127, 12}, 0, 0, FX(0, 0, 20, 10), PAT(10)},
 };
 
 static const engine_t ENG_SHARD = {
@@ -546,7 +694,7 @@ static const engine_t ENG_SHARD = {
     .page_title = {"SHRD", "PLAY"},
     .edit = {
         {"SRC", F_ENUM, 0, SLC_NSRC - 1, 0, N_SLC_SRC, 0},
-        {"DIV", F_ENUM, 0, 5, SLC_DIV_AUTO, N_SLC_DIV, 0},
+        {"DIV", F_ENUM, 0, SHD_NDIV - 1, SHD_DIV_AUTO, N_SHD_DIV, 0},
         {"START", F_INT, 0, 31, 0, 0, 0},
         {"PTCH", F_SEMI, -24, 24, 0, 0, 0},
         {"MODE", F_ENUM, 0, 3, SHD_M_PLAY, N_SHD_MODE, 0},

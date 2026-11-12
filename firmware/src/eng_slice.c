@@ -11,10 +11,10 @@
  * plays a plain sine at the key's pitch (+ PTCH) instead, through DCAY, TONE and the ADSR (MODE ONE
  * acts as GATE there: no slice end), and the UI says so (ui_input.c sample_notice).
  *
- * Slices (DIV): 4 / 8 / 16 / 32 equal ones, AUTO: one per onset, or MAN: set by hand on the EDIT family's SLICES
+ * Slices (DIV): 4 / 8 / 16 / 32 equal ones (SHARD also 2 / 6 / 12), AUTO: one per onset, or MAN: set by hand on the EDIT family's SLICES
  * page (ui_slice.c) for a user slot (BREAK and PIANO: MAN plays AUTO). IMA ADPCM can only be entered
- * at a known decoder state, so each source keeps a table (slc_src_t): the states at the 128 grid
- * points k * len / 128 (every equal slice starts on one, and they are the reverse checkpoints) and
+ * at a known decoder state, so each source keeps a table (slc_src_t): the states at the 192 grid
+ * points k * len / 192 (every equal slice starts on one, and they are the reverse checkpoints) and
  * up to 32 AUTO starts with their states. BREAK's and PIANO's tables are written at build time (BREAK's
  * hits are its AUTO slices; PIANO has one, the attack); a user slot's is computed by slc_scan when the slot becomes valid
  * (smp_user_scan: boot, upload end; main loop, never the audio ISR): two decoding passes; per hop
@@ -31,7 +31,7 @@
  * note-off (then the ADSR release) or the slice end, LOOP repeats the slice while the note is held.
  * REV plays a slice backwards: windows of 64 samples are decoded forwards from the nearest
  * checkpoint (grid point or the slice start) into the voice's own buffer and read from the top
- * down; it costs about (len / 128) / 128 extra decodes per source sample (BREAK: ~3; a full
+ * down; it costs about (len / 192) / 128 extra decodes per source sample (BREAK: ~3; a full
  * 7 s user slot: ~10). DECAY: an exponential fade per slice (127 = none). TONE: a gentle low-pass
  * (SAMPLE's CUT). The last ~1.5 ms of a slice fade out (no click at the cut), a new slice fades in
  * over one block (0.7 ms).
@@ -39,8 +39,8 @@
  * its start), s[0] predictor (reverse: window start), s[1] step index, s[2] / s[3] previous / current
  * sample, s[4] source | segment << 3 | reverse << 7 | slice << 8 | DIV << 16 (source SLC_SINE: the sine, its
  * phase in ph[0]), s[5] DECAY level Q15, s[6] 0 to prime, 1 playing, 3 fading out, 2 ended, s[7] low-pass. */
-#define SLC_GRID 128u                /* grid points: decoder states at k * len / SLC_GRID */
-#define SLC_GRID_LOG2 7
+#define SLC_GRID 192u                /* grid points: decoder states at k * len / SLC_GRID (192 = 64 x 3: every equal
+                                      * DIV, 2 4 6 8 12 16 32 slices, starts on one) */
 #define SLC_AUTO 32u                 /* AUTO slices at most */
 #define SLC_SEGS 16u                 /* zones of a user slot */
 #define SLC_RB 64u                   /* reverse: samples decoded per window */
@@ -74,6 +74,12 @@ static const char *const N_SLC_REV[] = {"OFF", "ON"};
 enum { SLC_ONE, SLC_GATE, SLC_LOOP };
 #define SLC_DIV_AUTO 4u
 #define SLC_DIV_MAN 5u               /* the slice starts set by hand (the SLICES page); none yet: the AUTO ones */
+/* (SHARD's DIV list adds 2, 6 and 12 equal slices: codes after SLICE's six, eng_shard.c SHD_DIV_CODE) */
+#define SLC_DIV_2 6u
+#define SLC_DIV_6 7u
+#define SLC_DIV_12 8u
+#define SLC_NDIV 9u
+static const uint8_t SLC_DIV_EQ[SLC_NDIV] = {4, 8, 16, 32, 0, 0, 2, 6, 12};   /* equal slices of a code, 0: none */
 #define SLC_MIN 64u                  /* MAN: the shortest slice (samples) */
 
 /* MAN slices (based on hugelton/Felucca#27 by andreahaku): per user slot, in RAM; slice_store.c keeps them in flash
@@ -147,7 +153,7 @@ static inline int32_t slc_dec_next(const slc_src_t *s, slc_dec_t *d)
     return d->pred;
 }
 
-static inline uint32_t slc_gpos(const slc_src_t *s, uint32_t k) { return (k * s->len) >> SLC_GRID_LOG2; }
+static inline uint32_t slc_gpos(const slc_src_t *s, uint32_t k) { return k * s->len / SLC_GRID; }
 /* the user slot of s (0..2), SMP_USER_SLOTS for BREAK / PIANO; its MAN slices in use, 0 = none (BREAK, PIANO: none) */
 static uint32_t slc_slot_of(const slc_src_t *s)
 {
@@ -166,7 +172,7 @@ static uint32_t slc_man_end(const slc_src_t *s, const slc_man_t *m) { return m->
 static uint32_t slc_count(const slc_src_t *s, uint32_t div)
 {
     const slc_man_t *m = div == SLC_DIV_MAN ? slc_man_of(s) : 0;
-    return div < SLC_DIV_AUTO ? 4u << div : m ? m->n : s->nauto;
+    return div < SLC_NDIV && SLC_DIV_EQ[div] ? SLC_DIV_EQ[div] : m ? m->n : s->nauto;
 }
 /* the slice a note plays (n slices): note - C4 - ROOT + START, mod n */
 static uint32_t slc_note_slice(const int16_t *p, uint32_t note, uint32_t n)
@@ -179,8 +185,8 @@ static uint32_t slc_note_slice(const int16_t *p, uint32_t note, uint32_t n)
 static void slc_bounds(const slc_src_t *s, uint32_t div, uint32_t j, uint32_t *a, uint32_t *b, uint32_t *st)
 {
     const slc_man_t *m = div == SLC_DIV_MAN ? slc_man_of(s) : 0;
-    if (div < SLC_DIV_AUTO) {
-        uint32_t w = SLC_GRID >> (2u + div);
+    if (div < SLC_NDIV && SLC_DIV_EQ[div]) {
+        uint32_t w = SLC_GRID / SLC_DIV_EQ[div];
         *a = slc_gpos(s, j * w);
         *b = slc_gpos(s, (j + 1u) * w);
         *st = s->grid[j * w];
@@ -199,7 +205,7 @@ static void slc_bounds(const slc_src_t *s, uint32_t div, uint32_t j, uint32_t *a
 static void slc_bounds_v(const slc_src_t *s, const voice_t *v, uint32_t *a, uint32_t *b, uint32_t *st)
 {
     uint32_t pk = (uint32_t)v->s[4];
-    slc_bounds(s, (pk >> 16) & 7u, (pk >> 8) & 63u, a, b, st);
+    slc_bounds(s, (pk >> 16) & 15u, (pk >> 8) & 63u, a, b, st);
 }
 
 /* ---- the slice table of a user slot (main loop) */
@@ -230,7 +236,7 @@ static void slc_scan(slc_src_t *s, uint32_t len)
         int32_t hd = 0, hr = 0;
         for (; pos < e; pos++) {
             int32_t x, a;
-            while (k < SLC_GRID && ((k * len) >> SLC_GRID_LOG2) == pos)
+            while (k < SLC_GRID && k * len / SLC_GRID == pos)
                 s->grid[k++] = slc_dec_st(&d);
             x = slc_dec_next(s, &d);
             a = x - prev;
@@ -259,6 +265,12 @@ static void slc_scan(slc_src_t *s, uint32_t len)
  * The material is at most what the slot can hold (SLC_USR_MAX samples): zones over different (overlapping) data
  * past that are left out, so a crafted header cannot make the scan (at boot too) run long */
 #define SLC_USR_MAX (2u * (SMP_USER_SIZE - SMP_USER_DATA))
+#if FELUCCA_SHARD
+static void shd_tempo_scan(uint32_t k);            /* eng_shard.c: the slot's tempo */
+#define SLC_TEMPO_SCAN(k) shd_tempo_scan(k)
+#else
+#define SLC_TEMPO_SCAN(k) ((void)0)
+#endif
 static void slc_user_scan(uint32_t k, int valid)
 {
     slc_src_t *s = &slc_usr[k];
@@ -266,6 +278,7 @@ static void slc_user_scan(uint32_t k, int valid)
     s->len = 0;
     RING_PUBLISH();
     slc_man[k][0].n = slc_man[k][1].n = 0;          /* new material: its MAN slices are gone (slc_man_load: the stored) */
+    SLC_TEMPO_SCAN(k);                              /* (len 0: none) */
     if (!valid)
         return;
     s->nseg = 0;
@@ -288,6 +301,7 @@ static void slc_user_scan(uint32_t k, int valid)
     slc_scan(s, at);
     RING_PUBLISH();
     s->len = at;
+    SLC_TEMPO_SCAN(k);
     if (slc_man_load)
         slc_man_load(k);
 }
@@ -298,7 +312,7 @@ static void slc_user_scan(uint32_t k, int valid)
 static uint32_t slc_state_at(const slc_src_t *s, uint32_t pos)
 {
     slc_dec_t d;
-    uint32_t k = (pos << SLC_GRID_LOG2) / s->len;            /* (pos < 2^18: a slot holds < 200 K samples) */
+    uint32_t k = pos * SLC_GRID / s->len;                    /* (pos < 2^18: a slot holds < 200 K samples) */
     k = k < SLC_GRID ? k : SLC_GRID - 1u;
     while (k && slc_gpos(s, k) > pos)
         k--;
@@ -477,7 +491,7 @@ static void slice_note_on(track_t *t, voice_t *v)
 static void slc_fill(const slc_src_t *s, int16_t *rb, uint32_t ws, uint32_t n, uint32_t a, uint32_t sa)
 {
     slc_dec_t d;
-    uint32_t k = (ws << SLC_GRID_LOG2) / s->len, i;
+    uint32_t k = ws * SLC_GRID / s->len, i;
     while (k + 1u < SLC_GRID && slc_gpos(s, k + 1u) <= ws)
         k++;
     if (a <= ws && a > slc_gpos(s, k))

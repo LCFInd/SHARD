@@ -804,7 +804,8 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
        S_DETAIL_COND, S_DETAIL_FILL, S_AUTO_COND, S_GLO_FILL, S_SEQ_EUCLID, S_SEQ_EUCLID_DRUM, S_SEQ_EUCLID_64,
        S_MENU_SELECT, S_PROJECT_ERASE, S_CONFIRM_ERASE_PROJ, S_TOOLS_CLEAN, S_CONFIRM_CLEAN,
        S_MENU_MIDI_TRACK, S_MENU_MIDI_TCH_UNUSED, S_MENU_MIDI_AUTO, S_HOME_TRACKS_MIDI, S_MIXER_MIDI, S_EDIT_PHASE_FOLD,
-       S_SHFX_SLICE, S_SHFX_BUS, S_SHFX_ENUM, S_SHFX_NOFILE, S_COUNT };
+       S_SHFX_SLICE, S_SHFX_BUS, S_SHFX_ENUM, S_SHFX_NOFILE, S_SHARD_EDIT1, S_SHARD_EDIT2, S_SHARD_PRESETS,
+       S_SHARD_SLICES, S_SHARD_HOME, S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
     "phrases", "project", "tools", "song_empty", "song", "step", "auto_steps", "auto_add_chance", "automation", "drum",
     "drum_hand", "drum_cym", "mixer", "mixer_from_home", "mixer_pan", "env", "env_dest", "lfo", "mod", "fx", "slicer", "dly", "scl", "chord", "chord_wide", "chord_off", "chord_kit", "arp",
@@ -836,7 +837,8 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "layer_seq_euclid_64",
     "menu_select", "project_erase", "confirm_erase_project", "tools_clean", "confirm_clean",
     "menu_midi_track", "menu_midi_channels_unused", "menu_midi_auto_select", "home_tracks_midi", "mixer_midi", "edit_phase_fold",
-    "shard_slice_fx", "shard_slice_fx_bus", "shard_slice_fx_route", "shard_slice_fx_nofile"};
+    "shard_slice_fx", "shard_slice_fx_bus", "shard_slice_fx_route", "shard_slice_fx_nofile", "shard_edit1", "shard_edit2",
+    "shard_presets", "shard_slices", "shard_home"};
 
 /* the STEP page's piano roll (ui_graph.c graph_roll) on track 1, stopped unless said: an empty pattern; ACID in
  * A minor; POLY chords (Am7 F C G, tied); a line with ties, slides and accents in C major; LEN 32 on its second
@@ -1667,13 +1669,18 @@ static void setup(int s)
         ui.hot_col = 2; ui.hot_t = 30;
         break;
     case S_SHFX_BUS:
-        eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 0; shfx_knob(0, 40); shfx_bus_param = 2; ui.msg_t = 0;
+        eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 0; shfx_knob(0, 40); shfx_bus_param = 0; ui.msg_t = 0;
         ui.hot_col = 1; ui.hot_t = 30;
         break;
     case S_SHFX_ENUM:
         eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 1; shfx_sl_param = 11; shfx_knob(2, 1); ui.msg_t = 0;
         break;
     case S_SHFX_NOFILE: eng(ENGI_SHARD); TSEL->p[P_E0] = 2; go_page(GR_SHFX); ui.msg_t = 0; break;
+    case S_SHARD_EDIT1: eng(ENGI_SHARD); go_title("EDIT 1"); ui.hot_col = 1; ui.hot_t = 30; break;
+    case S_SHARD_EDIT2: eng(ENGI_SHARD); go_title("EDIT 2"); TSEL->p[P_E7] = 18; ui.hot_col = 3; ui.hot_t = 30; break;
+    case S_SHARD_PRESETS: eng(ENGI_SHARD); go_page(GR_BROWSE); break;
+    case S_SHARD_SLICES: eng(ENGI_SHARD); go_page(GR_SLICES); sp.sel = 5; ui.msg_t = 0; break;
+    case S_SHARD_HOME: eng(ENGI_SHARD); song.playing = 1; break;
 #endif
     default: break;
     }

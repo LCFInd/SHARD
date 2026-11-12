@@ -10,14 +10,16 @@ has ratchets, chance, swing, conditions and parameter locks. SHARD adds the foll
 | | |
 |---|---|
 | **Per-slice settings** | PITCH, LEVEL, ATTACK, DECAY, MODE (track / ONE / GATE / LOOP), REV, FILTER (LP / HP / BP) with CUT and RES, DRIVE (SOFT HARD FOLD CRUSH DECIM HALF TUBE) with AMT, ROUTE, CHOKE (1–4) |
-| **PLAY mode** | ReCycle style. A note plays the whole loop from its slice, and each slice starts at its place in the loop, scaled to the tempo. Changing the tempo moves the slices, not the pitch. BARS: AUTO, 1, 2, 4 or 8 |
+| **PLAY mode** | ReCycle style. A note plays the whole loop from its slice, and each slice starts at its place in the loop, scaled to the tempo. Changing the tempo moves the slices, not the pitch. BARS: AUTO (from the sample's tempo), 1, 2, 4 or 8 |
+| **Tempo** | SHARD finds a rhythmic sample's tempo when the slot is loaded (60–200 BPM; a loop cut on the beat gets its exact tempo). You can set it instead on SLICE FX's BUS (BPM, 40–250; AUTO shows the one found). It's kept with the kit |
+| **Slices** | DIV: 2, 4, 6, 8, 12, 16 or 32 equal slices, AUTO (one per hit) or MAN (set by hand) |
 | **Multiband distortion** | Ohmnicide style, per track. Slices routed to MULTI are split into low, mid and high bands. Each band has its own shaper, drive, gate and level. A slice can also feed one band directly (LOW / MID / HIGH). MULTI (E7) is the wet mix; DRIVE (E8) offsets every band's drive |
 | **The kit** | A source's per-slice settings and bus settings. A user slot's kit is saved with its sample, in the same sector as SLICE's hand-set slices. The BREAK and PIANO kits last until power-off |
 
 ## On the device
 
 - **PRESETS:** pick SHARD (after DRUM). The presets are RECYCLE (PLAY), CHOP KIT (ONE) and SHRED (GATE, 32nds).
-- **EDIT 1 (SHRD):** SRC, DIV, START, PTCH. This is the same layout as SLICE.
+- **EDIT 1 (SHRD):** SRC, DIV, START, PTCH. This is the same layout as SLICE; DIV adds 2, 6 and 12.
 - **EDIT 2 (PLAY):** MODE, BARS, MULTI, DRIVE.
 - **SLICES:** set the slices by hand, as with SLICE.
 - **SLICE FX:**
@@ -28,6 +30,8 @@ has ratchets, chance, swing, conditions and parameter locks. SHARD adds the foll
   | KNOB 2 | Picks the parameter |
   | KNOB 3 | Sets the value for the picked slice |
   | KNOB 4 | Moves every slice's value by the same amount |
+
+  On BUS, the first parameter is BPM. Turning it up from AUTO starts at the tempo that was found.
 
   The kit is saved when you leave the page, once the transport is stopped ("KIT SAVED").
 
@@ -46,6 +50,8 @@ Build it as Felucca: see `BUILDING.md`. On macOS this uses Docker; on Linux x86-
 - per-slice LEVEL, PITCH, DECAY and REV, every filter × drive combination, and CHOKE
 - that MULTI at mix 0 equals DIRECT bit for bit, and that every route and shaper stays bounded
 - the kit's storage beside the hand-set slices
+- tempo detection on eight made loops (88–174 BPM, one with a tail that isn't whole beats), the swung test loop and a held tone; the loop length from the tempo; the kit's BPM override
+- DIV 2, 6 and 12: exact slice starts and decoder states
 
 `tests/ui_render.c` renders the SLICE FX page and checks every parameter and value against the layout lint.
 `tests/run_host_tests.sh` is `run_tests.sh` without the steps that need a built package.
@@ -56,7 +62,8 @@ All of Felucca's host tests pass with SHARD in, and Felucca's existing golden re
 has **not yet run on an FM-1**. Check these on hardware, in order:
 
 1. CPU load. On the host, SHARD with 8 notes in PLAY costs about the same as ANALOG, roughly 4× SLICE.
-2. RAM. The kits take 2.6 KB, and the engine memory stays within ENG_MEM_PART.
+2. RAM. The kits take 2.6 KB, the tempo finder 1 KB, and the 192-point slice grid (for 6 and 12 slices) 768 bytes more than SLICE's 128. The engine memory stays within ENG_MEM_PART.
+   The tempo finder runs in the main loop when a slot is loaded; time it on a full 7.4 s slot.
 3. The kit save on real flash.
 
 The web editor bundled in this tree (`web/editor.html`) knows about engine 15. The separate Felucca-WebApp editor

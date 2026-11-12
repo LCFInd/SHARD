@@ -3,7 +3,7 @@
 /* SLICES (EDIT family, a SLICE track only; after EDIT 2): the slices of the selected part's sample, set by hand.
  * Based on hugelton/Felucca#27 by andreahaku (SLICE EDIT), on the current UI: a page of the EDIT family with the
  * action-page OCT+ / OCT- of SAVE > TOOLS.
- * The markers: the slice starts the track plays (its DIV: 4..32 equal, AUTO, MAN) and the END of the last slice.
+ * The markers: the slice starts the track plays (its DIV: 4..32 equal, SHARD's 2..32, AUTO, MAN) and the END of the last slice.
  *   KNOB 1  SLICE  the marker (1..n, then END); a key pressed picks the slice it plays (its keys are lit)
  *   KNOB 2  POS    moves it: one column of the view per detent; the view spans its neighbours, so a marker between
  *                  close ones moves in fine steps. Slice 1's start trims the head, END the tail
@@ -37,6 +37,23 @@ static int slice_page_on(void)
 {
     return !ui.home && (cur_page()->graph == GR_SLICES || cur_page()->graph == GR_SHFX) && slice_page_ok();
 }
+/* the selected track's DIV as SLICE's code (SHARD lists its own: 2 .. 32, AUTO, MAN), and its MAN value */
+static uint32_t slice_div_code(void)
+{
+#if FELUCCA_SHARD
+    if (ENGINES[TSEL->eng_req % NENGINES] == &ENG_SHARD)
+        return shd_div(TSEL->p);
+#endif
+    return (uint32_t)clamp(TSEL->p[P_E1], 0, SLC_DIV_MAN);
+}
+static int16_t slice_div_man(void)
+{
+#if FELUCCA_SHARD
+    if (ENGINES[TSEL->eng_req % NENGINES] == &ENG_SHARD)
+        return SHD_DIV_MAN;
+#endif
+    return SLC_DIV_MAN;
+}
 
 /* the source the selected part plays, its DIV; 0 = no material (an empty slot: the sine, as slice_note_on) */
 static const slc_src_t *slice_src(uint32_t *src, uint32_t *div)
@@ -45,7 +62,7 @@ static const slc_src_t *slice_src(uint32_t *src, uint32_t *div)
     uint32_t k = slc_src_of(p);
     const slc_src_t *s = slc_get(k);
     *src = k;
-    *div = (uint32_t)clamp(p[P_E1], 0, SLC_DIV_MAN);
+    *div = slice_div_code();
     return s;
 }
 
@@ -100,12 +117,12 @@ static slc_man_t *slice_edit_begin(uint32_t *k)
     }
     *k = src - 1u;
     if (div != SLC_DIV_MAN && slc_man_of(s)) {       /* the slot has slices set by hand: those, not the grid; this */
-        TSEL->p[P_E1] = SLC_DIV_MAN;                 /* touch only shows them (its marker was another one) */
+        TSEL->p[P_E1] = slice_div_man();             /* touch only shows them (its marker was another one) */
         ui_message("DIV MAN");
         return 0;
     }
     m = slc_man_begin(*k);
-    if (m && div != SLC_DIV_MAN) {                   /* the slices shown (4..32 equal, AUTO) become the MAN table */
+    if (m && div != SLC_DIV_MAN) {                   /* the slices shown (2..32 equal, AUTO) become the MAN table */
         n = slc_count(s, div);
         m->n = 0;
         m->end = 0;
@@ -126,8 +143,8 @@ static slc_man_t *slice_edit_begin(uint32_t *k)
 static void slice_edit_end(uint32_t k)
 {
     slc_man_commit(k);
-    if (TSEL->p[P_E1] != SLC_DIV_MAN) {
-        TSEL->p[P_E1] = SLC_DIV_MAN;                 /* (the editor sees it as any change of the value) */
+    if (TSEL->p[P_E1] != slice_div_man()) {
+        TSEL->p[P_E1] = slice_div_man();                /* (the editor sees it as any change of the value) */
         ui_message("DIV MAN");
     }
     slc_man_save |= (uint8_t)(1u << k);              /* to flash when the page is left (slice_store.c) */
@@ -289,7 +306,8 @@ static uint32_t slice_sig(void)
 /* SLICE FX (EDIT family, a SHARD track only; after SLICES): each slice's settings and the bus (eng_shard.c's kit).
  *   KNOB 1  SLICE  the slice (1..n), then BUS (the multiband distortion); a key pressed picks its slice
  *   KNOB 2  PARAM  what to set: PITCH LEVEL ATTACK DECAY MODE REV FILTER CUT RES DRIVE AMT ROUTE CHOKE; on BUS
- *                  the split points (XLOW, XHIGH) and each band's (L M H) TYPE DRV GATE LVL
+ *                  the source's BPM (AUTO: the tempo found, shown), the split points (XLOW, XHIGH) and each band's
+ *                  (L M H) TYPE DRV GATE LVL
  *   KNOB 3  VALUE  the slice's (or the bus's) value
  *   KNOB 4  ALL    every slice's value moves by the same steps (BUS: none)
  * The kit is the source's: a user slot's is kept with its sample when the page is left (slice_store.c, once
@@ -306,7 +324,8 @@ static const shfx_desc_t SHFX_SL[13] = {
     {"CUT", 0, 127, 0, ""}, {"RES", 0, 127, 0, ""}, {"DRIVE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""},
     {"AMT", 0, 127, 0, ""}, {"ROUTE", 0, SHD_NROUTE - 1, N_SHD_ROUTE, ""}, {"CHOKE", 0, 4, N_SHD_CHOKE, ""},
 };
-static const shfx_desc_t SHFX_BUS[14] = {           /* (6 letters at most: the cards) */
+static const shfx_desc_t SHFX_BUS[15] = {           /* (6 letters at most: the cards) */
+    {"BPM", 0, SHD_BPM_MAX, 0, ""},                  /* the source's tempo, 0 AUTO (shfx_bpm) */
     {"XLOW", 0, 127, 0, ""}, {"XHIGH", 0, 127, 0, ""},
     {"L TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"L DRV", 0, 127, 0, ""}, {"L GATE", 0, 127, 0, ""},
     {"L LVL", 0, 127, 0, ""}, {"M TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"M DRV", 0, 127, 0, ""},
@@ -330,6 +349,8 @@ static uint8_t *shfx_field(shd_kit_t *kit, uint32_t j, int bus, uint32_t k)
     shd_sl_t *s;
     if (bus) {
         shd_bus_t *b = &kit->bus;
+        if (k-- == 0u)
+            return &b->bpm;
         return k == 0u ? &b->lo : k == 1u ? &b->hi : (k - 2u) % 4u == 0u ? &b->type[(k - 2u) / 4u] :
                (k - 2u) % 4u == 1u ? &b->drive[(k - 2u) / 4u] : (k - 2u) % 4u == 2u ? &b->gate[(k - 2u) / 4u] :
                &b->level[(k - 2u) / 4u];
@@ -384,7 +405,15 @@ static void shfx_knob(uint32_t slot, int32_t steps)
         return;
     }
     d = bus ? &SHFX_BUS[k] : &SHFX_SL[k];
-    if (slot == 2u) {
+    if (slot == 2u && bus && k == 0u) {             /* BPM: up from AUTO starts at the tempo found (else 120); */
+        uint8_t *f = &kit->bus.bpm;                  /* below 40 is AUTO again */
+        int32_t v = *f;
+        if (!v)
+            v = steps > 0 ? (int32_t)(shd_det_bpm10[src] ? (shd_det_bpm10[src] + 5u) / 10u : 120u) - 1 + steps : 0;
+        else
+            v += steps;
+        *f = (uint8_t)(v < (int32_t)SHD_BPM_MIN ? 0 : v > (int32_t)SHD_BPM_MAX ? (int32_t)SHD_BPM_MAX : v);
+    } else if (slot == 2u) {
         uint8_t *f = shfx_field(kit, j, bus, k);
         shfx_set(f, d, shfx_get(f, k, bus) + steps);
     } else if (!bus) {                               /* ALL: every slice by the same steps */
@@ -430,10 +459,26 @@ static int shfx_card(uint32_t c, const char **lb, char *val, const char **u, int
         str_cpy(val, d->name, 12);
         return 1;
     }
+    if (c == 3u && bus && k == 0u) {                 /* BPM: the tempo found beside it (0.1 BPM) */
+        *lb = "FOUND";
+        if (shd_det_bpm10[src])
+            fmt_fix(val, (int32_t)shd_det_bpm10[src], 1);
+        else
+            str_cpy(val, "--", 12);
+        return 1;
+    }
     if (c == 3u && bus)
         return 0;
     v = shfx_get(shfx_field(kit, j, bus, k), k, bus);
     *lb = c == 2u ? d->name : "ALL";
+    if (bus && k == 0u) {                            /* BPM: set, or AUTO (the tempo found: the next card) */
+        if (v) {
+            fmt_int(val, v);
+            *r = (v - (int32_t)SHD_BPM_MIN) * 1000 / (int32_t)(SHD_BPM_MAX - SHD_BPM_MIN);
+        } else
+            str_cpy(val, "AUTO", 12);
+        return 1;
+    }
     if (d->names)
         str_cpy(val, d->names[clamp(v, d->min, d->max) - d->min], 12);
     else if (!bus && k == 3u && v >= 127)
@@ -462,6 +507,7 @@ static uint32_t shfx_sig(void)
         h = (h ^ *shfx_field(kit, i, 0, shfx_sl_param)) * 16777619u;
     for (i = 0; i < NELEM(SHFX_BUS); i++)
         h = (h ^ *shfx_field(kit, 0, 1, i)) * 16777619u;
+    h = (h ^ shd_det_bpm10[src % SHD_NSRC]) * 16777619u;           /* (BPM AUTO: the tempo found) */
     return h;
 }
 #endif
