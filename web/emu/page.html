@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FM-1 emulator: Felucca + SHARD</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --chassis: #2b2f32;
+  --chassis-hi: #3a3f43;
+  --recess: #141719;
+  --print: #cfd3cb;
+  --print-dim: #8a9089;
+  --amber: #ffad1f;
+  --green: #45e08b;
+  --white-key: #e4e2da;
+  --black-key: #1f2224;
+  --page: #0d0f10;
+  --cond: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "Barlow", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--page); color: var(--print); font-family: var(--body); }
+body { min-height: 100vh; padding: 20px 12px 40px; -webkit-tap-highlight-color: transparent; }
+main { max-width: 1000px; margin: 0 auto; }
+
+/* ---- the device ---- */
+.deck {
+  position: relative;
+  background:
+    radial-gradient(120% 80% at 20% 0%, rgba(255,255,255,.05), transparent 60%),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.012) 0 1px, transparent 1px 3px),
+    var(--chassis);
+  border-radius: 14px;
+  padding: 0 22px 22px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), inset 0 -2px 0 rgba(0,0,0,.4), 0 30px 60px -20px #000;
+  user-select: none; -webkit-user-select: none; touch-action: none;
+}
+.deck::before, .deck::after {                 /* corner screws */
+  content: ""; position: absolute; top: 12px; width: 9px; height: 9px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #6b7177, #24282b 70%);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.5);
+}
+.deck::before { left: 12px; } .deck::after { right: 12px; }
+.rail {
+  display: flex; align-items: center; gap: 14px; height: 44px; margin: 0 14px;
+  font-family: var(--cond); letter-spacing: .08em;
+}
+.hazard {
+  width: 72px; height: 10px; border-radius: 2px;
+  background: repeating-linear-gradient(-45deg, var(--amber) 0 6px, #161819 6px 12px);
+  opacity: .9;
+}
+.mark { font-weight: 700; font-size: 18px; color: var(--print); }
+.mark small { font-weight: 500; color: var(--print-dim); font-size: 14px; margin-left: 6px; letter-spacing: .04em; }
+.rail .spacer { flex: 1; }
+.pwr { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--print-dim); }
+.pwr i { width: 8px; height: 8px; border-radius: 50%; background: #3b2a12; }
+.pwr.on i { background: var(--green); box-shadow: 0 0 8px var(--green); }
+
+.face { display: grid; grid-template-columns: auto 1fr; gap: 26px; align-items: start; }
+.bezel {
+  background: var(--recess); padding: 12px; border-radius: 8px;
+  box-shadow: inset 0 2px 6px rgba(0,0,0,.8), 0 1px 0 rgba(255,255,255,.06);
+  position: relative;
+}
+canvas#lcd {
+  display: block; width: 360px; height: 360px; image-rendering: pixelated; image-rendering: crisp-edges;
+  background: #000; border-radius: 2px;
+}
+.boot {
+  position: absolute; inset: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; background: #000; color: var(--print); border-radius: 2px; text-align: center; padding: 20px;
+}
+.boot button {
+  font: 600 20px/1 var(--cond); letter-spacing: .1em; color: #111; background: var(--amber);
+  border: 0; border-radius: 6px; padding: 14px 26px; cursor: pointer;
+}
+.boot button:focus-visible { outline: 3px solid var(--print); outline-offset: 3px; }
+.boot p { margin: 0; max-width: 28ch; font-size: 14px; color: var(--print-dim); line-height: 1.45; }
+.boot.gone { display: none; }
+
+.controls { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.row { display: flex; gap: 10px; justify-content: space-between; }
+.encs { justify-content: flex-start; gap: 22px; }
+
+/* knobs */
+.knob { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 74px; outline: none; cursor: ns-resize; }
+.knob .cap {
+  position: relative; width: 58px; height: 58px; border-radius: 50%;
+  background:
+    repeating-conic-gradient(from 0deg, rgba(0,0,0,.35) 0 3deg, rgba(255,255,255,.05) 3deg 6deg),
+    radial-gradient(circle at 40% 30%, #50565b, #1d2023 72%);
+  box-shadow: 0 4px 8px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.12);
+}
+.knob .cap::after {
+  content: ""; position: absolute; inset: 9px; border-radius: 50%;
+  background: radial-gradient(circle at 40% 30%, #3e4448, #212528 80%);
+}
+.knob .dot {
+  position: absolute; left: 50%; top: 50%; width: 3px; height: 19px; margin: -19px 0 0 -1.5px;
+  background: var(--print); border-radius: 2px; transform-origin: 50% 100%; z-index: 1;
+}
+.knob.small .cap { width: 46px; height: 46px; }
+.knob.small .dot { height: 14px; margin-top: -14px; }
+.knob label { font: 600 13px/1 var(--cond); letter-spacing: .08em; color: var(--print); pointer-events: none; }
+.knob:focus-visible .cap { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+/* buttons */
+.btns { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px 8px; }
+.btn {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  background: none; border: 0; padding: 0; color: inherit; cursor: pointer; outline: none;
+}
+.btn .led { width: 7px; height: 7px; border-radius: 50%; background: #2a2015; transition: background .06s; }
+.btn .cap {
+  width: 100%; max-width: 62px; height: 30px; border-radius: 5px;
+  background: linear-gradient(#45494d, #2c3033); box-shadow: 0 3px 0 #121416, inset 0 1px 0 rgba(255,255,255,.14);
+  transition: transform .04s, box-shadow .04s;
+}
+.btn.down .cap { transform: translateY(2px); box-shadow: 0 1px 0 #121416, inset 0 1px 0 rgba(255,255,255,.08); }
+.btn span { font: 600 13px/1 var(--cond); letter-spacing: .08em; }
+.btn:focus-visible .cap { outline: 2px solid var(--amber); outline-offset: 2px; }
+.led[data-l="1"] { background: #5a3d10; }
+.led[data-l="2"] { background: #a8701a; }
+.led[data-l="3"] { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+.led[data-l="4"] { animation: breathe 1.6s ease-in-out infinite; }
+.led.green[data-g="1"] { background: var(--green); box-shadow: 0 0 8px var(--green); }
+@keyframes breathe { 0%,100% { background: #2a2015; } 50% { background: #a8701a; } }
+
+/* keys */
+.keys { position: relative; height: 150px; margin-top: 24px; touch-action: none; }
+.key { position: absolute; top: 0; border-radius: 0 0 5px 5px; cursor: pointer; }
+.key.w {
+  height: 150px; background: linear-gradient(var(--white-key) 80%, #c9c7bf);
+  box-shadow: inset 0 -4px 0 #b6b4ac, inset -1px 0 0 #9f9d96;
+}
+.key.b {
+  height: 92px; z-index: 2; background: linear-gradient(#2c3033, var(--black-key));
+  box-shadow: inset 0 -3px 0 #0a0b0c, 0 2px 3px rgba(0,0,0,.5);
+}
+.key.down.w { background: #cfccc2; box-shadow: inset 0 -1px 0 #b6b4ac, inset -1px 0 0 #9f9d96; }
+.key.down.b { background: #15181a; }
+.key .kl { position: absolute; left: 50%; bottom: 10px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; }
+.key .kl[data-l="1"] { background: #4b3812; }
+.key .kl[data-l="2"] { background: #a8701a; }
+.key .kl[data-l="3"] { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+.key .kl[data-l="4"] { animation: breathe 1.6s ease-in-out infinite; }
+.key .hint { position: absolute; left: 0; right: 0; bottom: 24px; text-align: center; font: 500 11px/1 var(--cond); color: #8d8b84; }
+.key.b .hint { color: #6d7276; bottom: 22px; }
+
+/* ---- the bench below the device ---- */
+.bench { display: grid; grid-template-columns: 1.3fr 1fr; gap: 28px; margin-top: 28px; padding: 0 6px; }
+.bench h2 { font: 600 17px/1.2 var(--cond); letter-spacing: .06em; margin: 0 0 10px; color: var(--print); }
+.bench p { margin: 0 0 10px; font-size: 14px; line-height: 1.5; color: var(--print-dim); max-width: 60ch; }
+.slots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.slot {
+  border: 1px dashed #4a5054; border-radius: 8px; padding: 12px; min-height: 86px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 6px; background: rgba(255,255,255,.02); color: inherit; text-align: left; font: inherit;
+}
+.slot:hover, .slot.drag { border-color: var(--amber); }
+.slot:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.slot b { font: 700 16px/1 var(--cond); letter-spacing: .08em; }
+.slot em { font-style: normal; font-size: 13px; color: var(--print-dim); line-height: 1.35; }
+.slot.full em { color: var(--print); }
+.opts { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-end; margin: 4px 0 14px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > span { font: 600 14px/1 var(--cond); letter-spacing: .05em; color: var(--print); }
+.field input {
+  width: 96px; font: 500 16px/1 var(--body); color: var(--print); background: var(--recess); border: 1px solid #454b4f;
+  border-radius: 6px; padding: 9px 10px;
+}
+.field input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.seg { display: flex; border: 1px solid #454b4f; border-radius: 6px; overflow: hidden; }
+.seg button {
+  font: 600 15px/1 var(--cond); color: var(--print-dim); background: var(--recess); border: 0; border-right: 1px solid #2f3437;
+  padding: 10px 11px; cursor: pointer; min-width: 36px;
+}
+.seg button:last-child { border-right: 0; }
+.seg button[aria-checked="true"] { background: var(--amber); color: #15120a; }
+.seg button:focus-visible { outline: 2px solid var(--print); outline-offset: -3px; }
+.msg { min-height: 1.4em; font-size: 14px; color: var(--amber); margin-top: 10px; }
+.tools { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.tools button {
+  font: 600 14px/1 var(--cond); letter-spacing: .06em; color: var(--print); background: var(--chassis);
+  border: 1px solid #454b4f; border-radius: 6px; padding: 10px 14px; cursor: pointer;
+}
+.tools button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+dl.map { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 14px; }
+dl.map dt { font: 600 14px/1.4 var(--cond); letter-spacing: .05em; color: var(--print); }
+dl.map dd { margin: 0; color: var(--print-dim); line-height: 1.4; }
+.meter { height: 4px; background: #1d2023; border-radius: 2px; overflow: hidden; margin-top: 4px; width: 160px; }
+.meter i { display: block; height: 100%; width: 0; background: var(--green); }
+.stat { font-size: 13px; color: var(--print-dim); display: flex; gap: 12px; align-items: center; }
+
+@media (max-width: 860px) {
+  body { padding: 10px 6px 30px; }
+  .deck { padding: 0 12px 16px; }
+  .rail { margin: 0 10px; }
+  .face { grid-template-columns: 1fr; gap: 18px; }
+  .bezel { padding: 8px; justify-self: center; width: 100%; max-width: 380px; }
+  canvas#lcd { width: 100%; height: auto; aspect-ratio: 1; }
+  .boot { inset: 8px; }
+  .encs { justify-content: space-between; gap: 6px; }
+  .knob { width: auto; flex: 1; }
+  .knob .cap { width: 50px; height: 50px; }
+  .knob.small .cap { width: 42px; height: 42px; }
+  .btns { gap: 10px 5px; }
+  .btn .cap { height: 32px; }
+  .btn span { font-size: 12px; letter-spacing: .04em; }
+  .keys { height: 120px; }
+  .key.w { height: 120px; } .key.b { height: 74px; }
+  .key .hint { display: none; }
+  .bench { grid-template-columns: 1fr; }
+  .slots { grid-template-columns: 1fr; }
+  .seg button { padding: 10px 8px; min-width: 0; flex: 1; }
+  .seg { width: 100%; }
+  .opts .field:last-child { flex: 1 1 100%; }
+  .slot { min-height: 0; }
+  .keyhelp { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .led[data-l="4"], .key .kl[data-l="4"] { animation: none; background: #6b4a14; }
+}
+</style>
+</head>
+<body>
+<main>
+  <section class="deck" aria-label="FM-1 emulator">
+    <div class="rail">
+      <div class="hazard" aria-hidden="true"></div>
+      <div class="mark">FM-1<small>Felucca + SHARD</small></div>
+      <div class="spacer"></div>
+      <div class="pwr" id="pwr"><i></i><span id="pwrText">Off</span></div>
+    </div>
+    <div class="face">
+      <div class="bezel">
+        <canvas id="lcd" width="240" height="240" aria-label="Device screen"></canvas>
+        <div class="boot" id="boot">
+          <button id="powerBtn" type="button">Power on</button>
+          <p>Starts the firmware and its audio. A break plays on track 1 when you press PLAY.</p>
+        </div>
+      </div>
+      <div class="controls">
+        <div class="row encs" id="encs"></div>
+        <div class="row encs" id="knobs"></div>
+        <div class="btns" id="btns"></div>
+      </div>
+    </div>
+    <div class="keys" id="keys" aria-label="Keyboard, 27 keys from F"></div>
+  </section>
+
+  <section class="bench">
+    <div>
+      <h2>Load your own loops</h2>
+      <p>Drop a WAV on a slot, or tap one to pick a file. It's converted the way the Felucca editor does it (mono, 22.05 kHz, IMA ADPCM, up to 7.4 s). SHARD finds its tempo, so PLAY keeps it in time with the song. If the selected track plays SHARD, it switches to the slot.</p>
+      <div class="opts">
+        <label class="field"><span>Tempo</span><input id="bpm" type="number" inputmode="decimal" min="40" max="250" step="1" placeholder="Find it"></label>
+        <div class="field"><span id="divLabel">Slices</span>
+          <div class="seg" id="divs" role="radiogroup" aria-labelledby="divLabel"></div>
+        </div>
+      </div>
+      <div class="slots" id="slots"></div>
+      <input type="file" id="file" accept=".wav,audio/wav,audio/x-wav" hidden>
+      <div class="msg" id="msg" role="status"></div>
+      <div class="tools">
+        <button type="button" id="resetDemo">Restart with the SHARD demo</button>
+        <button type="button" id="resetFactory">Restart as factory Felucca</button>
+      </div>
+    </div>
+    <div>
+      <h2>Playing it</h2>
+      <dl class="map">
+        <dt>Knobs</dt><dd>Drag up or down, scroll, or focus one and use the arrow keys.</dd>
+        <dt>Buttons</dt><dd>Hold them as on the device: a held FX, GLO, SCL, EDIT or REC opens its layer.</dd>
+        <dt class="keyhelp">Keyboard</dt><dd class="keyhelp">A to ' play C to F. Space is PLAY, Esc is HOME, [ and ] are OCT- and OCT+.</dd>
+        <dt>SHARD</dt><dd>PRESETS picks SHARD after DRUM. EDIT steps through EDIT 1, EDIT 2, SLICES and SLICE FX.</dd>
+        <dt>Tempo</dt><dd>On the device it's on SLICE FX: turn KNOB 1 past the last slice to BUS, then BPM. AUTO is the tempo found.</dd>
+      </dl>
+      <div class="stat" style="margin-top:14px"><span id="audioInfo">Audio off</span><div class="meter" aria-hidden="true"><i id="meter"></i></div></div>
+    </div>
+  </section>
+</main>
+
+<script src="core.js"></script>
+<script>
+"use strict";
+/* ---------------------------------------------------------------- panel --- */
+const B_NAME = ["FX", "SCL", "ENV", "LFO", "EDIT", "GLO", "HOME", "SAVE", "ARP", "SEQ", "PLAY", "REC", "OCT-", "OCT+"];
+const B_ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+const B_MATRIX = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 0, 1];   /* panel.c PANEL_DEFAULT: the LED of each label */
+const ENC = [["SELECT", 0], ["ALGORITHM", 1], ["PRESETS", 2]];
+const KNOB = [["KNOB 1", 3], ["KNOB 2", 4], ["KNOB 3", 5], ["KNOB 4", 6]];
+const keyBlack = (k) => (0x54A >> ((k + 5) % 12)) & 1;
+const KB = "awsedftgyhujkolp;'";                                 /* C (key 7) .. F (key 24) */
+
+let send = () => {};
+const $ = (id) => document.getElementById(id);
+
+/* knobs: endless encoders, a detent per 9 px of drag */
+function makeKnob(parent, name, role, small) {
+  const el = document.createElement("div");
+  el.className = "knob" + (small ? " small" : "");
+  el.tabIndex = 0;
+  el.setAttribute("role", "slider");
+  el.setAttribute("aria-label", name);
+  el.innerHTML = `<div class="cap"><div class="dot"></div></div><label>${name}</label>`;
+  const dot = el.querySelector(".dot");
+  let angle = 0, acc = 0, lastY = 0, id = null;
+  const turn = (s) => { if (!s) return; send({ type: "knob", role, steps: s }); angle += s * 18; dot.style.transform = `rotate(${angle}deg)`; };
+  el.addEventListener("pointerdown", (e) => { id = e.pointerId; lastY = e.clientY; acc = 0; el.setPointerCapture(id); el.focus({ preventScroll: true }); e.preventDefault(); });
+  el.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== id) return;
+    acc += lastY - e.clientY; lastY = e.clientY;
+    const s = Math.trunc(acc / 9); acc -= s * 9; turn(s);
+  });
+  const end = (e) => { if (e.pointerId === id) id = null; };
+  el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
+  el.addEventListener("wheel", (e) => { e.preventDefault(); turn(e.deltaY < 0 ? 1 : -1); }, { passive: false });
+  el.addEventListener("keydown", (e) => {
+    const s = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1, PageUp: 5, PageDown: -5 }[e.key];
+    if (s) { turn(s); e.preventDefault(); e.stopPropagation(); }
+  });
+  parent.appendChild(el);
+}
+ENC.forEach(([n, r]) => makeKnob($("encs"), n, r, true));
+KNOB.forEach(([n, r]) => makeKnob($("knobs"), n, r, false));
+
+/* buttons */
+const btnEls = [];
+B_ORDER.forEach((label) => {
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = "btn";
+  el.innerHTML = `<i class="led${label === 10 ? " green" : ""}"></i><div class="cap"></div><span>${B_NAME[label]}</span>`;
+  const set = (down) => { if (el.classList.contains("down") === down) return; el.classList.toggle("down", down); send({ type: "btn", id: label, down }); };
+  el.addEventListener("pointerdown", (e) => { el.setPointerCapture(e.pointerId); set(true); e.preventDefault(); });
+  el.addEventListener("pointerup", () => set(false));
+  el.addEventListener("pointercancel", () => set(false));
+  el.addEventListener("keydown", (e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { set(true); e.preventDefault(); e.stopPropagation(); } });
+  el.addEventListener("keyup", (e) => { if (e.key === " " || e.key === "Enter") { set(false); e.preventDefault(); e.stopPropagation(); } });
+  el.addEventListener("contextmenu", (e) => e.preventDefault());
+  btnEls[label] = { el, led: el.querySelector(".led"), set };
+  $("btns").appendChild(el);
+});
+
+/* keys: 16 white, 11 black, from F; several fingers at once, sliding across keys */
+const keyEls = [];
+function layoutKeys() {
+  const box = $("keys"), W = box.clientWidth, ww = W / 16;
+  let wi = 0;
+  for (let k = 0; k < 27; k++) {
+    const el = keyEls[k];
+    if (keyBlack(k)) { el.style.left = (wi * ww - ww * 0.31) + "px"; el.style.width = (ww * 0.62) + "px"; }
+    else { el.style.left = (wi * ww) + "px"; el.style.width = (ww - 2) + "px"; wi++; }
+  }
+}
+for (let k = 0; k < 27; k++) {
+  const el = document.createElement("div");
+  el.className = "key " + (keyBlack(k) ? "b" : "w");
+  el.dataset.k = k;
+  const ch = k >= 7 && k - 7 < KB.length ? KB[k - 7].toUpperCase() : "";
+  el.innerHTML = `<i class="kl"></i><span class="hint">${ch}</span>`;
+  keyEls.push(el);
+  $("keys").appendChild(el);
+}
+const keyDown = new Set(), ptrKey = new Map();
+function setKey(k, down) {
+  if (down === keyDown.has(k)) return;
+  down ? keyDown.add(k) : keyDown.delete(k);
+  keyEls[k].classList.toggle("down", down);
+  send({ type: "key", k, down });
+}
+function keyAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  return el && el.closest && el.closest(".key") ? +el.closest(".key").dataset.k : -1;
+}
+const kbox = $("keys");
+kbox.addEventListener("pointerdown", (e) => {
+  kbox.setPointerCapture(e.pointerId);
+  const k = keyAt(e.clientX, e.clientY);
+  ptrKey.set(e.pointerId, k);
+  if (k >= 0) setKey(k, true);
+  e.preventDefault();
+});
+kbox.addEventListener("pointermove", (e) => {
+  if (!ptrKey.has(e.pointerId)) return;
+  const k = keyAt(e.clientX, e.clientY), was = ptrKey.get(e.pointerId);
+  if (k === was) return;
+  if (was >= 0 && ![...ptrKey].some(([p, kk]) => p !== e.pointerId && kk === was)) setKey(was, false);
+  ptrKey.set(e.pointerId, k);
+  if (k >= 0) setKey(k, true);
+});
+const kup = (e) => {
+  if (!ptrKey.has(e.pointerId)) return;
+  const was = ptrKey.get(e.pointerId);
+  ptrKey.delete(e.pointerId);
+  if (was >= 0 && ![...ptrKey.values()].includes(was)) setKey(was, false);
+};
+kbox.addEventListener("pointerup", kup); kbox.addEventListener("pointercancel", kup);
+addEventListener("resize", layoutKeys);
+layoutKeys();
+
+/* computer keyboard */
+const KEYBTN = { " ": 10, Escape: 6, "[": 12, "]": 13 };
+addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.("input,textarea")) return;
+  if (e.key in KEYBTN) { if (!e.repeat) btnEls[KEYBTN[e.key]].set(true); e.preventDefault(); return; }
+  const i = KB.indexOf(e.key.toLowerCase());
+  if (i >= 0) { if (!e.repeat) setKey(7 + i, true); e.preventDefault(); }
+});
+addEventListener("keyup", (e) => {
+  if (e.key in KEYBTN) { btnEls[KEYBTN[e.key]].set(false); return; }
+  const i = KB.indexOf(e.key.toLowerCase());
+  if (i >= 0) setKey(7 + i, false);
+});
+addEventListener("blur", () => { for (const k of [...keyDown]) setKey(k, false); btnEls.forEach((b) => b && b.set(false)); });
+
+/* ---------------------------------------------------------------- screen --- */
+const lcd = $("lcd"), g = lcd.getContext("2d"), img = g.createImageData(240, 240);
+const R5 = new Uint8Array(32).map((_, i) => (i * 527 + 23) >> 6), G6 = new Uint8Array(64).map((_, i) => (i * 259 + 33) >> 6);
+function drawScreen(px, off) {
+  const d = img.data;
+  for (let i = 0, o = 0; i < 57600; i++, o += 4) {
+    const s = px[i], v = ((s & 255) << 8) | (s >> 8);          /* the panel's byte order */
+    if (off) { d[o] = d[o + 1] = d[o + 2] = 0; }
+    else { d[o] = R5[v >> 11]; d[o + 1] = G6[(v >> 5) & 63]; d[o + 2] = R5[v & 31]; }
+    d[o + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+}
+function drawLeds(l) {
+  B_ORDER.forEach((label) => {
+    const b = btnEls[label];
+    b.led.dataset.l = l[B_MATRIX[label]];
+    if (label === 10) b.led.dataset.g = l[41] ? "1" : "0";
+  });
+  for (let k = 0; k < 27; k++) keyEls[k].firstChild.dataset.l = l[14 + k];
+}
+
+/* ---------------------------------------------------------------- engine --- */
+let ctx = null, mode = "";
+function onMsg(m) {
+  if (m.type === "screen") drawScreen(m.px, m.off);
+  else if (m.type === "leds") drawLeds(m.leds);
+  else if (m.type === "ready") { $("pwr").classList.add("on"); $("pwrText").textContent = "On"; }
+  else if (m.type === "status") $("meter").style.width = Math.min(100, m.peak * 100) + "%";
+  else if (m.type === "slot") slotLoaded(m);
+  else if (m.type === "tempo") tempoChanged(m);
+  else if (m.type === "div" && !m.ok) say("Slices apply to a track playing SHARD: select one first.");
+  else if (m.type === "error") say("The firmware didn't start: " + m.msg);
+}
+async function powerOn() {
+  $("powerBtn").disabled = true;
+  try {
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100, latencyHint: "interactive" });
+    await ctx.resume();
+  } catch (err) { say("Audio is blocked in this browser: " + err.message); $("powerBtn").disabled = false; return; }
+  const bytes = await (await fetch("emu.wasm")).arrayBuffer();
+  try {
+    if (!ctx.audioWorklet) throw new Error("no AudioWorklet");
+    await ctx.audioWorklet.addModule("emu-worklet.js");
+    const node = new AudioWorkletNode(ctx, "felucca", { numberOfInputs: 0, outputChannelCount: [2] });
+    node.port.onmessage = (e) => onMsg(e.data);
+    send = (m) => node.port.postMessage(m);
+    node.connect(ctx.destination);
+    send({ type: "wasm", bytes });
+    mode = "AudioWorklet";
+  } catch (err) {                                /* main thread, a 2048-sample buffer */
+    const core = new EmuCore((m) => onMsg(m));
+    await core.load(bytes);
+    const sp = ctx.createScriptProcessor(2048, 0, 2);
+    sp.onaudioprocess = (e) => core.render(e.outputBuffer.getChannelData(0), e.outputBuffer.getChannelData(1));
+    sp.connect(ctx.destination);
+    send = (m) => core.handle(m);
+    mode = "ScriptProcessor";
+  }
+  $("boot").classList.add("gone");
+  $("audioInfo").textContent = `Audio on, ${ctx.sampleRate / 1000} kHz, ${mode}`;
+}
+$("powerBtn").addEventListener("click", powerOn);
+$("resetDemo").addEventListener("click", () => { send({ type: "reset", demo: true }); say("Restarted with the SHARD demo."); });
+$("resetFactory").addEventListener("click", () => { send({ type: "reset", demo: false }); say("Restarted with Felucca's factory tracks."); });
+
+/* ---------------------------------------------------------- user samples --- */
+/* web/editor.html's port of tools/sampleio.py: WAV -> mono 22.05 kHz int16 -> IMA ADPCM slot */
+const SMP = { SLOT_SIZE: 0x14000, DATA_OFF: 512, RATE: 22050, HDR_LEN: 32 + 16 * 28 };
+SMP.MAX_DATA = SMP.SLOT_SIZE - SMP.DATA_OFF;
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b) { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_TABLE[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+const IMA_STEP = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88,
+  97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658,
+  724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660,
+  4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818,
+  18500, 20350, 22385, 24623, 27086, 29794, 32767];
+const IMA_IDX = [-1, -1, -1, -1, 2, 4, 6, 8];
+function imaEncode(s) {
+  let pred = 0, idx = 0;
+  const nib = new Uint8Array(s.length + (s.length & 1));
+  for (let n = 0; n < s.length; n++) {
+    const step = IMA_STEP[idx];
+    let diff = s[n] - pred, code = 0;
+    if (diff < 0) { code = 8; diff = -diff; }
+    let vd = step >> 3;
+    if (diff >= step) { code |= 4; diff -= step; vd += step; }
+    if (diff >= step >> 1) { code |= 2; diff -= step >> 1; vd += step >> 1; }
+    if (diff >= step >> 2) { code |= 1; vd += step >> 2; }
+    pred = Math.max(-32768, Math.min(32767, code & 8 ? pred - vd : pred + vd));
+    idx = Math.max(0, Math.min(88, idx + IMA_IDX[code & 7]));
+    nib[n] = code;
+  }
+  const out = new Uint8Array(nib.length >> 1);
+  for (let k = 0; k < nib.length; k += 2) out[k >> 1] = nib[k] | (nib[k + 1] << 4);
+  return out;
+}
+function parseWav(buf) {
+  const d = new Uint8Array(buf), v = new DataView(d.buffer, d.byteOffset, d.byteLength);
+  const id = (i) => String.fromCharCode(d[i], d[i + 1], d[i + 2], d[i + 3]);
+  if (d.length < 12 || id(0) !== "RIFF" || id(8) !== "WAVE") throw new Error("that isn't a WAV file");
+  let i = 12, fmt = null, data = null;
+  while (i + 8 <= d.length) {
+    const cid = id(i), n = v.getUint32(i + 4, true);
+    if (cid === "fmt ") {
+      let tag = v.getUint16(i + 8, true);
+      const ch = v.getUint16(i + 10, true), sr = v.getUint32(i + 12, true), bits = v.getUint16(i + 22, true);
+      if (tag === 0xFFFE) tag = v.getUint16(i + 32, true);
+      fmt = { tag, ch, sr, bits };
+    } else if (cid === "data") { data = [i + 8, Math.min(d.length, i + 8 + n)]; break; }
+    i += 8 + n + (n & 1);
+  }
+  if (!fmt || !data) throw new Error("the WAV has no audio data");
+  const { tag, ch, sr, bits } = fmt, bps = bits >> 3, frame = bps * ch;
+  if (!(tag === 1 || tag === 3) || !bps || !ch) throw new Error("this WAV encoding isn't supported (use PCM or float)");
+  const nfr = Math.floor((data[1] - data[0]) / frame), x = new Float64Array(nfr);
+  for (let f = 0; f < nfr; f++) {
+    let acc = 0;
+    for (let c = 0; c < ch; c++) {
+      const o = data[0] + f * frame + c * bps;
+      let s;
+      if (tag === 3) s = bps === 4 ? v.getFloat32(o, true) : v.getFloat64(o, true);
+      else if (bps === 2) s = v.getInt16(o, true) / 32768;
+      else if (bps === 3) s = (((d[o] | (d[o + 1] << 8) | (d[o + 2] << 16)) << 8) >> 8) / 8388608;
+      else if (bps === 4) s = v.getInt32(o, true) / 2147483648;
+      else s = (d[o] - 128) / 128;
+      acc += s;
+    }
+    x[f] = acc / ch;
+  }
+  return { sr, x };
+}
+function pyRound(v) { const f = Math.floor(v), r = v - f; return r > 0.5 ? f + 1 : r < 0.5 ? f : (f % 2 ? f + 1 : f); }
+function resample(x, sr, to) {
+  if (sr === to) return Array.from(x);
+  if (sr > to) {
+    const k = Math.max(1, pyRound(sr / to));
+    if (k > 1) { const y = new Array(x.length); for (let i = 0; i < x.length; i++) { let s = 0; for (let j = i; j < Math.min(x.length, i + k); j++) s += x[j]; y[i] = s / k; } x = y; }
+  }
+  const step = sr / to, out = [];
+  let p = 0;
+  while (p < x.length - 1) { const i = Math.floor(p), f = p - i; out.push(x[i] * (1 - f) + x[i + 1] * f); p += step; }
+  return out;
+}
+function normalize(x) {
+  let pk = 1e-9;
+  for (const v of x) pk = Math.max(pk, Math.abs(v));
+  return Int16Array.from(x, (v) => Math.max(-32768, Math.min(32767, Math.trunc(v / pk * 30000))));
+}
+function buildSlot(name, s) {
+  const data = imaEncode(s), hdr = new Uint8Array(SMP.HDR_LEN), v = new DataView(hdr.buffer);
+  v.setUint32(0, 0x504D5346, true);
+  v.setUint16(4, 1, true);
+  hdr[6] = 1;
+  const nm = String(name).toUpperCase().replace(/[^\x20-\x7E]/g, "").slice(0, 8);
+  for (let i = 0; i < nm.length; i++) hdr[8 + i] = nm.charCodeAt(i);
+  v.setUint32(16, data.length, true);
+  v.setUint32(20, crc32(data), true);
+  const rate = pyRound(SMP.RATE / 44100 * 65536);
+  [0, s.length, 0, s.length - 1, rate].forEach((x, k) => v.setUint32(32 + k * 4, x >>> 0, true));
+  v.setInt16(52, 60 * 16, true);
+  v.setInt16(54, 0, true);
+  hdr[56] = 0; hdr[57] = 0; hdr[58] = 127; hdr[59] = 0;
+  return { hdr, data };
+}
+
+const slotEls = [], slotInfo = [null, null, null];
+let slotPick = 0, lastSlot = -1;
+/* the slices: SHARD's DIV list (0 "2" .. 6 "32", 7 AUTO); Hits = AUTO, one per onset */
+const DIVS = [["Hits", 7], ["2", 0], ["4", 1], ["6", 2], ["8", 3], ["12", 4], ["16", 5]];
+let divPick = 7;
+DIVS.forEach(([label, d]) => {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = label;
+  b.setAttribute("role", "radio");
+  b.setAttribute("aria-checked", d === divPick ? "true" : "false");
+  b.title = d === 7 ? "A slice per hit, found in the sound" : `${label} equal slices`;
+  b.addEventListener("click", () => {
+    divPick = d;
+    for (const o of $("divs").children) o.setAttribute("aria-checked", o === b ? "true" : "false");
+    if (lastSlot >= 0) send({ type: "div", div: d });
+  });
+  $("divs").appendChild(b);
+});
+const bpmIn = () => { const v = Math.round(+$("bpm").value); return v >= 40 && v <= 250 ? v : 0; };
+$("bpm").addEventListener("change", () => {
+  const v = bpmIn();
+  if ($("bpm").value && !v) say("Tempo goes from 40 to 250 BPM. Leave it empty to have it found.");
+  if (lastSlot >= 0) send({ type: "tempo", k: lastSlot, bpm: v });
+});
+const fmtBpm = (b10) => (b10 / 10).toFixed(b10 % 10 ? 1 : 0);
+function slotText(k) {
+  const i = slotInfo[k];
+  if (!i) return;
+  const tempo = i.bpm ? `${i.bpm} BPM, set` : i.found ? `${fmtBpm(i.found)} BPM, found` : "no tempo found";
+  slotEls[k].querySelector("em").textContent = `${i.name.slice(0, 22)}, ${i.secs} s, ${tempo}` + (i.cut ? " (cut to fit)" : "");
+}
+function say(t) { $("msg").textContent = t; }
+for (let k = 0; k < 3; k++) {
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = "slot";
+  el.innerHTML = `<b>USR${k + 1}</b><em>Empty. Drop a WAV here.</em>`;
+  el.addEventListener("click", () => { slotPick = k; $("file").click(); });
+  el.addEventListener("dragover", (e) => { e.preventDefault(); el.classList.add("drag"); });
+  el.addEventListener("dragleave", () => el.classList.remove("drag"));
+  el.addEventListener("drop", (e) => { e.preventDefault(); el.classList.remove("drag"); if (e.dataTransfer.files[0]) loadFile(k, e.dataTransfer.files[0]); });
+  slotEls.push(el);
+  $("slots").appendChild(el);
+}
+$("file").addEventListener("change", (e) => { if (e.target.files[0]) loadFile(slotPick, e.target.files[0]); e.target.value = ""; });
+addEventListener("dragover", (e) => e.preventDefault());
+addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer.files[0]) loadFile(0, e.dataTransfer.files[0]); });
+
+async function loadFile(k, f) {
+  if (!ctx) { say("Power on first, then load a sample."); return; }
+  try {
+    const { sr, x } = parseWav(await f.arrayBuffer());
+    let r = resample(x, sr, SMP.RATE);
+    const max = SMP.MAX_DATA * 2;
+    let cut = false;
+    if (r.length > max) { r = r.slice(0, max); cut = true; }
+    if (r.length < 64) throw new Error("the sample is too short");
+    const s = normalize(r), name = f.name.replace(/\.[^.]*$/, "");
+    const { hdr, data } = buildSlot(name, s);
+    const bpm = bpmIn();
+    send({ type: "slot", k, hdr, data, bpm, div: divPick });
+    slotInfo[k] = { name, secs: (s.length / SMP.RATE).toFixed(2), cut, bpm, found: 0 };
+    lastSlot = k;
+    slotEls[k].classList.add("full");
+    slotText(k);
+  } catch (err) { say(`Couldn't load ${f.name}: ${err.message}.`); }
+}
+function slotLoaded(m) {
+  const i = slotInfo[m.k];
+  if (i) { i.found = m.found; slotText(m.k); }
+  const cut = i && i.cut ? " The slot holds 7.4 s, so the rest was cut." : "";
+  const t = i && i.bpm ? ` at ${i.bpm} BPM` : m.found ? `, found at ${fmtBpm(m.found)} BPM` : ", no tempo found (type one in)";
+  if (m.src) say(`Loaded into USR${m.k + 1}${t}. The selected track plays it now; press PLAY if it's stopped.${cut}`);
+  else say(`Loaded into USR${m.k + 1}${t}. Pick SHARD in PRESETS and set SRC to USR${m.k + 1} on EDIT 1 to play it.${cut}`);
+}
+function tempoChanged(m) {
+  const i = slotInfo[m.k];
+  if (!i) return;
+  i.bpm = bpmIn(); i.found = m.found; slotText(m.k);
+  say(i.bpm ? `USR${m.k + 1} plays at ${i.bpm} BPM.` : `USR${m.k + 1} uses the tempo found${m.found ? ` (${fmtBpm(m.found)} BPM)` : ""}.`);
+}
+</script>
+</body>
+</html>
