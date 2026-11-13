@@ -3,7 +3,8 @@
 /* SLICER: a per-track insert, a tempo-synced 16-step gate / stutter. It works on the track's dry
  * mono signal after DIST and before LEVEL / PAN / the sends (fx.c mix_part), so the sends follow
  * the chopped sound.
- *   P_SLCR    OFF / GATE / STUT
+ *   P_SLCR    OFF / GATE / STUT / GATE RT / STUT RT (RT: every note on the track restarts the pattern at step 0,
+ *             trk_note_on -> sl_retrig, taken at the next block; between notes the clock runs on as ever)
  *   P_SLPAT   one of SL_NPAT patterns of 16 steps ('x' live / open, '.' gated / repeated)
  *   P_SLRATE  the step: 1/8, 1/16, 1/32, 8T, 16T, 32T
  *   P_SLDEPTH GATE: how far a '.' step closes (100 % = silent); STUT: the level of the repeat
@@ -22,7 +23,12 @@
 #define SL_RAMP_LOG2 7
 #define SL_RAMP (1 << SL_RAMP_LOG2)     /* 128 samples, 2.9 ms */
 #define SL_SLOPE (32768 / SL_RAMP)
-enum { SL_OFF, SL_GATE, SL_STUT };      /* P_SLCR (params.c N_SLCR) */
+enum { SL_OFF, SL_GATE, SL_STUT, SL_GATE_RT, SL_STUT_RT };   /* P_SLCR (params.c N_SLCR) */
+static uint32_t sl_mode(const track_t *t)   /* OFF, GATE or STUT (RT: as GATE / STUT) */
+{
+    uint32_t v = (uint32_t)t->p[P_SLCR];
+    return v >= SL_GATE_RT ? v - 2u : v;
+}
 
 /* bit k = step k: 1 = 'x' (open / live), 0 = '.' (closed / repeat) */
 static const uint16_t SL_PAT[SL_NPAT] = {
@@ -75,7 +81,7 @@ static uint32_t sl_pattern(const track_t *t) { return SL_PAT[(uint32_t)(t->p[P_S
 /* the step clock enters the next step */
 static void sl_enter(const track_t *t, sl_t *s)
 {
-    uint32_t mode = (uint32_t)t->p[P_SLCR];
+    uint32_t mode = sl_mode(t);
     s->idx = (uint8_t)((s->idx + 1u) & 15u);
     s->base = (uint32_t)FS * 60u / (uint32_t)song.g[G_BPM] / SL_DEN[(uint32_t)t->p[P_SLRATE] % 6u];
     s->len = swing_step_len(t, s->base, s->idx);   /* core.h, as seq.c step_samples */
@@ -103,7 +109,7 @@ static void sl_enter(const track_t *t, sl_t *s)
 static inline __attribute__((always_inline)) void sl_seg(const track_t *t, sl_t *s, int16_t *buf, int32_t *b,
                                                           int32_t *sd, uint32_t m)
 {
-    uint32_t mode = (uint32_t)t->p[P_SLCR], j, nbit = (sl_pattern(t) >> ((s->idx + 1u) & 15u)) & 1u;
+    uint32_t mode = sl_mode(t), j, nbit = (sl_pattern(t) >> ((s->idx + 1u) & 15u)) & 1u;
     int32_t depth = t->p[P_SLDEPTH] * 258;          /* Q15, 0..32766 */
     int32_t tc = mode == SL_GATE && !s->bit ? depth : 0;           /* gate closure of this step */
     int32_t tn = mode == SL_GATE && !nbit ? depth : 0;             /* .. of the next one */
@@ -161,6 +167,11 @@ static void slicer_track(const track_t *t, int32_t *b, uint32_t n)
     uint32_t k = (uint32_t)(t - trk), i = 0;
     sl_t *s = &sl[k];
     int act = b && (t->p[P_SLCR] != SL_OFF || s->gc || s->w);
+    if (sl_retrig[k]) {                             /* RT: a note: step 0 from this block */
+        sl_retrig[k] = 0;
+        s->idx = 15;
+        s->pos = s->len = 0;
+    }
     while (i < n) {
         uint32_t m;
         if (s->pos >= s->len)
@@ -181,6 +192,11 @@ static __attribute__((noinline)) void slicer_track_sd(const track_t *t, int32_t 
     uint32_t k = (uint32_t)(t - trk), i = 0;
     sl_t *s = &sl[k];
     int act = t->p[P_SLCR] != SL_OFF || s->gc || s->w;
+    if (sl_retrig[k]) {                             /* RT: a note: step 0 from this block */
+        sl_retrig[k] = 0;
+        s->idx = 15;
+        s->pos = s->len = 0;
+    }
     while (i < n) {
         uint32_t m;
         if (s->pos >= s->len)
@@ -199,5 +215,5 @@ static __attribute__((noinline)) void slicer_track_sd(const track_t *t, int32_t 
 static int slicer_busy(const track_t *t)
 {
     const sl_t *s = &sl[t - trk];
-    return s->w || (t->p[P_SLCR] == SL_STUT && s->loop);
+    return s->w || (sl_mode(t) == SL_STUT && s->loop);
 }

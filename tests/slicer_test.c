@@ -372,6 +372,40 @@ static void demos(const char *dir)
     printf("slicer: demos in %s (song_dry / song_slicers, pad, acid, drums: dry and sliced)\n", dir);
 }
 
+/* ---------------------------------------------------------- 6. RT --- */
+/* GATE RT: a note restarts the pattern: the step after a note-on is step 0 (pattern 6, xxxx....: the 4 steps after
+ * the note open, the next 4 closed), wherever the clock was; GATE (no RT) runs on regardless; RT reads as GATE */
+static int test_retrig(void)
+{
+    track_t *t = &trk[0];
+    int bad = 0, rt;
+    for (rt = 0; rt < 2; rt++) {
+        uint32_t f, i, steps = 0;
+        int32_t b[CTL];
+        uint8_t idx_after = 0xFF;
+        set_slicer(t, rt ? SL_GATE_RT : SL_GATE, 6, 1, 127);
+        slicer_start();
+        sl_retrig[0] = 0;
+        for (f = 0; f < 6u * 44100u / 10u; f += CTL) {  /* 0.6 s: the clock somewhere in the pattern */
+            for (i = 0; i < CTL; i++) b[i] = 10000;
+            slicer_track(t, b, CTL);
+        }
+        steps = sl[0].idx;
+        trk_note_on(t, 60, 100);
+        for (i = 0; i < CTL; i++) b[i] = 10000;
+        slicer_track(t, b, CTL);
+        idx_after = sl[0].idx;
+        trk_note_off(t, 60);
+        if (rt)
+            bad += check("GATE RT: a note restarts the pattern (step 0, open)", idx_after == 0u && sl[0].bit == 1u &&
+                         sl_mode(t) == SL_GATE && steps != 15u);
+        else
+            bad += check("GATE: a note does not touch the pattern", idx_after == steps || idx_after == ((steps + 1u) & 15u));
+    }
+    set_slicer(t, 0, 1, 1, 127);
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     int bad = 0;
@@ -380,6 +414,7 @@ int main(int argc, char **argv)
     bad += test_sync();
     bad += test_off_stut();
     bad += test_cost();
+    bad += test_retrig();
     if (argc > 1)
         demos(argv[1]);
     printf("%s\n", bad ? "SLICER TEST FAILED" : "slicer test passed");

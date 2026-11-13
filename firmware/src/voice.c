@@ -392,6 +392,7 @@ static void mono_remove(track_t *t, uint32_t note)
     t->nmono = (uint8_t)k;
 }
 
+static volatile uint8_t sl_retrig[NTRK];            /* slicer.c: a note on a track whose SLICER is GATE RT / STUT RT */
 static void trk_note_on(track_t *t, uint32_t note, uint32_t vel)
 {
     uint32_t any = 0, i, mode = trk_vmode(t);
@@ -407,6 +408,8 @@ static void trk_note_on(track_t *t, uint32_t note, uint32_t vel)
         t->xp_vel[i] = (uint8_t)vel;
         return;
     }
+    if (t->p[P_SLCR] >= 3)                              /* (SL_GATE_RT, SL_STUT_RT) */
+        sl_retrig[t - trk] = 1;
     vel = mod_note(t, note, vel);                       /* the matrix's VEL / KEY / RAND (1.5.6: VEL as a destination) */
     for (i = 0; i < NVOICE; i++)
         any |= t->v[i].gate;

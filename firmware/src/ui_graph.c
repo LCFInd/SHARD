@@ -482,7 +482,7 @@ static void graph_insert(const track_t *t, uint16_t c)
  * open (DEPTH), STUT hatched (it repeats the last 'x'); the step playing underlined. Grey when OFF. */
 static void graph_slicer(const track_t *t, uint16_t c)
 {
-    uint32_t i, pat = sl_pattern(t), mode = (uint32_t)t->p[P_SLCR], cur = sl[t - trk].idx;
+    uint32_t i, pat = sl_pattern(t), mode = sl_mode(t), cur = sl[t - trk].idx;
     int32_t open = 70 - t->p[P_SLDEPTH] * 70 / 127;      /* px a closed GATE step keeps */
     uint16_t col = mode == SL_OFF ? T_DIM : c;
     for (i = 0; i < 16u; i++) {
