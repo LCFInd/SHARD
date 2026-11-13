@@ -22,9 +22,21 @@ typedef struct {
 } aafont_t;
 typedef struct { const char *name; uint16_t c1, c2, c3, primary, secondary; } ui_pal_t;
 typedef struct { uint16_t off; uint8_t w; const char *label; } kc_t;
+#ifndef FELUCCA_MANGLER
+#define FELUCCA_MANGLER 1                /* (core.h's default; gfx.c comes first) */
+#endif
+#if FELUCCA_MANGLER                     /* the mangler's look (SWISS): TeX Gyre Heros Cn, regular S, bold M L, on the
+                                         * same lines as Inter Tight (tools/gen_aa_font.py --preset swiss) */
+#include "ui_fonts_swiss.h"
+#else
 #include "ui_fonts.h"                   /* AF_S 12 px / 400, AF_M 15 px / 500, AF_L 28 px / 600 */
+#endif
 #include "ui_palettes.h"
+#if FELUCCA_MANGLER
+#include "ui_keycaps_swiss.h"             /* (SWISS: square, Heros Cn) */
+#else
 #include "ui_keycaps.h"                 /* KC_*: the keycaps / badges (tools/gen_aa_keycaps.py), KNOB_* arcs */
+#endif
 #define ELLIPSIS '\x85'                 /* the ellipsis glyph of AF_S and AF_M */
 
 /* host tests hook in here (layout lint, draw cost); nothing in the firmware */
@@ -179,6 +191,21 @@ static void palette_set(uint32_t i)
         ux.dim = ux.line = ux.raise = ux.lane = UI_BW_GREY;   /* the one grey: inactive, tracks, wells */
         ux.tint = ux.grid = p->c1;
     }
+#if FELUCCA_MANGLER
+    /* SWISS, the mangler's one look, whatever COLOR says: black and white and four greys, no colour at all. White:
+     * text, values, the active thing, a selection (its INK black: inverted). The greys: labels (MID), the inactive (DIM),
+     * tracks and rules (LINE), wells (RAISE). No cards: SURF is the background, corners square (cv_rrect) */
+    ux.mono = 1;
+    ux.light = 0;
+    ux.bg = ux.surf = ux.tint = ux.ink = 0;
+    ux.text = ux.theme = ux.accent = ux.rec = ux.sel = ux.key = ux.ok = 0xFFFFu;
+    ux.mid = ux_gray(19);                        /* ~ 155 */
+    ux.dim = ux_gray(11);                        /* ~ 90 */
+    ux.line = ux_gray(6);                        /* ~ 50 */
+    ux.raise = ux_gray(5);
+    ux.lane = ux_gray(3);
+    ux.grid = ux_gray(2);
+#endif
     ux.gen++;                                    /* the text ramps change with the coverage curve */
 }
 
@@ -313,7 +340,8 @@ static void cv_rrect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, uint
 {
     int32_t i, j;
     GFX_HOOK_CELL(x, y + cv_oy, x + w, y + h + cv_oy);   /* (the lint: what is drawn on it stays inside it) */
-    if (r < 0) r = -r;                           /* (-r: rounded in every style: a keycap-like cushion) */
+    if (FELUCCA_MANGLER) r = 0;                  /* SWISS: every corner square, the cushions too */
+    else if (r < 0) r = -r;                      /* (-r: rounded in every style: a keycap-like cushion) */
     else if (ux.style == ST_LINE) r = 0;         /* LINE: square cursors, selections and fills (FLAT: rounded) */
     if (r > w / 2) r = w / 2;
     if (r > h / 2) r = h / 2;

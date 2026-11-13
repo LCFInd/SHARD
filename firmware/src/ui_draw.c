@@ -419,7 +419,7 @@ static void draw_head(void)
 #define RULE_W (CARD_X(3) + CARD_W - CARD_X(0))
 static void lcd_rule(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
-    lcd_fill(x, y, w, h, T_RULE);
+    lcd_fill(x, y, w, h, FELUCCA_MANGLER ? T_BG : T_RULE);   /* (SWISS: space, not rules, between the strips) */
     GFX_HOOK_RULE(x, y, w, h);
 }
 /* The gaps are filled around the rules, never over them (#181: a rule filled BG, then drawn again, flashed on every
@@ -764,7 +764,7 @@ static void draw_column(uint32_t c, const char *label, const char *val, const ch
         if (!strip && ratio >= 0) {
             int32_t gw = COL_W - 10, fx = ratio * gw / 1000;
             cv_rrect(5, 38, gw, 3, 1, ux.style ? T_LINE : T_BG, T_SURF);   /* (LINE: no card to cut it from) */
-            cv_rrect(5, 38, fx < 3 ? 3 : fx, 3, 1, hot ? T_ACCENT : vc == T_DIM ? T_DIM : T_THEME, T_BG);
+            cv_rrect(5, 38, fx < 3 ? 3 : fx, 3, 1, hot ? T_ACCENT : vc == T_DIM || FELUCCA_MANGLER ? T_DIM : T_THEME, T_BG);
         }
     }
     cv_oy = 0;

@@ -88,3 +88,12 @@ has **not yet run on an FM-1**. Check these on hardware, in order:
 
 The web editor bundled in this tree (`web/editor.html`) knows about engine 15. The separate Felucca-WebApp editor
 doesn't yet, so it can't edit kits.
+
+## The look: SWISS (the mangler build)
+
+The mangler build has its own black-and-white look:
+- **Type:** TeX Gyre Heros Cn, a condensed grotesk (GUST Font License, in `assets/fonts/texgyre`). Labels are regular and values are bold. The faces sit on Inter Tight's line metrics, so every layout keeps its place (`tools/gen_aa_font.py --preset swiss`).
+- **Colour:** black, white and four greys, whatever MENU > COLOR is set to (COLOR reads SWISS). `gfx.c palette_set` sets these.
+- **Shapes:** every corner is square, the keycaps too (`tools/gen_aa_keycaps.py --swiss`). There are no cards and no dividers, only space between the strips.
+- **Parameter icons are off** (`FELUCCA_ICONS` defaults to 0): labels are words. Only the knob you're turning has a white label and gauge; the others are grey.
+- The full Felucca build keeps Inter Tight and its palettes.

@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import aa_raster as ar  # noqa: E402
 
 FONT = str(Path(__file__).resolve().parents[1] / "assets" / "fonts" / "InterTight[wght].ttf")
+FONT_SWISS = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "texgyre" / "texgyreheroscn-bold.otf"
 KC_PX, KC_WGHT = 9, 600          # the label: Inter Tight 9 px / 600 (caps 7 rows)
 KC_H, KC_R, KC_PAD = 13, 4, 3    # the pill: 13 px tall, radius 4, 3 px each side of the label's ink
 KC_BASE = 10                     # baseline row: the caps on rows 3 .. 9
@@ -113,8 +114,13 @@ def knob_quadrant(r):
 
 
 def main():
+    global KC_R
     out = Path(sys.argv[1])
-    font = ar.open_font(FONT + f"@{KC_WGHT}", KC_PX)
+    if "--swiss" in sys.argv[2:]:          # the mangler's look: square, TeX Gyre Heros Cn bold (caps 7 rows)
+        KC_R = 0
+        font = ar.open_font(str(FONT_SWISS), 10)
+    else:
+        font = ar.open_font(FONT + f"@{KC_WGHT}", KC_PX)
     data, rows = bytearray(), []
     for cname, label in LABELS:
         w, b = keycap(font, label)

@@ -4,7 +4,7 @@
 """Pre-rasterise TTF fonts into anti-aliased 4-bit alpha glyph tables for the UI (run by
 tools/build.py generate() with --preset inter-tight).
 
-  gen_aa_font.py OUT.h --preset standin|inter-tight [--tracking EM] [--gamma G] [--kern-min N]
+  gen_aa_font.py OUT.h --preset standin|inter-tight|swiss [--tracking EM] [--gamma G] [--kern-min N]
   gen_aa_font.py OUT.h --face NAME=FONT[#index]:PX:FIRST-LAST[+0xNN,...] ...   (explicit faces)
 
 Faces of the presets (S labels, M values/headers, L big numerals / titles):
@@ -50,12 +50,22 @@ HUFF = [("M", "L")]
 L_CHARS = " #+-./0123456789ABCDEFGHIJKLMNOPQRSTUVWXY"
 
 
+FIT = {}                               # face -> (h, baseline): set a face on Inter Tight's line (swiss)
+
+
 def preset(name):
     if name == "inter-tight":
         v = str(FONTS.parent / "assets" / "fonts" / "InterTight[wght].ttf")   # SIL OFL 1.1, Google Fonts
         return [("S", v + "@400", 12, (32, 126), EXTRAS, 0.0, PHASES),
                 ("M", v + "@500", 15, (32, 126), EXTRAS, 0.0, PHASES),
                 ("L", v + "@600", 28, (32, 32), [ord(c) for c in L_CHARS[1:]], 0.0, PHASES_L)]
+    if name == "swiss":                        # the mangler's look: TeX Gyre Heros Cn (GUST Font License)
+        r = str(FONTS.parent / "assets" / "fonts" / "texgyre" / "texgyreheroscn-regular.otf")
+        b = str(FONTS.parent / "assets" / "fonts" / "texgyre" / "texgyreheroscn-bold.otf")
+        FIT.update(S=(15, 12), M=(19, 15), L=(35, 28))   # Inter Tight's lines: the layout stays as it is
+        return [("S", r, 12, (32, 126), EXTRAS, 0.01, PHASES),
+                ("M", b, 15, (32, 126), EXTRAS, 0.0, PHASES),
+                ("L", b, 28, (32, 32), [ord(c) for c in L_CHARS[1:]], 0.0, PHASES_L)]
     if name == "standin":
         if os.path.exists(LOCAL_INTER):
             reg, med, semi = LOCAL_INTER + "#0", LOCAL_INTER + "#10", LOCAL_INTER + "#12"
@@ -165,6 +175,17 @@ def emit(face, tracking, gamma, kern_min):
     name, font, px, (first, last), extras, ftrack, phases = face
     chars = [chr(c) for c in range(first, last + 1)] + [chr(c) for c in extras]
     r = ar.raster_font(font, px, chars, tracking if ftrack is None else ftrack, gamma, True, kern_min, phases)
+    if name in FIT:                                    # move every glyph onto the given line
+        h, asc = FIT[name]
+        d = r["asc"] - asc
+        for ch in chars:
+            adv16, ph = r["glyphs"][ch]
+            ph = [(bx, by - d if bh else 0, bw, bh, b) for bx, by, bw, bh, b in ph]
+            bad = [e for e in ph if e[3] and (e[1] < 0 or e[1] + e[3] > h)]
+            if bad:
+                print(f"  {name} {ch!r}: rows {bad[0][1]}..{bad[0][1] + bad[0][3]} outside 0..{h}")
+            r["glyphs"][ch] = (adv16, ph)
+        r["asc"], r["h"] = asc, h
     data, table, lines = bytearray(), [], []
     for ch in chars:
         adv16, ph = r["glyphs"][ch]
@@ -231,7 +252,7 @@ def emit(face, tracking, gamma, kern_min):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("out")
-    ap.add_argument("--preset", choices=["standin", "inter-tight"])
+    ap.add_argument("--preset", choices=["standin", "inter-tight", "swiss"])
     ap.add_argument("--face", action="append", default=[])
     ap.add_argument("--tracking", type=float, default=0.0, help="extra advance per glyph in em")
     ap.add_argument("--gamma", type=float, default=1.0, help="coverage curve; <1 thickens light-on-dark text")

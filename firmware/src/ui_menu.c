@@ -345,8 +345,8 @@ static void menu_row(uint32_t k, uint32_t row)
         return;
     }
     GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "menu row value centred up/down");
-    if (row != MI_COLOR) {
-        cv_text_r(MR_VR, vy, &AF_M, v, val, bg);
+    if (row != MI_COLOR || FELUCCA_MANGLER) {           /* (SWISS: one look, no swatches) */
+        cv_text_r(MR_VR, vy, &AF_M, row == MI_COLOR ? "SWISS" : v, val, bg);
         return;
     }
     {   /* COLOR: the palette's name and its five colours (BG SURF TEXT THEME ACCENT), live */
