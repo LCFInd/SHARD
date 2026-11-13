@@ -334,7 +334,7 @@ static const shfx_desc_t SHFX_SL[SHFX_NSL] = {
     {"ROUTE", 0, SHD_NROUTE - 1, N_SHD_ROUTE, ""}, {"CHOKE", 0, 4, N_SHD_CHOKE, ""},
 };
 enum { SHFX_BPM, SHFX_SENS, SHFX_XLOW, SHFX_XHIGH, SHFX_CH0 };   /* then TYPE DRV GATE LVL per channel */
-static const shfx_desc_t SHFX_BUS[SHFX_CH0 + 4u * SHD_NCH] = {   /* (6 letters at most: the cards) */
+static const shfx_desc_t SHFX_BUS[SHFX_CH0 + 4u * SHD_NCH + 1u] = {   /* (6 letters at most: the cards) */
     {"BPM", 0, SHD_BPM_MAX, 0, ""},                  /* the source's tempo, 0 AUTO (shfx_knob) */
     {"SENS", 0, 127, 0, ""},                         /* AUTO's hits (a user slot's: slc_rescan) */
     {"XLOW", 0, 127, 0, ""}, {"XHIGH", 0, 127, 0, ""},
@@ -344,7 +344,9 @@ static const shfx_desc_t SHFX_BUS[SHFX_CH0 + 4u * SHD_NCH] = {   /* (6 letters a
     {"H DRV", 0, 127, 0, ""}, {"H GATE", 0, 127, 0, ""}, {"H LVL", 0, 127, 0, ""},
     {"F TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"F DRV", 0, 127, 0, ""}, {"F GATE", 0, 127, 0, ""},
     {"F LVL", 0, 127, 0, ""},
+    {"TEMPO", 40, 240, 0, "BPM"},                    /* the song's tempo (song.g[G_BPM]), last (shfx_knob) */
 };
+#define SHFX_TEMPO (SHFX_CH0 + 4u * SHD_NCH)
 /* SENS: a user slot's AUTO slices again once the knob rests (slc_rescan stops its voices: not at every step) */
 static uint8_t shd_sens_pend;                       /* bit k: user slot k */
 static uint32_t shd_sens_at;
@@ -452,6 +454,10 @@ static void shfx_knob(uint32_t slot, int32_t steps)
         shfx_set(&kit->bus.sens, d, kit->bus.sens + steps);
         shd_sens_pend |= (uint8_t)(1u << slc_slot_of_src(src));
         shd_sens_at = fm1_ms;
+    } else if (slot == 2u && bus && k == SHFX_TEMPO) {   /* TEMPO: the song's, as SELECT turned it */
+        song.g[G_BPM] = (int16_t)clamp(song.g[G_BPM] + steps, GP[G_BPM].min, GP[G_BPM].max);
+        ui.bpm_t = 40;
+        return;                                      /* (not the kit's: nothing to save with the sample) */
     } else if (slot == 2u && bus && k == SHFX_BPM) { /* BPM: up from AUTO starts at the tempo found (else 120); */
         uint8_t *f = &kit->bus.bpm;                  /* below 40 is AUTO again */
         int32_t v = *f;
@@ -516,6 +522,13 @@ static int shfx_card(uint32_t c, const char **lb, char *val, const char **u, int
     }
     if (c == 3u && bus)
         return 0;
+    if (bus && k == SHFX_TEMPO) {                    /* the song's tempo */
+        *lb = d->name;
+        fmt_int(val, song.g[G_BPM]);
+        *u = d->unit;
+        *r = (song.g[G_BPM] - 40) * 1000 / 200;
+        return 1;
+    }
     v = shfx_get(shfx_field(kit, j, bus, k), k, bus);
     *lb = c == 2u ? d->name : "ALL";
     if (bus && k == SHFX_SENS && slc_slot_of_src(src) >= SMP_USER_SLOTS) {
@@ -561,6 +574,7 @@ static uint32_t shfx_sig(void)
     for (i = 0; i < NELEM(SHFX_BUS); i++)
         h = (h ^ *shfx_field(kit, 0, 1, i)) * 16777619u;
     h = (h ^ shd_det_bpm10[src % SHD_NSRC]) * 16777619u;           /* (BPM AUTO: the tempo found) */
+    h = (h ^ (uint32_t)song.g[G_BPM]) * 16777619u;                   /* (TEMPO) */
     return h;
 }
 #endif

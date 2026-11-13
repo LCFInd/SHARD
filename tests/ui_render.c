@@ -2076,6 +2076,8 @@ static void roll_frames(const char *dir)
         memset(bimg, 90, sizeof bimg);
         memset(cimg, 90, sizeof cimg);
         state(); song.playing = 0; pal(p);
+        if (sel_mode() != SEL_BPM)                       /* (the mangler: SELECT turns pages by default; BPM here) */
+            ui_prefs2 ^= (uint8_t)(PREF_SEL_PAGE >> 16);
         song.g[G_BPM] = 129; song.g[G_TUNE] = 19;
         go_title("CLOCK"); page_over = &ROLL_PG;
         snprintf(name, sizeof name, "%s/roll", UI_PALETTES[p].name);

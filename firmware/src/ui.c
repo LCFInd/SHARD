@@ -92,7 +92,12 @@ static uint32_t up_gen;                      /* bumped on every user bank change
  * ui_prefs2 (0 in every older setting = BPM; 1.5.5's PAGE keeps its bit; firmware before 1.5.6 reads MODW as BPM and
  * VEL as PAGE (its bit 4), before 1.5.5 both as BPM) */
 enum { SEL_BPM, SEL_PAGE, SEL_MODW, SEL_VEL, SEL_N };
-static uint32_t sel_mode(void) { return ((ui_prefs2 >> 4) & 1u) | ((ui_prefs2 >> 5) & 2u); }
+static uint32_t sel_mode(void)   /* (the mangler: BPM and PAGE swapped in the byte, so PAGE is its default: SELECT
+                                  * turns the pages; the song's tempo is SLICE FX > BUS's TEMPO, GLO + SELECT, CLOCK) */
+{
+    uint32_t m = ((ui_prefs2 >> 4) & 1u) | ((ui_prefs2 >> 5) & 2u);
+    return FELUCCA_MANGLER && m < 2u ? m ^ 1u : m;
+}
 /* 1.3 (Discussions #112, #134): MENU > DISPLAY > HOME, what the HOME page shows under its four cards: 0 SCOPE (the
  * oscilloscope, as before), 1 TRACKS (the four tracks as rows: ui_graph.c draw_home_tracks), 2 LEVELS (1.5, #134: the
  * rows of TRACKS, and KNOB 1..4 the LEVEL of T1..T4 in place of the engine's four: home_param). A byte of its own no
