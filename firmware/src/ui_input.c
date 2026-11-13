@@ -1537,6 +1537,23 @@ static void ui_notices(void)
     }
 }
 
+#if FELUCCA_MANGLER
+/* the mangler's trim (ARP, INSERT, MOD gone from the pages): a sound or project saved with them plays without */
+static void mangler_trim(void)
+{
+    uint32_t k, m;
+    for (k = 0; k < NTRK; k++) {
+        track_t *t = &trk[k];
+        if (t->p[P_AMODE])
+            t->p[P_AMODE] = 0;
+        if (t->p[P_ITYPE])
+            t->p[P_ITYPE] = 0;
+        for (m = 0; m < 4u; m++)
+            if (t->p[P_M1AMT + 3u * m])
+                t->p[P_M1AMT + 3u * m] = 0;
+    }
+}
+#endif
 static void ui_input(void)
 {
     uint32_t pressed = fm1_input_edges(0), notes = fm1_input_note_edges(), now = fm1_ticks(), id, b, k;
@@ -1550,6 +1567,9 @@ static void ui_input(void)
     fm6_poll();                                         /* FM6: PTCH turned -> its patch */
 #if FELUCCA_SHARD
     shd_sens_poll();                                    /* SHARD's SENS: a user slot's AUTO slices again */
+#endif
+#if FELUCCA_MANGLER
+    mangler_trim();                                     /* (no ARP, INSERT, MOD matrix in this build) */
 #endif
 #if !FELUCCA_FM4
     for (k = 0; k < NTRK; k++)                          /* a DIGITAL sound any other way (the paths convert it */

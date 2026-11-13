@@ -443,6 +443,12 @@ static int page_visible(uint32_t i)
 #if FELUCCA_MANGLER
     if (PAGES[i].graph == GR_SCALE || PAGES[i].graph == GR_CHORD)   /* (SCL is LIVE: no scales, no chords) */
         return 0;
+    if (PAGES[i].fam == FAM_ARP || PAGES[i].graph == GR_MOD || PAGES[i].graph == GR_INS)   /* the mangler's trim: no ARP,
+                                                     * no INSERT, no MOD matrix (mangler_trim keeps them off) */
+        return 0;
+    if (PAGES[i].fam == FAM_EDIT && (PAGES[i].id[0] == P_VOICE || PAGES[i].id[0] == P_ALLOC || PAGES[i].id[0] == P_SPRD) &&
+        TSEL->eng_req % NENGINES == ENGI_SHARD)       /* SHARD: no VOICE pages (EDIT: LOOP .. SLICE FX) */
+        return 0;
 #else
     if (PAGES[i].graph == GR_LIVE)
         return 0;
@@ -792,6 +798,11 @@ static void note_name(char *b, uint32_t n)
  * and SYSTEM in 1.2), or not shown for this track, gives the family's first */
 static void open_family(uint32_t fam)
 {
+    uint32_t v;
+    for (v = 0; v < NPAGES && !(PAGES[v].fam == fam && page_visible(v)); v++)
+        ;
+    if (v == NPAGES)                                   /* (the mangler's ARP: no page at all; the button does nothing) */
+        return;
     if (!ui.home && cur_page()->fam == fam) {          /* same button again: next page */
         uint32_t n, i = ui.page;
         for (n = 0; n < NPAGES; n++) {
