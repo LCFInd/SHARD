@@ -567,7 +567,12 @@ static void menu_input(uint32_t oct)                  /* oct: ui_input.c oct_tap
             menu_close();
             confirm_open(CF_CLEAR_ALL, 0);
         } else if (ui.menu_sel == MI_PANEL) {
+#if defined(FELUCCA_EMU)                                /* (its loop polls the real panel: in the browser it would
+                                                         * never see input, and hold the audio thread) */
+            ui_message("ON THE DEVICE ONLY");
+#else
             panel_setup();
+#endif
             scrn.idle = fm1_ms;                         /* (SCREEN OFF: its own loop had the input) */
             ui.force = 1;
         } else if (ui.menu_sel == MI_INFO) {

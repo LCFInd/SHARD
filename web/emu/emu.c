@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #define FELUCCA_CDC 1
+#define FELUCCA_EMU 1                    /* (firmware: what only the device can do) */
 #define __attribute__(x)
 #define EXPORT(name)
 static uint32_t host_slots[4u * 0x14000u / 4u];          /* USR1..3, as the flash at 0xA0000 */
