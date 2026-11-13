@@ -335,7 +335,7 @@ static const shfx_desc_t SHFX_SL[SHFX_NSL] = {
 };
 enum { SHFX_BPM, SHFX_SENS, SHFX_XLOW, SHFX_XHIGH, SHFX_CH0 };   /* then TYPE DRV GATE LVL per channel */
 static const shfx_desc_t SHFX_BUS[SHFX_CH0 + 4u * SHD_NCH + 1u] = {   /* (6 letters at most: the cards) */
-    {"BPM", 0, SHD_BPM_MAX, 0, ""},                  /* the source's tempo, 0 AUTO (shfx_knob) */
+    {"LOOP", 0, SHD_BPM_MAX, 0, ""},                 /* the source's tempo (BPM), 0 AUTO (shfx_knob); the song's: TEMPO */
     {"SENS", 0, 127, 0, ""},                         /* AUTO's hits (a user slot's: slc_rescan) */
     {"XLOW", 0, 127, 0, ""}, {"XHIGH", 0, 127, 0, ""},
     {"L TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"L DRV", 0, 127, 0, ""}, {"L GATE", 0, 127, 0, ""},
@@ -538,6 +538,7 @@ static int shfx_card(uint32_t c, const char **lb, char *val, const char **u, int
     if (bus && k == SHFX_BPM) {                      /* BPM: set, or AUTO (the tempo found: the next card) */
         if (v) {
             fmt_int(val, v);
+            *u = "BPM";
             *r = (v - (int32_t)SHD_BPM_MIN) * 1000 / (int32_t)(SHD_BPM_MAX - SHD_BPM_MIN);
         } else
             str_cpy(val, "AUTO", 12);

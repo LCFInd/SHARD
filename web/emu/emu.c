@@ -285,6 +285,7 @@ EXPORT(emu_set_engine) void emu_set_engine(uint32_t t, uint32_t e, uint32_t pres
 }
 EXPORT(emu_select) void emu_select(uint32_t t) { song.sel = (uint8_t)(t % NTRK); ui.force = 1; }
 EXPORT(emu_playing) uint32_t emu_playing(void) { return song.playing; }
+EXPORT(emu_song_bpm) uint32_t emu_song_bpm(void) { return (uint32_t)song.g[G_BPM]; }   /* (tests) */
 EXPORT(emu_heads) uint32_t emu_heads(void)          /* (tests: the selected SHARD part's voices playing, LOOP) */
 {
     uint32_t pos[8], i, act = 0;
