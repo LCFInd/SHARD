@@ -809,7 +809,8 @@ int main(int argc, char **argv)
             check("COMB+: a peak at its delay (CUT); COMB-: a trough", c[1] > c[0] + 0.3 && c[2] < c[0] - 0.3,
                   "off %.2f, + %.2f, - %.2f", c[0], c[1], c[2]);
         }
-        /* FUZZ: near square (a low crest factor), louder than clean at the same level */
+        /* FUZZ (the Fuzz War model): squashed flat (a crest factor well under clean's; its tone stack keeps it off a
+         * pure square) */
         {
             double cf[2];
             for (k = 0; k < 2u; k++) {
@@ -826,8 +827,51 @@ int main(int argc, char **argv)
                 cf[k] = out_peak / sqrt(out_energy / (FS / 10u / CTL * CTL) + 1);
                 voices_off();
             }
-            check("FUZZ: square-ish (crest factor near 1)", cf[1] < 1.6 && cf[0] > cf[1] * 1.5, "fuzz %.2f, clean %.2f",
+            check("FUZZ: squashed (crest factor well under clean's)", cf[1] < 1.7 && cf[1] < cf[0] * 0.8, "fuzz %.2f, clean %.2f",
                   cf[1], cf[0]);
+        }
+        /* the analog models, shaper by shaper: OVRDRV (a triode) adds even harmonics, the old symmetric curve none;
+         * DIST (a RAT) distorts 100 Hz less than 2 kHz (its legs to ground); FUZZ's sputter drops a quiet input */
+        {
+            shd_ds_t st;
+            double h[3], lo, hi;
+            uint32_t m;
+            for (m = 1; m <= 2u; m++) {                     /* the 2nd harmonic against the 1st of 172 Hz */
+                double re = 0, im = 0;
+                memset(&st, 0, sizeof st);
+                for (i = 0; i < 8192u; i++) {
+                    int32_t y = shd_shape(SHD_D_SOFT, (int32_t)(16000 * sin(2 * M_PI * 172.27 * i / FS)), 90, &st);
+                    if (i >= 4096u) {
+                        re += y * cos(2 * M_PI * 172.27 * m * i / FS);
+                        im += y * sin(2 * M_PI * 172.27 * m * i / FS);
+                    }
+                }
+                h[m] = sqrt(re * re + im * im);
+            }
+            check("OVRDRV (triode): even harmonics", h[2] > h[1] * 0.05, "H2/H1 %.3f", h[2] / h[1]);
+            for (m = 0; m < 2u; m++) {                      /* RAT: how much the drive squares 100 Hz vs 2 kHz */
+                double f = m ? 2000.0 : 100.0, pk = 0, en = 0;
+                memset(&st, 0, sizeof st);
+                for (i = 0; i < 16384u; i++) {
+                    int32_t y = shd_shape(SHD_D_HARD, (int32_t)(1200 * sin(2 * M_PI * f * i / FS)), 50, &st);
+                    if (i >= 8192u) {
+                        pk = fabs((double)y) > pk ? fabs((double)y) : pk;
+                        en += (double)y * y;
+                    }
+                }
+                *(m ? &hi : &lo) = pk / sqrt(en / 8192 + 1);
+            }
+            check("DIST (RAT): the lows stay cleaner than the highs", lo > hi + 0.1, "crest 100 Hz %.2f, 2 kHz %.2f", lo, hi);
+            {
+                int32_t mx = 0;
+                memset(&st, 0, sizeof st);
+                for (i = 0; i < 8192u; i++) {
+                    int32_t y = shd_shape(SHD_D_FUZZ, (int32_t)(900 * sin(2 * M_PI * 200 * i / FS)), 127, &st);
+                    if (i >= 4096u && (y < 0 ? -y : y) > mx)
+                        mx = y < 0 ? -y : y;
+                }
+                check("FUZZ (Fuzz War): a quiet input sputters out at full drive", mx < 300, "peak %d", (int)mx);
+            }
         }
         /* DELAY: the slice's send echoes with the track's own send at 0 */
         for (k = 0; k < 2u; k++) {

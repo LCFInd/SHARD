@@ -146,13 +146,21 @@ static void shd_kit_sane(shd_kit_t *k)
     if (k->bus.sens > 127) k->bus.sens = SHD_SENS_DEF;
 }
 
+/* ---- a shaper's state (shd_shape): DECIM's held sample, and the analog models' filters and bias */
+typedef struct {
+    int32_t held, prev;                             /* DECIM's sample (cnt its count); the last pre-clip value (2x) */
+    int32_t f[6];                                   /* one-pole states: coupling, legs, tone stacks, DC */
+    int32_t env;                                    /* OVRDRV: the grid's bias */
+    uint16_t cnt;
+} shd_ds_t;
+
 /* ---- the part's engine memory */
 typedef struct {
     int32_t lo, bd;                                 /* the filter */
-    int32_t held;                                   /* DECIM's sample */
+    shd_ds_t ds;                                    /* the slice's shaper */
     uint32_t env;                                   /* the slice's envelope, 0 .. 1 << 30 */
     uint32_t clock, next, loop;                     /* PLAY: samples since the note, the next slice's start, the loop */
-    uint16_t hcnt, fadein, cw;                      /* (cw: the comb line's write point) */
+    uint16_t fadein, cw;                            /* (cw: the comb line's write point) */
     uint8_t stage;                                  /* the slice's envelope: 0 attack, 1 decay, 2 sustain, 3 release */
     uint8_t first, idle, choked;                    /* PLAY: the note's slice; waiting for the next slice; choked */
     uint8_t pinged;                                 /* DIR PING: turned at least once */
@@ -165,8 +173,8 @@ typedef struct {
     int32_t dsend[CTL];                             /* DELAY: the slices' send this block (shard_send) */
     uint32_t used, tail, dused;                     /* buses written this block; blocks of tail left; dsend written */
     int32_t lpl, lph, dcx, dcy;                     /* the split, the DC blocker */
-    int32_t fol[SHD_NCH], gain[SHD_NCH], held[SHD_NCH];
-    uint16_t cnt[SHD_NCH];
+    int32_t fol[SHD_NCH], gain[SHD_NCH];
+    shd_ds_t ds[SHD_NCH];                           /* the channels' shapers */
 } shd_mem_t;
 ENG_MEM_FITS("SHARD", sizeof(shd_mem_t));
 static shd_mem_t *shd_mem(const track_t *t) { return (shd_mem_t *)ENG_MEM((uint32_t)(t - trk) % NPART); }
@@ -201,14 +209,122 @@ static int32_t shd_soft(int32_t x)                  /* tanh, rational: exact to 
     p2 = (p * p) >> 12;
     return p * (27 * 4096 + p2) / ((27 * 4096 + 9 * p2) >> 3);
 }
-static int32_t shd_shape(uint32_t type, int32_t x, uint32_t drive, int32_t *held, uint16_t *cnt)
+#define SHD_LP(st, in, a) ((st) += (int32_t)(((int64_t)((in) - (st)) * (a)) >> 15))   /* a one-pole low-pass */
+/* a pair of silicon diodes: linear to 0.5, a quadratic knee to 1 at 1.5, flat beyond (Q15) */
+static int32_t shd_diode(int32_t x)
+{
+    int32_t a = x < 0 ? -x : x, y, d;
+    if (a <= 16384)
+        return x;
+    if (a >= 49152)
+        y = 32768;
+    else {
+        d = a - 16384;
+        y = 16384 + d - (int32_t)(((int64_t)d * d) >> 16);
+    }
+    return x < 0 ? -y : y;
+}
+/* a transistor stage's soft clip without a division: 1.5 x - 0.5 x^3, flat past 1 (Q15) */
+static int32_t shd_cubic(int32_t x)
+{
+    int32_t x3;
+    if (x >= 32768)
+        return 32767;
+    if (x <= -32768)
+        return -32767;
+    x3 = (int32_t)((((int64_t)x * x >> 15) * x) >> 15);
+    return (3 * x - x3) >> 1;
+}
+/* a triode's curve: grid conduction rounds the top early, cutoff clips the bottom harder and later (to 1.5) */
+static int32_t shd_triode(int32_t p)
+{
+    return p >= 0 ? shd_soft(p) : -((shd_diode(-p - (-p >> 2)) * 3) >> 1);   /* (x 3/4 in, x 3/2 out: slope 1 at 0) */
+}
+
+/* OVRDRV: a 12AX7 gain stage. The coupling capacitor (80 Hz) in; x1 .. x48; the grid: peaks that drive it positive
+ * charge the coupling capacitor, biasing the stage colder for a moment (the blocking sag after a hit, dynamic
+ * asymmetry); the triode's curve at 2x; the plate's DC out (20 Hz); the Miller capacitance's roll-off, 9 kHz at
+ * low gain to 4.5 kHz at full */
+static int32_t shd_tube(int32_t x, uint32_t d, shd_ds_t *st)
+{
+    int32_t u, m, y;
+    SHD_LP(st->f[0], x, SHD_A80);
+    u = shd_sat((int32_t)(((int64_t)(x - st->f[0]) * SHD_TUBE_G[d]) >> 8), 1 << 23);
+    if (u > st->env)
+        st->env += (u - st->env) >> 5;              /* ~0.7 ms to charge */
+    else
+        st->env -= st->env >> 11;                   /* ~46 ms to let go */
+    u -= st->env >> 2;
+    m = (st->prev + u) >> 1;                        /* 2x: the midpoint, then the sample, averaged */
+    st->prev = u;
+    y = (shd_triode(m) + shd_triode(u)) >> 1;
+    SHD_LP(st->f[1], y, SHD_A20);
+    y -= st->f[1];
+    SHD_LP(st->f[2], y, SHD_TUBE_LP[d]);
+    return (st->f[2] * 17000) >> 15;              /* (level: about the clean signal's at low drive) */
+}
+
+/* DIST: a ProCo RAT. The LM308's gain is 1 + R / Z with DISTORTION's R (0 .. 100 k) over two legs to ground,
+ * 47 R + 2.2 uF (above 1.5 kHz) and 560 R + 4.7 uF (above 60 Hz): the highs gain up to x2100, the lows x180,
+ * so the bass stays tight; its gain-bandwidth closes the top as the gain rises (20 kHz .. 2.5 kHz); the rails
+ * round it at ~7.5 diode drops; the 1N914 pair to ground clips it hard (2x); the FILTER after, ~4.5 kHz */
+static int32_t shd_rat(int32_t x, uint32_t d, shd_ds_t *st)
+{
+    int32_t u, m, y;
+    int64_t g;
+    SHD_LP(st->f[0], x, SHD_A60);
+    SHD_LP(st->f[1], x, SHD_A1539);
+    g = (int64_t)(x - st->f[1]) * SHD_RAT_HI[d] + (int64_t)(x - st->f[0]) * SHD_RAT_LO[d];
+    g = x + (g >> 8);
+    u = (int32_t)(g > (1 << 23) ? 1 << 23 : g < -(1 << 23) ? -(1 << 23) : g);
+    SHD_LP(st->f[2], u, SHD_RAT_LP[d]);
+    u = (shd_soft(st->f[2] * 2 / 15) * 15) >> 1;   /* the rails: 7.5 x tanh(u / 7.5) */
+    m = (st->prev + u) >> 1;
+    st->prev = u;
+    y = (shd_diode(m) + shd_diode(u)) >> 1;
+    SHD_LP(st->f[3], y, SHD_A4500);
+    return (st->f[3] * 18000) >> 15;
+}
+
+/* FUZZ: after Death By Audio's Fuzz War, a Supa Tone Bender (Big Muff) pushed further: three transistor stages of
+ * x1 .. x14 each (x2700 in all), with the Muff's coupling and roll-off between them; a starved first stage's sputter:
+ * input under a threshold that rises with the gain (to ~5 % of full scale) is dropped, (notes break up and gate as they decay); the
+ * Muff's tone stack at noon (400 Hz low-pass and 1.1 kHz high-pass, mixed: the scooped mids); a clipping stage
+ * (diodes, x3, 2x) and the output. At DRIVE 0 it only shapes the tone, as the pedal at its lowest */
+static int32_t shd_war(int32_t x, uint32_t d, shd_ds_t *st)
+{
+    int32_t g = SHD_WAR_G[d], th = SHD_WAR_TH[d], a, m, y;
+    SHD_LP(st->f[0], x, SHD_A120);
+    a = x - st->f[0];
+    a = a > th ? a - th : a < -th ? a + th : 0;    /* the sputter: what can't turn the first stage on is lost */
+    a = shd_cubic(shd_sat((int32_t)(((int64_t)a * g) >> 8), 1 << 22));
+    SHD_LP(st->f[1], a, SHD_A200);
+    a -= st->f[1];
+    SHD_LP(st->f[2], a, SHD_A5500);
+    a = shd_cubic((st->f[2] * g) >> 8);
+    a = shd_cubic((a * g) >> 8);
+    SHD_LP(st->f[3], a, SHD_A400);
+    SHD_LP(st->f[4], a, SHD_A1100);
+    a = (st->f[3] + a - st->f[4]) * 3 >> 1;         /* the tone stack (1/2 each), then x3 into the diodes */
+    m = (st->prev + a) >> 1;
+    st->prev = a;
+    y = (shd_diode(m) + shd_diode(a)) >> 1;
+    SHD_LP(st->f[5], y, SHD_A20);                   /* the output capacitor: no DC (the stages' x2700 finds any) */
+    return ((y - st->f[5]) * 19000) >> 15;
+}
+
+static int32_t shd_shape(uint32_t type, int32_t x, uint32_t drive, shd_ds_t *st)
 {
     int32_t p, y;
     drive = drive > 127u ? 127u : drive;
+    switch (type) {                                 /* the analog models */
+    case SHD_D_SOFT: return shd_tube(shd_sat(x, 1 << 17), drive, st);
+    case SHD_D_HARD: return shd_rat(shd_sat(x, 1 << 17), drive, st);
+    case SHD_D_FUZZ: return shd_war(shd_sat(x, 1 << 17), drive, st);
+    default: break;
+    }
     p = (int32_t)(((int64_t)shd_sat(x, 1 << 17) * SHD_DRIVE_Q8[drive]) >> 8);
     switch (type) {
-    case SHD_D_SOFT: y = shd_soft(p); break;
-    case SHD_D_HARD: y = shd_sat(p, 32767); break;
     case SHD_D_FOLD: {
         int32_t f = (shd_sat(p, 1 << 22) + 32768) & 131071;
         y = f < 65536 ? f - 32768 : 98304 - f;
@@ -219,14 +335,13 @@ static int32_t shd_shape(uint32_t type, int32_t x, uint32_t drive, int32_t *held
         return (shd_sat(x, 32767) >> sh) * (1 << sh);
     }
     case SHD_D_DECIM:
-        if (++*cnt >= 1u + drive * 31u / 127u) {
-            *cnt = 0;
-            *held = x;
+        if (++st->cnt >= 1u + drive * 31u / 127u) {
+            st->cnt = 0;
+            st->held = x;
         }
-        return *held;
+        return st->held;
     case SHD_D_HALF: y = p > 0 ? shd_soft(p) : shd_soft(p) >> 2; break;
     case SHD_D_TUBE: y = p >= 0 ? shd_soft(p) : (shd_soft(p + (p >> 1)) * 3) >> 2; break;
-    case SHD_D_FUZZ: y = shd_sat(shd_soft(shd_sat(p, 1 << 23) * 4), 26000) * 5 / 4; break;   /* near square */
     default: return x;
     }
     return (y * SHD_MAKEUP[drive]) >> 15;
@@ -431,8 +546,8 @@ static void shard_note_on(track_t *t, voice_t *v)
     v->s[5] = 32767;
     v->s[7] = 0;
     v->env_out = 0;
-    x->lo = x->bd = x->held = 0;
-    x->hcnt = 0;
+    x->lo = x->bd = 0;
+    memset(&x->ds, 0, sizeof x->ds);
     x->choked = 0;
     x->fadein = SHD_FADE;
     x->cw = 0;
@@ -626,7 +741,7 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
             y = sl->filt == SHD_F_LP ? x->lo : sl->filt == SHD_F_HP ? hi : x->bd;
         }
         if (sl->dtype)
-            y = shd_shape(sl->dtype, y, sl->drv, &x->held, &x->hcnt);
+            y = shd_shape(sl->dtype, y, sl->drv, &x->ds);
         /* the slice's envelope: attack, a squared decay (127: none) to SUSTAIN, held; RELEASE (OFF: the track's) from
          * the key's release (not ONE's) */
         if (x->stage < 3u && sl->rel && !v->gate && mode != SHD_M_ONE)
@@ -752,7 +867,7 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
             mem->fol[b] += a > mem->fol[b] ? (a - mem->fol[b]) >> 4 : -(mem->fol[b] >> 11);
             tg = !bs->gate[b] || mem->fol[b] > SHD_GATE_Q15[bs->gate[b] & 127] ? 32768 : 0;
             mem->gain[b] += (tg - mem->gain[b]) >> 7;
-            y = shd_shape(bs->type[b], in, dr[b], &mem->held[b], &mem->cnt[b]);
+            y = shd_shape(bs->type[b], in, dr[b], &mem->ds[b]);
             y = (int32_t)(((int64_t)y * mem->gain[b]) >> 15);
             wet += (int32_t)(((int64_t)y * ((int32_t)(bs->level[b] & 127) * 258)) >> 15);
         }

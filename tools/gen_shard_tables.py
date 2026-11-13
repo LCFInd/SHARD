@@ -32,6 +32,25 @@ table("uint32_t", "SHD_SUS_ENV", [round((1 << 30) * math.sqrt(i / 127)) for i in
 ch = lambda i: 90 * (6000 / 90) ** (i / 127)
 table("uint32_t", "SHD_COMB_D", [min(510 * 256, round(256 * FS / ch(i))) for i in range(128)])
 table("int32_t", "SHD_COMB_G", [round(32768 * 0.96 * (i / 127) ** 0.8) for i in range(128)])
+# the analog shapers (eng_shard.c shd_tube / shd_rat / shd_war): one-pole coefficients (Q15) at 44.1 kHz
+a1 = lambda f: round(32768 * (1 - math.exp(-2 * math.pi * f / FS)))
+for name, f in [("20", 20), ("60", 60), ("80", 80), ("120", 120), ("200", 200), ("400", 400), ("1100", 1100),
+                ("1539", 1539), ("4500", 4500), ("5500", 5500), ("9000", 9000)]:
+    out.append(f"#define SHD_A{name} {a1(f)}")
+# OVRDRV (a 12AX7 stage): gain x1 .. x48 (Q8); its Miller roll-off 9 kHz .. 4.5 kHz
+dn = [i / 127 for i in range(128)]
+table("int32_t", "SHD_TUBE_G", [round(256 * 48 ** d) for d in dn])
+table("int32_t", "SHD_TUBE_LP", [a1(9000 * 0.5 ** d) for d in dn])
+# DIST (a RAT): DISTORTION's 100 k log pot: R 0 .. 100 k; the op-amp's legs to ground: 47 R + 2.2 uF (1.5 kHz) and
+# 560 R + 4.7 uF (60 Hz): their gains R / 47 and R / 560 (Q8); the LM308's bandwidth, GBW / gain, 20 kHz .. 2.5 kHz
+R = [100000 * d ** 2.4 for d in dn]
+table("int32_t", "SHD_RAT_HI", [round(256 * r / 47) for r in R])
+table("int32_t", "SHD_RAT_LO", [round(256 * r / 560) for r in R])
+table("int32_t", "SHD_RAT_LP", [a1(max(2500, min(20000, 1.6e6 / (1 + r / 47)))) for r in R])
+# FUZZ (a Fuzz War: gain stages, a Muff-style tone stack, a clipping stage): each of three stages x1 .. x14 (Q8),
+# x2700 in all; the sputter gate's threshold (Q15) rising with the gain
+table("int32_t", "SHD_WAR_G", [round(256 * 14 ** d) for d in dn])
+table("int32_t", "SHD_WAR_TH", [round(1800 * d ** 2) for d in dn])
 out.append("#endif")
 path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "firmware", "src", "shard_tables.h")
 open(path, "w").write("\n".join(out) + "\n")
