@@ -163,6 +163,10 @@ static void slice_knob(uint32_t slot, int32_t steps)
         return;
     }
     if (slot == 0u) {
+#if FELUCCA_SHARD
+        if (j >= n && steps > 0 && ENGINES[TSEL->eng_req % NENGINES] == &ENG_SHARD)
+            ui_message("BUS IS ON SLICE FX");          /* (past END: the BUS is the next page's, the same marker) */
+#endif
         sp.sel = (uint8_t)clamp((int32_t)j + steps, 0, (int32_t)n);
         return;
     }
