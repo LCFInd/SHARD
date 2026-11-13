@@ -579,6 +579,22 @@ static void shard_note_on(track_t *t, voice_t *v)
         }
 }
 
+/* LOOP (ui_slice.c): where the part's voices are (source samples) and the slice each note began on; max at most.
+ * The main loop reads words the audio writes: a position a block old at worst */
+static uint32_t shd_heads(track_t *t, uint32_t *pos, uint8_t *first, uint32_t max)
+{
+    uint32_t i, n = 0;
+    for (i = 0; i < NVOICE && n < max; i++) {
+        voice_t *v = &t->v[i];
+        shd_vx_t *x = shd_vx(t, v);
+        if (!v->active || ((uint32_t)v->s[4] & 7u) == SLC_SINE)   /* (PLAY waiting for its next slice: still there) */
+            continue;
+        pos[n] = (uint32_t)v->ph[0];
+        first[n++] = x->first;
+    }
+    return n;
+}
+
 /* ONE: no release; the ADSR as it is otherwise (PLAY and GATE release, LOOP repeats while held) */
 static int32_t shard_amp(track_t *t, voice_t *v, int32_t adsr)
 {

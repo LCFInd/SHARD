@@ -34,6 +34,7 @@ static const struct { const char *title, *hint; } HELP_PAGE[] = {
     {"FILTER", "[K1]LP BP HP[K2]CUTOFF[EDIT]VOICE"},
     {"LANES", H_LANES},
     {"LANES 2", H_LANES},
+    {"LOOP", "[KEYS]SLICE[K1-4]ENVELOPE"},   /* (SHARD: ui_slice.c) */
     {"SLICES", "[K1]SLICE[K2]MOVE[OCT+]SPLIT, JOIN"},
     {"SLICE FX", "[K1]SLICE, BUS[K2]PARAM[K4]ALL"},   /* (SHARD: ui_slice.c) */
     {"BOUNCE", "[K1]BARS[K2]FROM[K3]TO[OCT+]BOUNCE"},   /* (the mangler: bounce.c) */

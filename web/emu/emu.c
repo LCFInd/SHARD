@@ -285,6 +285,13 @@ EXPORT(emu_set_engine) void emu_set_engine(uint32_t t, uint32_t e, uint32_t pres
 }
 EXPORT(emu_select) void emu_select(uint32_t t) { song.sel = (uint8_t)(t % NTRK); ui.force = 1; }
 EXPORT(emu_playing) uint32_t emu_playing(void) { return song.playing; }
+EXPORT(emu_heads) uint32_t emu_heads(void)          /* (tests: the selected SHARD part's voices playing, LOOP) */
+{
+    uint32_t pos[8], i, act = 0;
+    uint8_t first[8];
+    for (i = 0; i < NVOICE; i++) act += TSEL->v[i].active ? 1u : 0u;
+    return act << 8 | (ENGINES[TSEL->eng_req % NENGINES] == &ENG_SHARD ? shd_heads(TSEL, pos, first, 8u) : 0xFFu);
+}
 
 /* the emulator's starting set: track 1 SHARD RECYCLE playing the break's slices in order (PATTERNS 11, SLICES),
  * track 2 SHARD CHOP KIT on CHOP (9), muted; track 4 DRUM on BEAT (12), muted; track 1 selected */

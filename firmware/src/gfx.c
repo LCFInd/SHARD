@@ -97,6 +97,7 @@ static struct {
     uint16_t pal[5];             /* the five as stored: color1 color2 color3 primary secondary (the editor shows them) */
     uint16_t bg, surf, text, theme, accent;
     uint16_t mid, dim, line, sel, tint, ink, rec, raise, key, lane, grid, ok;
+    uint16_t env;                /* SHARD's LOOP: the envelope's red, in every palette (palette_set) */
     uint8_t light, mono;
     uint8_t style;               /* MENU > STYLE (ui.c style_apply): ST_FLAT, ST_LINE */
     uint32_t gen;                /* bumped by palette_set (the text ramps follow) */
@@ -191,6 +192,7 @@ static void palette_set(uint32_t i)
         ux.dim = ux.line = ux.raise = ux.lane = UI_BW_GREY;   /* the one grey: inactive, tracks, wells */
         ux.tint = ux.grid = p->c1;
     }
+    ux.env = RGB(255, 48, 40);
 #if FELUCCA_MANGLER
     /* SWISS, the mangler's one look, whatever COLOR says: black and white and four greys, no colour at all. White:
      * text, values, the active thing, a selection (its INK black: inverted). The greys: labels (MID), the inactive (DIM),

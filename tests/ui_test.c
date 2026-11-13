@@ -2011,27 +2011,27 @@ static int test_information(void)
 static int screen_gray(void)
 {
     uint32_t i;
-    uint16_t acc = ux.accent, rec = ux.rec, okc = ux.ok;
+    uint16_t acc = ux.accent, rec = ux.rec, okc = ux.ok, env = ux.env;
     if (ux.mono) {                                  /* GREY's two colours (secondary, primary) and the battery's green (1.8)
-                                                     * are drawn gray for this check */
-        ux.accent = ux.rec = ux.ok = ux.text; ux.gen++;
+                                                     * are drawn gray for this check (and SHARD LOOP's red) */
+        ux.accent = ux.rec = ux.ok = ux.env = ux.text; ux.gen++;
         ui.force = 1; ui_draw();
     }
     for (i = 0; i < 240u * 240u; i++) {
         uint16_t c = swap16(host_screen[i]);
         if ((c >> 11) != (c & 31u) || ((c >> 5) & 63u) != (c >> 11) * 2u) {
-            ux.accent = acc; ux.rec = rec; ux.ok = okc; ux.gen++; ui.force = 1;
+            ux.accent = acc; ux.rec = rec; ux.ok = okc; ux.env = env; ux.gen++; ui.force = 1;
             return 0;
         }
     }
-    ux.accent = acc; ux.rec = rec; ux.ok = okc; ux.gen++; ui.force = 1;
+    ux.accent = acc; ux.rec = rec; ux.ok = okc; ux.env = env; ux.gen++; ui.force = 1;
     return 1;
 }
 static int screen_neutral(void)
 {
     uint32_t i;
-    uint16_t acc = ux.accent, rec = ux.rec, okc = ux.ok;
-    ux.accent = ux.rec = ux.ok = ux.text; ux.gen++;    /* (1.8: MONO's three colours, as GREY's, drawn white for this check) */
+    uint16_t acc = ux.accent, rec = ux.rec, okc = ux.ok, env = ux.env;
+    ux.accent = ux.rec = ux.ok = ux.env = ux.text; ux.gen++;    /* (1.8: MONO's three colours, as GREY's, drawn white for this check) */
     ui.force = 1; ui_draw();
     for (i = 0; i < 240u * 240u; i++) {
         uint16_t c = swap16(host_screen[i]);
@@ -2039,7 +2039,7 @@ static int screen_neutral(void)
         if ((c >> 11) != (c & 31u) || d < -2 || d > 2)
             break;
     }
-    ux.accent = acc; ux.rec = rec; ux.ok = okc; ux.gen++; ui.force = 1;
+    ux.accent = acc; ux.rec = rec; ux.ok = okc; ux.env = env; ux.gen++; ui.force = 1;
     return i == 240u * 240u;
 }
 static int mono_screens(uint32_t pal, int (*chk)(void), uint32_t *n)
@@ -3826,6 +3826,7 @@ static int test_slices(void)
     set_engine_of(TSEL, 13u);                        /* SLICE CHOP: BREAK, 16 */
     bad += check("SLICES: SLICE's EDIT cycle EDIT 1 EDIT 2 SLICES VOICE VOICE 2 VOICE 3 EDIT 1", engine_cycle(CYC_S, NELEM(CYC_S)));
     go_page(GR_SLICES); frame();
+    sp.sel = 0;                                      /* (the marker: an earlier test's keys on a SHARD LOOP page move it) */
     n = slice_count();
     p0 = TSEL->p[P_E1];
     turn(EN_K1, 2); turn(EN_K2, 3);

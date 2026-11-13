@@ -396,7 +396,7 @@ static uint32_t large_kind(void)
         return home_tracks() ? LK_LABEL : LK_TALL;      /* a list page; the rows' names in M: draw_home_tracks) */
     g = cur_page()->graph;
     return g == GR_BROWSE || g == GR_SLOTS || g == GR_USER || g == GR_PATS || g == GR_SONG || g == GR_ROLL ||
-           g == GR_SLICES || g == GR_SHFX || g == GR_BOUNCE || g == GR_EVENTS ? LK_LABEL : LK_TALL;
+           g == GR_SLICES || g == GR_SHFX || g == GR_LOOP || g == GR_BOUNCE || g == GR_EVENTS ? LK_LABEL : LK_TALL;
 }
 /* the geometry of the page shown: the cards' height, the panel's top and height */
 static uint32_t card_h(void) { return large_kind() == LK_TALL ? LG_CARD_H : CARD_H; }
@@ -436,10 +436,12 @@ static int page_visible(uint32_t i)
     if (PAGES[i].graph >= GR_FMOP && PAGES[i].graph <= GR_FMENV)
         return TSEL->eng_req % NENGINES == ENGI_FM6;
 #if FELUCCA_SHARD
-    if (PAGES[i].graph == GR_SHFX)
+    if (PAGES[i].graph == GR_SHFX || PAGES[i].graph == GR_LOOP)
         return TSEL->eng_req % NENGINES == ENGI_SHARD;
+    if (PAGES[i].fam == FAM_ENV && PAGES[i].graph == GR_ADSR)   /* SHARD: its ATK DEC SUS REL are on LOOP */
+        return TSEL->eng_req % NENGINES != ENGI_SHARD;
 #else
-    if (PAGES[i].graph == GR_SHFX)
+    if (PAGES[i].graph == GR_SHFX || PAGES[i].graph == GR_LOOP)
         return 0;
 #endif
 #if FELUCCA_SLICE
@@ -454,9 +456,12 @@ static int page_visible(uint32_t i)
              PAGES[i].id[0] <= P_FM4_LEVEL) || (FELUCCA_FM4 && TSEL->eng_req % NENGINES == ENGI_DIGITAL);
 }
 
-static uint32_t page_first(uint32_t fam)
+static uint32_t page_first(uint32_t fam)              /* the family's first page shown (LOOP: SHARD's) */
 {
     uint32_t i;
+    for (i = 0; i < NPAGES; i++)
+        if (PAGES[i].fam == fam && page_visible(i))
+            return i;
     for (i = 0; i < NPAGES; i++)
         if (PAGES[i].fam == fam)
             return i;

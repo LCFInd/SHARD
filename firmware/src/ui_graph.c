@@ -692,6 +692,139 @@ static void graph_slices(void)
     cv_text(12, 104, &AF_M, t, T_MID);                  /* the slice's detail (M): its capitals rows 108 .. 118 */
     cv_text_r(228, 104, &AF_M, N_SLC_SRC[src], slc_slot_of_src(src) < SMP_USER_SLOTS ? T_THEME : T_DIM, T_SURF);
 }
+#if FELUCCA_SHARD
+/* LOOP (SHARD): the whole loop. The waveform (THEME) with every marker (MID), the slice picked (a key, or KNOB 1 on
+ * SLICES / SLICE FX) its marker in TEXT; a slice a voice is playing inverted (TEXT, its waveform cut out in BG) with
+ * the voice's playhead a BG line. Over it the track's envelope in red, the one colour of the look (LP_RED): ATK
+ * DEC SUS REL drawn in the loop's time from the start of the slice the last note began on (none playing: the picked
+ * one), held for that slice (a step's worth) then released; MODE ONE has no release. The knob being turned: its
+ * segment twice as thick. Under it the loop's tempo, bars and DIV, and the source */
+#define LP_RED ux.env
+#define LP_HEADS 8u
+static uint32_t loop_heads(uint32_t *pos, uint8_t *first)
+{
+    return ENGINES[TSEL->eng_req % NENGINES] == &ENG_SHARD ? shd_heads(TSEL, pos, first, LP_HEADS) : 0u;
+}
+static uint32_t loop_env_t(const int16_t *p, uint32_t id)   /* ATK, DEC or REL: output samples (ESYNC: note values) */
+{
+    int32_t v = p[id];
+    if (p[P_ESYNC])
+        return beat_samples() * ESYNC_UNITS[esync_idx(v)] / 96u;
+    return TIME_MS_X10[v & 127] * 441u / 100u;
+}
+static int32_t loop_exp(uint32_t t, uint32_t T)          /* exp(-4.6 t / T), Q15 (-40 dB at T, as the envelope) */
+{
+    uint32_t x;
+    if (!T)
+        return 0;
+    x = (uint32_t)((uint64_t)t * 1274u / T);            /* 4.6 / ln 2 = 6.64 octaves: 1274 / 192 */
+    return x >= 1536u ? 0 : (int32_t)(pow2_q16(-(int32_t)x) >> 1);
+}
+/* the envelope t output samples into a note held for h: 0..32767 */
+static int32_t loop_env_at(const int16_t *p, uint32_t t, uint32_t h, int one)
+{
+    uint32_t A = loop_env_t(p, P_ATK), D = loop_env_t(p, P_DEC), R = loop_env_t(p, P_REL);
+    int32_t sus = p[P_SUS] * 32767 / 127, lh;
+#define LP_HELD(u) ((u) < A ? (int32_t)((uint64_t)(u) * 32767u / A) : \
+                    sus + (int32_t)((int64_t)(32767 - sus) * loop_exp((u) - A, D) >> 15))
+    if (one || t < h)
+        return LP_HELD(t);
+    lh = LP_HELD(h);
+    return (int32_t)((int64_t)lh * loop_exp(t - h, R) >> 15);
+#undef LP_HELD
+}
+static void graph_loop(void)
+{
+    uint32_t src, div, n = slice_count(), len, i, k, nh, out, hz, anc, a0, a1, j = slice_sel(), seg = 9;
+    uint32_t pos[LP_HEADS], cols[LP_HEADS];
+    uint8_t first[LP_HEADS], lit[64] = {0};
+    const slc_src_t *s = slice_src(&src, &div);
+    const int16_t *p = TSEL->p;
+    int32_t py = 0, one;
+    char t[24];
+    if (!s || !n) {
+        panel_alert(ICON_X_NOFILE, "SAMPLE NOT FOUND");
+        return;
+    }
+    len = s->len ? s->len : 1u;
+    slice_env(0, len);
+    nh = loop_heads(pos, first);
+    for (k = 0; k < nh; k++) {                       /* the slices playing */
+        uint32_t q = pos[k] < len ? pos[k] : len - 1u, m;
+        for (m = n; m > 1u && slice_mark(m - 1u) > q; m--)
+            ;
+        lit[(m - 1u) & 63u] = 1;
+        cols[k] = q * SP_COLS / len;
+    }
+#define LX(q) (12 + (int32_t)((uint64_t)(q) * SP_COLS / len))
+    for (i = 0; i < n && i < 64u; i++)
+        if (lit[i])
+            cv_rect(LX(slice_mark(i)), 6, LX(slice_mark(i + 1u)) - LX(slice_mark(i)), 81, T_TEXT);
+    for (i = 0; i < SP_COLS; i++) {
+        uint32_t q = (uint32_t)((uint64_t)i * len / SP_COLS), m;
+        for (m = n; m > 1u && slice_mark(m - 1u) > q; m--)
+            ;
+        cv_line(12 + (int32_t)i, 46 - sp.hi[i] * 38 / 64, 12 + (int32_t)i, 46 - sp.lo[i] * 38 / 64,
+                lit[(m - 1u) & 63u] ? T_BG : T_THEME);
+    }
+    for (i = 1; i < n; i++)                          /* the markers (a playing slice's edges are its block's) */
+        if (!lit[i] && !lit[i - 1u])
+            cv_rect(LX(slice_mark(i)), 4, 1, 85, T_MID);
+    if (j < n)
+        cv_rect(LX(slice_mark(j)) > 226 ? 226 : LX(slice_mark(j)), 2, 2, 89, T_TEXT);
+    for (k = 0; k < nh; k++)                         /* the playheads */
+        cv_rect(12 + (int32_t)cols[k], 6, 1, 81, T_BG);
+    /* the envelope, in the loop's time: PLAY the loop at the song's tempo, otherwise the material at its rate */
+    hz = (s->rate >> 4) * 44100u >> 12;
+    out = clamp(p[P_E4], 0, SHD_M_PLAY) == SHD_M_PLAY ? shd_loop_len(p, s)
+                                                      : (uint32_t)((uint64_t)len * 44100u / (hz ? hz : 1u));
+    anc = nh ? first[nh - 1u] % n : j < n ? j : 0u;
+    a0 = slice_mark(anc);
+    a1 = slice_mark(anc + 1u);
+    one = shd_mode(p, &shd_kit[src < SHD_NSRC ? src : 0u].sl[anc % SLC_AUTO]) == SHD_M_ONE;
+    if (ui.hot_t && ui.hot_col < 4u)
+        seg = ui.hot_col;                            /* the knob being turned: 0 ATK, 1 DEC, 2 SUS, 3 REL */
+    for (i = 0; i < SP_COLS; i++) {
+        uint32_t ts = (uint32_t)((uint64_t)i * out / SP_COLS);   /* output samples since the anchor */
+        uint32_t h = (uint32_t)((uint64_t)(a1 - a0) * out / len), A = loop_env_t(p, P_ATK);
+        int32_t lv = loop_env_at(p, ts, h, one), y = 86 - lv * 78 / 32767, x = 12 + (int32_t)((LX(a0) - 12 + i) % SP_COLS);
+        uint32_t part = one || ts < h ? (ts < A ? 0u : 1u) : 3u;
+        int w = (part == seg || (seg == 2u && part == 1u && ts >= A + loop_env_t(p, P_DEC))) ? 3 : 2;
+        if ((!one && ts >= h && lv < 1300) || (one && ts >= h)) {   /* released (to ~-28 dB: the rest would hug
+                                                                     * the floor), or ONE's slice over: down, done */
+            if (i && x > 12)
+                cv_line_t(x - 1, py, x - 1, 86, LP_RED, w);
+            break;
+        }
+        if (i && x > 12)
+            cv_line_t(x - 1, py, x, y, LP_RED, w);
+        py = y;
+    }
+#undef LX
+    {   /* the loop: its tempo, its bars, DIV */
+        uint32_t b10 = shd_bpm10(src);
+        str_cpy(t, "", sizeof t);
+        if (b10) {
+            fmt_fix(t, (int32_t)b10, 1);
+            str_cpy(t + str_len(t), " BPM  ", sizeof t - str_len(t));
+        }
+        str_cpy(t + str_len(t), "DIV ", sizeof t - str_len(t));
+        str_cpy(t + str_len(t), N_SHD_DIV[clamp(p[P_E1], 0, SHD_NDIV - 1)], sizeof t - str_len(t));
+        cv_text(12, 104, &AF_M, t, T_MID);
+        cv_text_r(228, 104, &AF_M, N_SLC_SRC[src], slc_slot_of_src(src) < SMP_USER_SLOTS ? T_THEME : T_DIM, T_SURF);
+    }
+}
+/* graph_signature: the voices' columns, so the playheads move */
+static uint32_t loop_sig(void)
+{
+    uint32_t pos[LP_HEADS], k, n, len = slice_count() ? (uint32_t)slice_mark(slice_count()) : 1u, h = 7u;
+    uint8_t first[LP_HEADS];
+    n = loop_heads(pos, first);
+    for (k = 0; k < n; k++)
+        h = (h ^ (pos[k] / (len / SP_COLS + 1u)) ^ (uint32_t)first[k] << 20) * 16777619u;
+    return h ^ n * 92821u ^ (ui.hot_t ? ui.hot_col + 1u : 0u) * 7u;
+}
+#endif
 #endif
 
 /* WHEEL: the nine drawbars as rounded bars over RAISE slots (the bars of the knob just turned: the accent),
@@ -1246,6 +1379,9 @@ static uint32_t graph_signature(void)
     if ((pg->graph == GR_SLICES || pg->graph == GR_SHFX) && slice_page_ok()) h ^= slice_sig();
 #if FELUCCA_SHARD
     if (pg->graph == GR_SHFX && slice_page_ok()) h = (h ^ shfx_sig()) * 16777619u;
+#if FELUCCA_SHARD
+    if (pg->graph == GR_LOOP && slice_page_ok()) h = (h ^ slice_sig() ^ loop_sig()) * 16777619u;
+#endif
 #endif
 #endif
     if (pg->scope == SC_ENGINE && (ENG_REF_IS(ENGINES[t->eng_req % NENGINES], ENG_WHEEL) || t->eng_req % NENGINES == ENGI_FM6 ||
@@ -2404,6 +2540,12 @@ static void draw_graph(void)
         case GR_SHFX:                                   /* (SHARD's SLICE FX: the same view, ui_slice.c) */
             cv_oy = 0;
             graph_slices();
+            break;
+#endif
+#if FELUCCA_SHARD
+        case GR_LOOP:
+            cv_oy = 0;
+            graph_loop();
             break;
 #endif
         case GR_FMOP:

@@ -623,13 +623,13 @@ static uint32_t mono_bad;
  * distance from the gray axis, per channel) points where C's does. So: gray, or its chroma points to primary's or secondary's */
 static int grey_ok(uint16_t c)
 {
-    static int32_t dir[3][3];
+    static int32_t dir[4][3];                          /* (and SHARD's LOOP: its envelope's red, LP_RED) */
     static uint32_t init;
     int32_t v[3], m, k, n2 = 0, j;
     if ((c >> 11) == (c & 31u) && ((c >> 5) & 63u) == (c >> 11) * 2u) return 1;
     if (init != ux.gen + 1u) {                         /* (the palette's: GREY's and MONO's colours are the same) */
-        for (j = 0; j < 3; j++) {
-            uint16_t q = j == 2 ? ux.ok : j ? ux.accent : ux.rec;
+        for (j = 0; j < 4; j++) {
+            uint16_t q = j == 3 ? ux.env : j == 2 ? ux.ok : j ? ux.accent : ux.rec;
             int32_t w[3] = {(q >> 11) * 255 / 31, ((q >> 5) & 63) * 255 / 63, (q & 31) * 255 / 31};
             m = (w[0] + w[1] + w[2]) / 3;
             for (k = 0; k < 3; k++) dir[j][k] = w[k] - m;
@@ -640,7 +640,7 @@ static int grey_ok(uint16_t c)
     m = (v[0] + v[1] + v[2]) / 3;
     for (k = 0; k < 3; k++) { v[k] -= m; n2 += v[k] * v[k]; }
     if (n2 <= 3 * 4 * 4) return 1;                    /* (the 5-6-5 rounding of a near-gray) */
-    for (j = 0; j < 3; j++) {
+    for (j = 0; j < 4; j++) {
         int64_t dot = 0, nd = 0;
         for (k = 0; k < 3; k++) { dot += (int64_t)v[k] * dir[j][k]; nd += (int64_t)dir[j][k] * dir[j][k]; }
         if (dot > 0 && (dot * dot * 100 >= (int64_t)n2 * nd * 97 ||        /* cos^2 >= 0.97, */
@@ -805,7 +805,7 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
        S_MENU_SELECT, S_PROJECT_ERASE, S_CONFIRM_ERASE_PROJ, S_TOOLS_CLEAN, S_CONFIRM_CLEAN,
        S_MENU_MIDI_TRACK, S_MENU_MIDI_TCH_UNUSED, S_MENU_MIDI_AUTO, S_HOME_TRACKS_MIDI, S_MIXER_MIDI, S_EDIT_PHASE_FOLD,
        S_SHFX_SLICE, S_SHFX_BUS, S_SHFX_ENUM, S_SHFX_NOFILE, S_SHARD_EDIT1, S_SHARD_EDIT2, S_SHARD_PRESETS,
-       S_SHARD_SLICES, S_SHARD_HOME,
+       S_SHARD_SLICES, S_SHARD_HOME, S_LOOP, S_LOOP_PLAY, S_LOOP_REL, S_ENV_SHARD,
 #if FELUCCA_MANGLER
        S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY,
 #endif
@@ -842,7 +842,7 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "menu_select", "project_erase", "confirm_erase_project", "tools_clean", "confirm_clean",
     "menu_midi_track", "menu_midi_channels_unused", "menu_midi_auto_select", "home_tracks_midi", "mixer_midi", "edit_phase_fold",
     "shard_slice_fx", "shard_slice_fx_bus", "shard_slice_fx_route", "shard_slice_fx_nofile", "shard_edit1", "shard_edit2",
-    "shard_presets", "shard_slices", "shard_home",
+    "shard_presets", "shard_slices", "shard_home", "loop", "loop_playing", "loop_release", "env_family_shard",
 #if FELUCCA_MANGLER
     "bounce", "bounce_used", "bounce_busy",
 #endif
@@ -1692,6 +1692,27 @@ static void setup(int s)
     case S_SHARD_PRESETS: eng(ENGI_SHARD); go_page(GR_BROWSE); break;
     case S_SHARD_SLICES: eng(ENGI_SHARD); go_page(GR_SLICES); sp.sel = 5; ui.msg_t = 0; break;
     case S_SHARD_HOME: eng(ENGI_SHARD); song.playing = 1; break;
+    /* EDIT > LOOP (SHARD): BREAK whole, slice 5 picked, the envelope from it (DEC hot); two notes playing (their
+     * slices inverted, the playheads); a long release; ENV on a SHARD track (its first page: ENV DEST) */
+    case S_LOOP:
+        eng(ENGI_SHARD); open_family(FAM_EDIT); sp.sel = 4; TSEL->p[P_ATK] = 10; TSEL->p[P_DEC] = 70;
+        TSEL->p[P_SUS] = 40; ui.hot_col = 1; ui.hot_t = 30; ui.msg_t = 0;
+        break;
+    case S_LOOP_PLAY: {
+        uint32_t v;
+        eng(ENGI_SHARD); open_family(FAM_EDIT); sp.sel = 0; ui.msg_t = 0;
+        trk_note_on(TSEL, 60, 110);
+        trk_note_on(TSEL, 67, 110);
+        for (v = 0; v < NVOICE; v++)                    /* (no audio here: each voice halfway through its slice) */
+            if (TSEL->v[v].active)
+                TSEL->v[v].ph[0] += (uint32_t)(TSEL->v[v].ph[2] - TSEL->v[v].ph[0]) / 2u;
+        break;
+    }
+    case S_LOOP_REL:
+        eng(ENGI_SHARD); open_family(FAM_EDIT); sp.sel = 2; TSEL->p[P_E4] = 3; TSEL->p[P_REL] = 100; TSEL->p[P_SUS] = 90;
+        ui.hot_col = 3; ui.hot_t = 30; ui.msg_t = 0;
+        break;
+    case S_ENV_SHARD: eng(ENGI_SHARD); open_family(FAM_ENV); break;
 #endif
 #if FELUCCA_MANGLER
     case S_BOUNCE: go_page(GR_BOUNCE); bnc.bars = 3; bnc.from = 0; bnc.to = 1; ui.hot_col = 0; ui.hot_t = 30; break;

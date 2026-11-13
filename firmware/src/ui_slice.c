@@ -35,7 +35,8 @@ static int slice_page_ok(void)
 }
 static int slice_page_on(void)
 {
-    return !ui.home && (cur_page()->graph == GR_SLICES || cur_page()->graph == GR_SHFX) && slice_page_ok();
+    return !ui.home && (cur_page()->graph == GR_SLICES || cur_page()->graph == GR_SHFX || cur_page()->graph == GR_LOOP) &&
+           slice_page_ok();
 }
 /* the selected track's DIV as SLICE's code (SHARD lists its own: 2 .. 32, AUTO, MAN), and its MAN value */
 static uint32_t slice_div_code(void)
