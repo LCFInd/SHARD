@@ -453,41 +453,71 @@ let ctx = null, mode = "";
 function onMsg(m) {
   if (m.type === "screen") drawScreen(m.px, m.off);
   else if (m.type === "leds") drawLeds(m.leds);
-  else if (m.type === "ready") { $("pwr").classList.add("on"); $("pwrText").textContent = "On"; }
+  else if (m.type === "ready") { $("pwr").classList.add("on"); $("pwrText").textContent = "On"; if (readyWait) { readyWait.ok(); readyWait = null; } }
   else if (m.type === "status") { $("meter").style.width = Math.min(100, m.peak * 100) + "%"; slotsSeen(m.slots); }
   else if (m.type === "slot") slotLoaded(m);
   else if (m.type === "tempo") tempoChanged(m);
   else if (m.type === "sens" && slotInfo[m.k]) { slotInfo[m.k].hits = m.hits; slotText(m.k); say(`USR${m.k + 1}: ${m.hits} hits found at sensitivity ${$("sens").value}.`); }
   else if (m.type === "div" && !m.ok) say("Slices apply to a track playing SHARD: select one first.");
-  else if (m.type === "error") say("The firmware didn't start: " + m.msg);
+  else if (m.type === "error") { if (readyWait) { readyWait.bad(m.msg); readyWait = null; } else say("The firmware didn't start: " + m.msg); }
 }
-async function powerOn() {
-  $("powerBtn").disabled = true;
-  try {
-    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100, latencyHint: "interactive" });
-    await ctx.resume();
-  } catch (err) { say("Audio is blocked in this browser: " + err.message); $("powerBtn").disabled = false; return; }
-  const bytes = await (await fetch("emu.wasm")).arrayBuffer();
-  try {
-    if (!ctx.audioWorklet) throw new Error("no AudioWorklet");
-    await ctx.audioWorklet.addModule("emu-worklet.js");
-    const node = new AudioWorkletNode(ctx, "felucca", { numberOfInputs: 0, outputChannelCount: [2] });
-    node.port.onmessage = (e) => onMsg(e.data);
-    send = (m) => node.port.postMessage(m);
-    node.connect(ctx.destination);
-    send({ type: "wasm", bytes });
-    mode = "AudioWorklet";
-  } catch (err) {                                /* main thread, a 2048-sample buffer */
-    const core = new EmuCore((m) => onMsg(m));
-    await core.load(bytes);
+let readyWait = null;
+function startMain(bytes) {                      /* main thread, a 2048-sample buffer */
+  const core = new EmuCore((m) => onMsg(m));
+  return core.load(bytes).then(() => {
     const sp = ctx.createScriptProcessor(2048, 0, 2);
     sp.onaudioprocess = (e) => core.render(e.outputBuffer.getChannelData(0), e.outputBuffer.getChannelData(1));
     sp.connect(ctx.destination);
     send = (m) => core.handle(m);
     mode = "ScriptProcessor";
+  });
+}
+function startWorklet(bytes) {                   /* resolves once the firmware in the worklet says ready */
+  return ctx.audioWorklet.addModule("emu-worklet.js").then(() => new Promise((ok, bad) => {
+    const node = new AudioWorkletNode(ctx, "felucca", { numberOfInputs: 0, outputChannelCount: [2] });
+    const t = setTimeout(() => { node.port.onmessage = null; node.disconnect(); bad(new Error("the worklet didn't answer")); }, 4000);
+    readyWait = { ok: () => { clearTimeout(t); ok(); }, bad: (msg) => { clearTimeout(t); node.port.onmessage = null; node.disconnect(); bad(new Error(msg)); } };
+    node.port.onmessage = (e) => onMsg(e.data);
+    send = (m) => node.port.postMessage(m);
+    node.connect(ctx.destination);
+    send({ type: "wasm", bytes: bytes.slice(0) });
+    mode = "AudioWorklet";
+  }));
+}
+function keepAwake() {                           /* a browser that suspends audio stops the firmware: resume on a tap */
+  const kick = () => { if (ctx && ctx.state !== "running") ctx.resume().catch(() => {}); };
+  document.addEventListener("pointerdown", kick, true);
+  document.addEventListener("keydown", kick, true);
+  setInterval(() => {
+    if (ctx && ctx.state !== "running") say("The browser has paused audio. Tap anywhere to resume.");
+  }, 2000);
+}
+async function powerOn() {
+  $("powerBtn").disabled = true;
+  say("Starting…");
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = "playback";   /* iPhone: play with the silent switch on */
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100, latencyHint: "interactive" });
+    ctx.resume().catch(() => {});
+  } catch (err) { say("Audio is blocked in this browser: " + err.message); $("powerBtn").disabled = false; return; }
+  let bytes;
+  try {
+    const r = await fetch("emu.wasm");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    bytes = await r.arrayBuffer();
+  } catch (err) { say("Couldn't load the firmware (emu.wasm): " + err.message); $("powerBtn").disabled = false; return; }
+  try {
+    if (!ctx.audioWorklet || !window.AudioWorkletNode) throw new Error("no AudioWorklet");
+    await startWorklet(bytes);
+  } catch (err) {
+    readyWait = null;
+    try { await startMain(bytes); }
+    catch (err2) { say("The firmware didn't start: " + err2.message); $("powerBtn").disabled = false; return; }
   }
   $("boot").classList.add("gone");
   $("audioInfo").textContent = `Audio on, ${ctx.sampleRate / 1000} kHz, ${mode}`;
+  say("Running. Press PLAY (or Space) to hear the break.");
+  keepAwake();
 }
 $("powerBtn").addEventListener("click", powerOn);
 $("resetDemo").addEventListener("click", () => { send({ type: "reset", demo: true }); say("Restarted with the SHARD demo."); });
