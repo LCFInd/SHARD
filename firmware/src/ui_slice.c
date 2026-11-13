@@ -118,11 +118,11 @@ static slc_man_t *slice_edit_begin(uint32_t *k)
         return 0;
     }
     *k = slc_slot_of_src(src);
-    if (div != SLC_DIV_MAN && slc_man_of(s)) {       /* the slot has slices set by hand: those, not the grid; this */
-        TSEL->p[P_E1] = slice_div_man();             /* touch only shows them (its marker was another one) */
-        ui_message("DIV MAN");
+    if (div != SLC_DIV_MAN && slc_man_of(s) && ENGINES[TSEL->eng_req % NENGINES] != &ENG_SHARD) {
+        TSEL->p[P_E1] = slice_div_man();             /* SLICE: the slot has slices set by hand: those, not the grid; */
+        ui_message("DIV MAN");                       /* this touch only shows them (its marker was another one) */
         return 0;
-    }
+    }                                                /* SHARD: what is shown is what is edited, the old MAN replaced */
     m = slc_man_begin(*k);
     if (m && div != SLC_DIV_MAN) {                   /* the slices shown (2..32 equal, AUTO) become the MAN table */
         n = slc_count(s, div);

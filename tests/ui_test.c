@@ -3952,6 +3952,38 @@ static int test_slices(void)
         bad += check("SLICES: a re-upload of the same length redraws the waveform", ok);
         set_engine_of(TSEL, 0); frame();
     }
+#if FELUCCA_SHARD
+    {   /* SHARD on USR1, DIV 2: JOIN slice 2 to slice 1 leaves the whole loop as one slice (DIV MAN), not AUTO again;
+         * and so when the slot already has MAN slices (an earlier edit): what is shown is what is edited */
+        uint32_t pass;
+        host_slot_make(0);
+        smp_user_scan(0);
+        set_engine_of(TSEL, ENGI_SHARD);
+        TSEL->p[P_E0] = 1;
+        for (pass = 0; pass < 2u; pass++) {
+            TSEL->p[P_E1] = pass ? 3 : 7;            /* (pass 1: DIV 8, a MAN table of the AUTO slices made first) */
+            go_page(GR_SLICES); frame();
+            if (pass) {
+                sp.sel = 1;
+                turn(EN_K3, 1);
+                press(B_OCTUP);                      /* SPLIT: the 8 slices as MAN, then 9 */
+                ok = slice_count() == 9u && TSEL->p[P_E1] == SHD_DIV_MAN;
+            } else {
+                ok = 1;
+            }
+            TSEL->p[P_E1] = 0;                       /* DIV 2 */
+            frame();
+            sp.sel = 1;
+            turn(EN_K4, 1);
+            press(B_OCTUP);
+            frame();
+            ok &= slice_count() == 1u && TSEL->p[P_E1] == SHD_DIV_MAN && slice_mark(0) == 0u;
+            bad += check(pass ? "SLICES (SHARD): DIV 2 over MAN slices, JOIN: one slice (the shown ones are edited)"
+                              : "SLICES (SHARD): DIV 2, JOIN: one slice, the whole loop (DIV MAN)", ok);
+        }
+        set_engine_of(TSEL, 0); frame();
+    }
+#endif
     memset(host_slots, 0, sizeof host_slots);        /* (the other tests: empty slots) */
     smp_user_scan(0);
     slc_man_save = 0;
