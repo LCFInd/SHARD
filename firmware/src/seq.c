@@ -824,7 +824,8 @@ static void keyboard_block(void)
     }
     lay = (fm1_in.buttons & kb_mask) || kb_lock;  /* (#83: kb_lock, a layer locked open with no button held) */
     fx = (fm1_in.buttons & perf_mask) || (kb_lock & 2u);
-    mute = song.grid == 2u ? ~0u : song.grid == 3u ? SONG_KEYS : 0u;   /* the keys that never sound here */
+    mute = song.grid == 2u || song.grid == 4u ? ~0u : song.grid == 3u ? SONG_KEYS : 0u;   /* the keys that never sound
+                                                   * here (4: LIVE's launch grid, live.c) */
     for (k = 0; k < 27u; k++) {
         if (!((ch >> k) & 1u))
             continue;
@@ -1133,7 +1134,7 @@ static __attribute__((noinline)) uint32_t seq_time(track_t *t, uint32_t idx, uin
 static const motion_store_t *chain_motion(const track_t *t)
 {
     uint32_t s = chain.lane[trk_index(t)];
-    return !chain.running ? &motion : s < 4u ? &chain.source[s].motion : 0;
+    return !chain.running || s == CHAIN_OWN ? &motion : s < 4u ? &chain.source[s].motion : 0;
 }
 
 /* step idx plays: its chance (the one roll, as seq_step made it: a step that does not play applies no lock), the
@@ -1241,6 +1242,11 @@ static void seq_tick(track_t *t, uint32_t n)
     }
     if (!song.playing)
         return;
+    if (chain.now && live_due(t, 0)) {             /* LIVE NOW: the launched lane from its step 0, this block */
+        t->seq_idx = (uint16_t)(t->p[P_SLEN] - 1);
+        t->seq_pos = 0x7FFFFFFF;
+        t->rh_n = t->rskip_n = 0;
+    }
     period = div_samples((uint32_t)t->p[P_SDIV]);
     len = (uint32_t)t->p[P_SLEN];
     len = len ? len : 1u;
@@ -1252,7 +1258,13 @@ static void seq_tick(track_t *t, uint32_t n)
         if (t->seq_pos < cur_len && t->seq_pos != 0x7FFFFFFFu + n)
             break;
         top = t->seq_pos >= 0x7FFFFFFFu;            /* (PLAY, a SONG section: its first step) */
-        t->seq_pos = top ? (chain.running ? chain.carry : 0u) : t->seq_pos - cur_len;
+        t->seq_pos = top ? (chain.running && !chain.live ? chain.carry : 0u) : t->seq_pos - cur_len;
+        if (t->seq_idx + 1u >= len && live_due(t, 1)) {   /* LIVE: the loop's end: the launched lane from its step 0 */
+            period = div_samples((uint32_t)t->p[P_SDIV]);
+            len = (uint32_t)t->p[P_SLEN];
+            len = len ? len : 1u;
+            t->seq_idx = (uint16_t)(len - 1u);
+        }
         t->seq_idx = (uint16_t)((t->seq_idx + 1u) % len);
         seq_enter(t, top, len);
         if (t->p[P_SQNT] && !t->nd_fired)

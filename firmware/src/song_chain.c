@@ -31,7 +31,15 @@ static struct {
     uint8_t clk;                             /* the track whose loop counts the section (chain_clock) */
     uint8_t rec;
     uint32_t carry;
+    /* LIVE (the mangler, live.c): a song of one endless section whose lanes are launched by hand. live: on (the
+     * sources loaded, PLAY starts it); start: the lanes PLAY starts with (CHAIN_OWN: the track's own steps);
+     * want: a launch waiting for the end of the track's loop (seq.c live_due), CHAIN_NONE none; now: launch at once */
+    uint8_t live, now;
+    uint8_t start[NTRK];
+    volatile uint8_t want[NTRK];
 } chain;
+#define CHAIN_OWN 5u                         /* (LIVE) a lane playing the track's own steps, timing, automation */
+#define CHAIN_NONE 0xFFu
 /* a silent lane: its steps (empty: nothing plays) and its timing (a 4/4 bar of 1/16: the section's length when every
  * track is silent) */
 static const step_t chain_silent[NSTEP] = {{{0}}};
@@ -104,9 +112,29 @@ static const step_t *seq_steps(const track_t *t)
     if (!chain.running)
         return t->step;
     s = chain.lane[k];
-    return s < 4u ? chain.source[s].step[k] : chain_silent;
+    return s < 4u ? chain.source[s].step[k] : s == CHAIN_OWN ? t->step : chain_silent;
 }
 static void motion_restore(track_t *t);
+/* track i plays lane s from here: its notes released, its automation back to the sound's, the lane's timing */
+static void chain_lane(uint32_t i, uint32_t s)
+{
+    track_t *t = &trk[i];
+    chain.lane[i] = (uint8_t)(s < 4u || s == CHAIN_OWN ? s : CHAIN_SILENT);
+    seq_release(t);
+    motion_restore(t);
+    if (s < 4u) {
+        memcpy(&t->p[P_SLEN], chain.source[s].timing[i], sizeof chain.timing[i]);
+        t->p[P_SQNT] = chain.source[s].qnt[i];
+    } else if (s == CHAIN_OWN) {
+        memcpy(&t->p[P_SLEN], chain.timing[i], sizeof chain.timing[i]);
+        t->p[P_SQNT] = chain.qnt[i];
+    } else {
+        t->p[P_SLEN] = CHAIN_SIL_LEN;
+        t->p[P_SDIV] = CHAIN_SIL_DIV;
+        t->p[P_SSWING] = 0;
+        t->p[P_SQNT] = 1;
+    }
+}
 /* a section starts (chain_start, chain_tick: once a section, not per block; not inlined: off the audio ISR's loop) */
 static __attribute__((noinline)) void chain_apply(void)
 {
@@ -115,19 +143,7 @@ static __attribute__((noinline)) void chain_apply(void)
     chain.clk = (uint8_t)chain_clock(r);
     for (i = 0; i < NTRK; i++) {
         track_t *t = &trk[i];
-        uint32_t s = r->slot[i];
-        chain.lane[i] = (uint8_t)(s < 4u ? s : CHAIN_SILENT);
-        seq_release(t);
-        motion_restore(t);
-        if (s < 4u) {
-            memcpy(&t->p[P_SLEN], chain.source[s].timing[i], sizeof chain.timing[i]);
-            t->p[P_SQNT] = chain.source[s].qnt[i];
-        } else {
-            t->p[P_SLEN] = CHAIN_SIL_LEN;
-            t->p[P_SDIV] = CHAIN_SIL_DIV;
-            t->p[P_SSWING] = 0;
-            t->p[P_SQNT] = 1;
-        }
+        chain_lane(i, r->slot[i]);
         t->seq_idx = (uint16_t)(t->p[P_SLEN] - 1);
         t->seq_pos = 0x7FFFFFFFu;
         t->rh_n = t->rskip_n = 0;
@@ -138,6 +154,13 @@ static void chain_start(void)
     uint32_t i;
     if (!chain.armed)
         return;
+    if (chain.live) {                                /* LIVE: one section, the lanes it starts with, never ending */
+        chain.config.count = 1;
+        memcpy(chain.config.row[0].slot, chain.start, NTRK);
+        chain.config.row[0].repeat = 1;
+        for (i = 0; i < NTRK; i++)
+            chain.want[i] = CHAIN_NONE;
+    }
     chain.rec = song.rec;
     song.rec = 0;
     for (i = 0; i < NTRK; i++) {
@@ -160,15 +183,30 @@ static void chain_stop(void)
     for (i = 0; i < NTRK; i++) {
         memcpy(&trk[i].p[P_SLEN], chain.timing[i], sizeof chain.timing[i]);
         trk[i].p[P_SQNT] = chain.qnt[i];
+        if (chain.live) {                            /* LIVE: PLAY again starts where it was (a waiting launch too) */
+            chain.start[i] = chain.want[i] != CHAIN_NONE ? chain.want[i] : chain.lane[i];
+            chain.want[i] = CHAIN_NONE;
+        }
     }
     song.rec = chain.rec;
     chain.running = 0;
+}
+/* LIVE, from the sequencer (seq.c seq_track): track t's waiting launch, if its loop ends here (wrap) or it is NOW.
+ * 1: taken (the track's LEN DIV .. are the lane's from here) */
+static int live_due(track_t *t, int wrap)
+{
+    uint32_t k = (uint32_t)(t - trk), s = chain.want[k];
+    if (!chain.running || !chain.live || s == CHAIN_NONE || !(wrap || chain.now))
+        return 0;
+    chain.want[k] = CHAIN_NONE;
+    chain_lane(k, s);
+    return 1;
 }
 static void chain_tick(uint32_t n)
 {
     const track_t *t = &trk[chain.clk % NTRK];
     uint32_t length;
-    if (!chain.running || t->seq_pos >= 0x7FFFFFFFu || t->seq_idx + 1u != (uint32_t)t->p[P_SLEN])
+    if (!chain.running || chain.live || t->seq_pos >= 0x7FFFFFFFu || t->seq_idx + 1u != (uint32_t)t->p[P_SLEN])
         return;
     length = step_samples(t, div_samples((uint32_t)t->p[P_SDIV]), t->seq_idx);
     if (t->seq_pos + n < length)

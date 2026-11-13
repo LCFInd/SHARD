@@ -94,7 +94,7 @@ static int mom_turn(uint32_t k, int32_t s)
         if (act_cols() || lock_held() || !(pg->scope == SC_TRACK || pg->scope == SC_ENGINE || pg->scope == SC_GLOBAL) ||
             pg->graph == GR_EVENTS || pg->graph == GR_SONG || pg->graph == GR_BROWSE || pg->graph == GR_USER ||
             pg->graph == GR_PATS || (pg->graph == GR_SLICES && k < 2u) || pg->graph == GR_SHFX || pg->graph == GR_BOUNCE ||
-            (pg->graph == GR_MOD && k == 0u))
+            pg->graph == GR_LIVE || (pg->graph == GR_MOD && k == 0u))
             return 0;
         d = page_desc(pg, k, &vp);
     }
@@ -375,6 +375,7 @@ static uint32_t key_leds(uint32_t *br)                 /* (*br: a layer's keys t
     if (br)
         *br = 0;
     c = name_on() && !ui.menu ? name_leds() : ui.layer ? layer_leds(br) : grid_on() ? grid_leds() :
+                 live_keys_on() ? live_leds(br) :
                  (fm1_in.notes & ~kb_layer) | play_leds() | step_leds() | (song_keys_on() ? song_leds() : 0u);
 #if FELUCCA_SLICE
     if (!ui.layer && !ui.menu && !name_on() && slice_page_on())
@@ -1038,6 +1039,10 @@ static void edit_param(uint32_t slot, int32_t steps)
         bnc_knob(slot, steps);
         return;
     }
+    if (pg->graph == GR_LIVE) {                          /* LIVE: LAUNCH (live.c) */
+        live_knob(slot, steps);
+        return;
+    }
 #endif
 #if FELUCCA_SLICE
     if (pg->graph == GR_SLICES && slot < 2u) {           /* SLICES: KNOB 1 the marker, 2 moves it (ui_slice.c) */
@@ -1117,6 +1122,10 @@ static void act_do(void)
 #if FELUCCA_MANGLER
     if (cur_page()->graph == GR_BOUNCE) {               /* SAVE > BOUNCE (bounce.c): says what stops it, or bounces */
         bnc_go();
+        return;
+    }
+    if (cur_page()->graph == GR_LIVE) {                 /* LIVE: OWN (live.c) */
+        live_own();
         return;
     }
 #endif
@@ -1750,6 +1759,8 @@ static void ui_input(void)
                 break;
             if (song.playing || chain_busy() || seq_counting())   /* (a count-in: PLAY stops it) */
                 transport_req = 2;
+            else if (chain.live)                        /* LIVE on (live.c): the slots loaded, its lanes */
+                live_play();
             else if (!ui.home && cur_page()->graph == GR_SONG)
                 chain_play_ui();
             else
@@ -1802,7 +1813,9 @@ static void ui_input(void)
         slice_keys_pick(notes);
 #endif
     lock_keys();                                        /* (a grid key on a hit let go: the hit goes) */
-    if (song.grid == 3u) {
+    if (song.grid == 4u) {
+        live_keys(notes);                               /* LIVE: the keys launch (live.c) */
+    } else if (song.grid == 3u) {
         song_keys(notes);
     } else if (song.grid) {
         grid_keys(notes);
@@ -1866,7 +1879,7 @@ static void ui_input(void)
         if (ui.home || pg->scope == SC_STEP || pg->scope == SC_TRK || page_desc(pg, k, &hv) ||
             ((pg->graph == GR_USER || pg->graph == GR_MOD || pg->graph == GR_PATS) && k == 0u)
             || pg->graph == GR_SONG || (pg->graph == GR_SLICES && k < 2u) || pg->graph == GR_SHFX ||
-            (pg->graph == GR_BOUNCE && k < 3u) || fop_page(pg->graph)) {   /* (not an empty
+            (pg->graph == GR_BOUNCE && k < 3u) || (pg->graph == GR_LIVE && k == 0u) || fop_page(pg->graph)) {   /* (not an empty
                                                                                                           * column) */
             ui.hot_col = (uint8_t)k;
             ui.hot_t = 40;

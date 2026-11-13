@@ -1177,6 +1177,16 @@ static void draw_columns(void)
     }
 #endif
 #if FELUCCA_MANGLER
+    if (cur_page()->graph == GR_LIVE) {                  /* LIVE: LAUNCH, then OWN (live.c) */
+        const char *lb, *u;
+        int32_t r;
+        live_card(0, &lb, val, &u, &r);
+        draw_column(0, lb, val, u, VAL(0), r, ICON_AUTO);
+        draw_column(1, "", "", "", T_THEME, -1, ICON_NONE);
+        draw_column(2, "", "", "", T_THEME, -1, ICON_NONE);
+        draw_act_column(3, "OWN", chain.live ? T_THEME : T_DIM, ICON_AUTO);
+        return;
+    }
     if (cur_page()->graph == GR_BOUNCE) {                /* BOUNCE: BARS FROM TO, then the action (bounce.c) */
         for (c = 0; c < 3u; c++) {
             const char *lb, *u;

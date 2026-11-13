@@ -61,7 +61,11 @@ static const layer_t LAYERS[LAYER_N] = {
     {0, 0, 0, "", {{0, 0}, {0, 0}, {0, 0}}},
     {B_FX, LK_HOLD, FAM_HOME, "[FX] HOLD", {{KC_KEYS, "EFFECTS"}, {KC_K14, "MACROS"}, {0, 0}}},   /* (LET GO: the header's HOLD) */
     {B_GLO, LK_SET, FAM_HOME, "[GLO] SET", {{KC_PLAY, "RESTART"}, {KC_OCTDN, "UNDO"}, {KC_GLO, "DONE"}}},
+#if FELUCCA_MANGLER                                     /* SCL is LIVE (live.c): the keys launch */
+    {B_SCL, LK_SET, FAM_SCL, "[SCL] LIVE", {{KC_KEYS, "LAUNCH"}, {KC_SCL, "DONE"}, {0, 0}}},
+#else
     {B_SCL, LK_SET, FAM_SCL, "[SCL] SET", {{KC_KEYS, "ROOT"}, {KC_OCTDN, "UNDO"}, {KC_SCL, "DONE"}}},
+#endif
     {B_EDIT, LK_SET, FAM_HOME, "[EDIT] SET", {{KC_KEYS, "ENGINE"}, {KC_OCTDN, "UNDO"}, {KC_EDIT, "DONE"}}},
     {B_SEQ, LK_SET, FAM_SEQ, "[SEQ] TOOLS", {{KC_KEYS, "TOOLS"}, {KC_OCTDN, "UNDO"}, {KC_SEQ, "DONE"}}},
     {B_REC, LK_SET, FAM_HOME, "[REC] SET", {{KC_KEYS, "RECORDING"}, {KC_OCTDN, "UNDO"}, {KC_REC, "DONE"}}},
@@ -71,7 +75,10 @@ static const uint8_t LY_KC[LAYER_N] = {0, KC_FX, KC_GLO, KC_SCL, KC_EDIT, KC_SEQ
 static const page_t LY_SCL = {"SCL", FAM_SCL, SC_TRACK, GR_SCALE, {P_ROOT, P_SCALE, P_CHRD, P_VOIC}};
 /* SEQ TOOLS' knobs: LEN DIV SWING GATE (the length the tools work in; up to 1.1.5 the PATTERN page's) */
 static const page_t LY_SEQ = {"PATTERN", FAM_SEQ, SC_TRACK, GR_STEPS, {P_SLEN, P_SDIV, P_SSWING, P_SGATE}};
-static const page_t *ly_page(uint32_t l) { return l == LAYER_SCL ? &LY_SCL : l == LAYER_SEQ ? &LY_SEQ : 0; }
+static const page_t *ly_page(uint32_t l)   /* (the mangler: SCL's knobs are LIVE's, its first page) */
+{
+    return l == LAYER_SCL && !FELUCCA_MANGLER ? &LY_SCL : l == LAYER_SEQ ? &LY_SEQ : 0;
+}
 #define LY_OPEN 2u                     /* ui.ly_t0: the map opened (no tap any more) */
 #define LY_COMBO 4u                    /* .. by a combo */
 #define LY_DEAD 8u                     /* .. pressed where there is no layer: does nothing */
@@ -655,6 +662,9 @@ static void layer_key(uint32_t l, uint32_t k)
         } else if (p == 6u) {
             lys.fill |= 1u << k;                        /* E4: FILL while held (layer_keys) */
         }
+    } else if (l == LAYER_SCL && FELUCCA_MANGLER) {
+        live_poll_used(0);
+        live_key(k);                                    /* LIVE: launch (live.c) */
     } else if (l == LAYER_SCL) {
         TSEL->p[P_ROOT] = (int16_t)((k + 5u) % 12u);    /* the key's note name (F3 = F) */
     } else if (l == LAYER_EDIT && !key_black(k)) {
@@ -841,6 +851,10 @@ static int glo_sounding(uint32_t t) { return !trk[t].p[P_MUTE] && (!perf_solo ||
 static int rec_clearable(void) { return !seq_is_empty(TSEL) || motion_count(TSEL) != 0u; }
 static uint32_t layer_leds(uint32_t *br)
 {
+#if FELUCCA_MANGLER
+    if ((ui.layer % LAYER_N) == LAYER_SCL)              /* LIVE: the lanes lit, what can launch breathes (live.c) */
+        return live_leds(br);
+#endif
     uint32_t k, m = 0, n = 0, l = ui.layer, held = perf_held | perf_latched, ok = perf_avail();
     uint32_t mask = scale_mask(TSEL), root = (uint32_t)TSEL->p[P_ROOT] % 12u;
     const eqa_t *a;
@@ -1172,6 +1186,15 @@ static void layer_cards(uint32_t l)
     char val[12];
     const char *unit;
     uint32_t c;
+    if (l == LAYER_SCL && FELUCCA_MANGLER) {            /* LIVE: LAUNCH (live.c) */
+        const char *lb, *u;
+        int32_t r;
+        live_card(0, &lb, val, &u, &r);
+        draw_column(0, lb, val, u, VAL(0u), r, ICON_AUTO);
+        for (c = 1; c < 4u; c++)
+            draw_column(c, "", "", "", T_THEME, -1, ICON_NONE);
+        return;
+    }
     if (l == LAYER_FX) {                                /* FILTER CRUSH THROW DEPTH */
         int32_t m = perf_k[0];
         fmt_int(val, m < 0 ? -m : m);
@@ -1250,7 +1273,7 @@ static void draw_layer(void)
         sig += perf_solo * 31u + (uint32_t)song.g[G_CLOCK] * 5u + ui.ml.on * 7u + seq_fill * 1009u +
                (uint32_t)(trk[0].p[P_MUTE] | trk[1].p[P_MUTE] << 1 | trk[2].p[P_MUTE] << 2 | trk[3].p[P_MUTE] << 3) * 131u;
     else if (l == LAYER_SCL)
-        sig += (uint32_t)TSEL->p[P_SCALE] * 31u;
+        sig += FELUCCA_MANGLER ? live_sig() * 31u : (uint32_t)TSEL->p[P_SCALE] * 31u;
     else if (l == LAYER_REC)
         sig += (uint32_t)ui_rec_prefs * 31u + (uint32_t)chain_busy() * 3u + (uint32_t)rec_clearable() * 5u + song.sel * 977u;
     else if (l == LAYER_SEQ)
@@ -1268,6 +1291,8 @@ static void draw_layer(void)
             layer_fx();
         else if (l == LAYER_GLO)
             layer_glo();
+        else if (l == LAYER_SCL && FELUCCA_MANGLER)
+            graph_live();                               /* LIVE's grid (live.c) */
         else if (l == LAYER_SCL)
             layer_scl();
         else if (l == LAYER_SEQ)

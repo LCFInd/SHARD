@@ -103,3 +103,12 @@ The mangler build has its own black-and-white look:
 LOOP shows the whole sample with every slice marker. A slice a voice is playing is drawn inverted (white, with its waveform cut out in black) and has its playhead (`shd_heads`). Keys pick the slice, as they do on SLICES.
 
 The track's ENV (ATK, DEC, SUS, REL on KNOB 1–4) is drawn in red over the loop, in the loop's time, starting at the slice the last note began on. It assumes the note is held for one slice; ONE has no release. Red (`ux.env`) is used for nothing else. On SHARD tracks the ENV page is hidden (ENV opens on ENV DEST), and `page_first` returns a family's first visible page.
+
+## LIVE (the SCL button)
+
+In the mangler build, SCL opens LIVE instead of scales and chords. LIVE launches each track's pattern from the four PROJECT slots (A–D): the 16 patterns a song draws from.
+
+- **Keys:** on the LIVE page, or with SCL held, the 16 white keys are a 4 × 4 grid (a row of four per track, A–D). Black keys 1–4 stop T1–T4; black keys 5–8 return them to their own steps (OWN). On LIVE the keys never sound.
+- **Launch timing:** a launch waits for the end of the track's loop (LAUNCH LOOP) or plays from step 1 in the next block (LAUNCH NOW).
+- **OCT+ (OWN):** every track back to its own steps; stopped, LIVE turns off.
+- **How it works:** LIVE runs as an endless one-section song (`chain.live`, `chain.want`, `live_due` in seq.c's step loop, `CHAIN_OWN` lanes). PLAY with LIVE on loads the saved slots (`live_load`). STOP keeps the lanes, and a SONG started from GLO > SONG ends LIVE.

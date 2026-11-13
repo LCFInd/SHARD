@@ -1374,6 +1374,7 @@ static uint32_t graph_signature(void)
         h = (h ^ ev_sig()) * 16777619u;
 #if FELUCCA_MANGLER
     if (pg->graph == GR_BOUNCE) h = (h ^ bnc_sig()) * 16777619u;
+    if (pg->graph == GR_LIVE) h = (h ^ live_sig()) * 16777619u;
 #endif
 #if FELUCCA_SLICE
     if ((pg->graph == GR_SLICES || pg->graph == GR_SHFX) && slice_page_ok()) h ^= slice_sig();
@@ -2535,6 +2536,10 @@ static void draw_graph(void)
             graph_bounce();
             break;
 #endif
+        case GR_LIVE:                                   /* (the mangler: live.c) */
+            cv_oy = 0;
+            graph_live();
+            break;
 #if FELUCCA_SLICE
         case GR_SLICES:
         case GR_SHFX:                                   /* (SHARD's SLICE FX: the same view, ui_slice.c) */

@@ -807,7 +807,7 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
        S_SHFX_SLICE, S_SHFX_BUS, S_SHFX_ENUM, S_SHFX_NOFILE, S_SHARD_EDIT1, S_SHARD_EDIT2, S_SHARD_PRESETS,
        S_SHARD_SLICES, S_SHARD_HOME, S_LOOP, S_LOOP_PLAY, S_LOOP_REL, S_ENV_SHARD,
 #if FELUCCA_MANGLER
-       S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY,
+       S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY, S_LIVE_OFF, S_LIVE_PLAY, S_LIVE_LAYER,
 #endif
        S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
@@ -844,7 +844,7 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "shard_slice_fx", "shard_slice_fx_bus", "shard_slice_fx_route", "shard_slice_fx_nofile", "shard_edit1", "shard_edit2",
     "shard_presets", "shard_slices", "shard_home", "loop", "loop_playing", "loop_release", "env_family_shard",
 #if FELUCCA_MANGLER
-    "bounce", "bounce_used", "bounce_busy",
+    "bounce", "bounce_used", "bounce_busy", "live_off", "live_playing", "live_layer",
 #endif
 };
 
@@ -1025,6 +1025,7 @@ static void setup(int s)
     memset(drum_mute, 0, sizeof drum_mute);          /* (1.4.1: no DRUM lane muted) */
 #if FELUCCA_MANGLER
     bnc.busy = 0;                                    /* (BOUNCE's progress: its own screen only) */
+    chain.live = 0;                                  /* (LIVE: its own screens only) */
 #endif
     switch (s) {
     case S_HOME: song.octave = 2; song.rec = 1; usb.config = 1; break;
@@ -1719,6 +1720,16 @@ static void setup(int s)
     case S_BOUNCE_USED:                                /* a track it renders plays the slot: why not, no OCT+ */
         eng(ENGI_SHARD); TSEL->p[P_E0] = 2; go_page(GR_BOUNCE); bnc.bars = 1; bnc.from = 1; bnc.to = 1; break;
     case S_BOUNCE_BUSY: go_page(GR_BOUNCE); bnc.to = 3; bnc.busy = 2; bnc.pct = 62; break;
+    /* SCL > LIVE: no project saved (LIVE off); playing: T1 on A, T2 on B with C waiting (blinks), T3 its own, T4
+     * stopped, D empty, LAUNCH NOW; the same as SCL's layer */
+    case S_LIVE_OFF: go_page(GR_LIVE); live_used = 0; live_used_ms = fm1_ms | 1u; chain.live = 0; break;
+    case S_LIVE_PLAY:
+    case S_LIVE_LAYER:
+        go_page(GR_LIVE); live_used = 7; live_used_ms = fm1_ms | 1u; chain.live = 1; chain.running = 1; chain.now = 1;
+        chain.lane[0] = 0; chain.lane[1] = 1; chain.lane[2] = CHAIN_OWN; chain.lane[3] = CHAIN_SILENT;
+        chain.want[0] = chain.want[2] = chain.want[3] = CHAIN_NONE; chain.want[1] = 2; ui.hot_col = 0; ui.hot_t = 30;
+        if (s == S_LIVE_LAYER) { go_home(); ui.layer = LAYER_SCL; }
+        break;
 #endif
     default: break;
     }

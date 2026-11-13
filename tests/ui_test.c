@@ -10074,6 +10074,57 @@ static int test_ux18(void)
     return bad;
 }
 
+/* LIVE (live.c, song_chain.c): a launch waits for the end of the track's loop (LOOP), or plays its step 1 in the
+ * next block (NOW); the lanes read the slot's steps and timing; OWN is the track's own; STOP keeps the lanes for PLAY */
+static int test_live(void)
+{
+    int bad = 0, ok;
+    uint32_t k, b, wrapped_at = 0, seen_switch = 0, n;
+    track_t *t = &trk[0];
+    if (song.playing) { transport_req = 2; events_block(CTL); }
+    memset(chain.source, 0, sizeof chain.source);
+    for (k = 0; k < 2u; k++) {                       /* slot A: 16 steps of note 60, slot B: 8 steps of note 72 */
+        uint32_t i;
+        for (i = 0; i < (k ? 8u : 16u); i++) { chain.source[k].step[0][i].n = 1; chain.source[k].step[0][i].note[0] = (uint8_t)(k ? 72 : 60); chain.source[k].step[0][i].vel = 100; }
+        chain.source[k].timing[0][0] = (int16_t)(k ? 8 : 16);
+        chain.source[k].timing[0][1] = 2;
+        chain.source[k].qnt[0] = 1;
+    }
+    for (k = 1; k < NTRK; k++) chain.source[0].timing[k][0] = chain.source[1].timing[k][0] = 16;
+    chain.live = 1; chain.now = 0;
+    for (k = 0; k < NTRK; k++) chain.start[k] = CHAIN_OWN;
+    chain.start[0] = 0;
+    chain.armed = 1;
+    transport_req = 1;
+    events_block(CTL);
+    ok = chain.running && chain.lane[0] == 0u && t->p[P_SLEN] == 16;
+    for (b = 0; b < 4000u && t->seq_idx != 5u; b++) events_block(CTL);
+    chain.want[0] = 1;                               /* B, at the end of A's 16 steps */
+    for (b = 0; b < 20000u && !seen_switch; b++) {
+        uint32_t idx = t->seq_idx;
+        events_block(CTL);
+        if (chain.lane[0] == 1u) { seen_switch = 1; wrapped_at = idx; }
+    }
+    n = t->p[P_SLEN];
+    ok &= seen_switch && wrapped_at == 15u && t->seq_idx == 0u && n == 8 && seq_steps(t)[0].note[0] == 72;
+    bad += check("LIVE: a launch waits for the loop's end (A 16 steps, then B 8 from its step 1)", ok);
+    for (b = 0; b < 4000u && t->seq_idx != 3u; b++) events_block(CTL);
+    chain.now = 1;
+    chain.want[0] = CHAIN_OWN;                       /* NOW: the track's own steps from the next block */
+    events_block(CTL);
+    events_block(CTL);
+    ok = chain.lane[0] == CHAIN_OWN && t->seq_idx == 0u && seq_steps(t) == t->step;
+    bad += check("LIVE NOW: the launch plays from step 1 at once; OWN reads the track's own steps", ok);
+    chain.want[1] = CHAIN_SILENT;
+    events_block(CTL); events_block(CTL);
+    transport_req = 2;
+    events_block(CTL);
+    ok = !chain.running && chain.live && chain.start[0] == CHAIN_OWN && chain.start[1] == CHAIN_SILENT;
+    bad += check("LIVE: STOP keeps the lanes for the next PLAY", ok);
+    chain.live = 0; chain.now = 0;
+    return bad;
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -10136,6 +10187,7 @@ int main(void)
     bad += test_edit_cycle();
 #if FELUCCA_SLICE
     bad += test_slices();
+    bad += test_live();
 #endif
     bad += test_sample_alert();
     bad += test_quick_layers();

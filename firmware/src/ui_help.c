@@ -34,7 +34,8 @@ static const struct { const char *title, *hint; } HELP_PAGE[] = {
     {"FILTER", "[K1]LP BP HP[K2]CUTOFF[EDIT]VOICE"},
     {"LANES", H_LANES},
     {"LANES 2", H_LANES},
-    {"LOOP", "[KEYS]SLICE[K1-4]ENVELOPE"},   /* (SHARD: ui_slice.c) */
+    {"LOOP", "[KEYS]SLICE[K1-4]ENVELOPE"},
+    {"LIVE", "[KEYS]LAUNCH[OCT+]OWN"},                 /* (the mangler: live.c) */   /* (SHARD: ui_slice.c) */
     {"SLICES", "[K1]SLICE[K2]MOVE[OCT+]SPLIT, JOIN"},
     {"SLICE FX", "[K1]SLICE, BUS[K2]PARAM[K4]ALL"},   /* (SHARD: ui_slice.c) */
     {"BOUNCE", "[K1]BARS[K2]FROM[K3]TO[OCT+]BOUNCE"},   /* (the mangler: bounce.c) */
@@ -63,7 +64,7 @@ static const struct { const char *title, *hint; } HELP_PAGE[] = {
 #define H_GRID "[KEYS]STEPS[K2]LANE[SEQ]DETAIL"
 /* a layer's (LAYER_*): what its footer row (LAYERS[].foot) does not say */
 static const char *const HELP_LAYER[LAYER_N] = {
-    "", "[KEYS]BLACK: MUTES[FX]2 TAPS: LOCK", "[KEYS]SOLO MUTE FILL TAP[K1-4]LEVELS", "[KEYS]ROOT[K1-4]ROOT SCL CHORD",
+    "", "[KEYS]BLACK: MUTES[FX]2 TAPS: LOCK", "[KEYS]SOLO MUTE FILL TAP[K1-4]LEVELS", FELUCCA_MANGLER ? "[KEYS]LAUNCH[K1]WHEN" : "[KEYS]ROOT[K1-4]ROOT SCL CHORD",
     "[K1]ENGINE[K2]SOUND[K3]FAV", "[K1]LENGTH[K3]SWING[K4]GATE", "[K1]CLICK[K2]COUNT-IN[K3]LEVEL",
 };
 
