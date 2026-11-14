@@ -1,0 +1,68 @@
+# Build the SHARD firmware package (build/felucca.fwsc) on every push to shard, and on demand.
+# The JieLi toolchain runs natively on Linux x86-64, so no Docker. The AC79 SDK is only needed for three files
+# (cpu/wl82/tools/uboot.boot, cfg_tool.bin, cfg/eq_cfg_hw.bin): fetched sparsely, then cached with the toolchain.
+name: build-shard
+
+on:
+  push:
+    branches: [shard]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python packages
+        run: pip install Pillow fonttools
+
+      - name: Cache the JieLi toolchain and SDK files
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.jieli
+            ~/fw-AC79_AIoT_SDK
+          key: jieli-toolchain-ac79-v1.2.1-2023-12-13
+
+      - name: JieLi toolchain
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: sh tools/get_toolchain.sh
+
+      - name: AC79 SDK (the three files the package uses)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          SDK=~/fw-AC79_AIoT_SDK
+          URL=https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK.git
+          TAG=AC79NN_SDK_V1.2.1_2023-12-13
+          if git clone --depth 1 --branch "$TAG" --filter=blob:none --no-checkout "$URL" "$SDK"; then
+            git -C "$SDK" sparse-checkout set --no-cone /cpu/wl82/tools/uboot.boot /cpu/wl82/tools/cfg_tool.bin \
+              '/cpu/wl82/tools/**/eq_cfg_hw.bin' '/**/eq_cfg_hw.bin'
+            git -C "$SDK" checkout "$TAG" || git -C "$SDK" checkout
+          fi
+          if [ ! -f "$SDK/cpu/wl82/tools/uboot.boot" ]; then   # (no partial clone there: the whole tag, shallow)
+            rm -rf "$SDK"
+            git clone --depth 1 --branch "$TAG" "$URL" "$SDK"
+          fi
+          ls -la "$SDK/cpu/wl82/tools/uboot.boot" "$SDK/cpu/wl82/tools/cfg_tool.bin"
+          find "$SDK" -name eq_cfg_hw.bin
+
+      - name: Build
+        run: ./build.sh
+
+      - name: The package
+        uses: actions/upload-artifact@v4
+        with:
+          name: felucca-shard-${{ github.sha }}
+          path: |
+            build/felucca.fwsc
+            build/felucca.bin
+          if-no-files-found: error
