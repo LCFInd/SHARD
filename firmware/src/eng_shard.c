@@ -219,7 +219,7 @@ static const int32_t SHD_FB_F[SHD_NCH] = {350, 2100, 9226, 1167};
 static volatile uint32_t shd_swell;                 /* perform.c (ARP's FEEDBACK SWELL): every FDBK at least this */
 /* PRE (ARP's OCT+, perform.c perf_pre_fill, before the parts each block): RING's carrier and share, NOISE, sample by
  * sample; each voice takes its slice through them before the slice's own FILTER, DRIVE, envelope and route */
-#define SHD_PRE_N 64u
+#define SHD_PRE_N CTL                       /* (a block: no more) */
 static int16_t shd_pre_c[SHD_PRE_N], shd_pre_w[SHD_PRE_N], shd_pre_nz[SHD_PRE_N];
 static volatile uint8_t shd_pre_on;
 static volatile int32_t shd_fbpitch;                /* perform.c (ARP's PITCH): the loops' band-pass, 1/16 semitones */
@@ -347,6 +347,9 @@ static int32_t shd_tube(int32_t x, uint32_t d, shd_ds_t *st)
  * 47 R + 2.2 uF (above 1.5 kHz) and 560 R + 4.7 uF (above 60 Hz): the highs gain up to x2100, the lows x180,
  * so the bass stays tight; its gain-bandwidth closes the top as the gain rises (20 kHz .. 2.5 kHz); the rails
  * round it at ~7.5 diode drops; the 1N914 pair to ground clips it hard (2x); the FILTER after, ~4.5 kHz */
+/* a saturation bound just under 3 x 2^20: its negative stays out of 0xFFC00000 .. 0xFFCFFFFF, which the build's
+ * check takes for a reference into the chip ROM (tools/build.py) */
+#define SHD_SAT_HI 0x2FFFFF
 static int32_t shd_rat(int32_t x, uint32_t d, shd_ds_t *st)
 {
     int32_t u, m, y;
@@ -376,7 +379,7 @@ static int32_t shd_war(int32_t x, uint32_t d, shd_ds_t *st)
     SHD_LP(st->f[0], x, SHD_A120);
     a = x - st->f[0];
     a = a > th ? a - th : a < -th ? a + th : 0;    /* the sputter: what can't turn the first stage on is lost */
-    a = shd_cubic(shd_sat((int32_t)(((int64_t)a * g) >> 8), 1 << 22));
+    a = shd_cubic(shd_sat((int32_t)(((int64_t)a * g) >> 8), SHD_SAT_HI));
     SHD_LP(st->f[1], a, SHD_A200);
     a -= st->f[1];
     SHD_LP(st->f[2], a, SHD_A5500);
@@ -405,7 +408,7 @@ static int32_t shd_shape(uint32_t type, int32_t x, uint32_t drive, shd_ds_t *st)
     p = (int32_t)(((int64_t)shd_sat(x, 1 << 17) * SHD_DRIVE_Q8[drive]) >> 8);
     switch (type) {
     case SHD_D_FOLD: {
-        int32_t f = (shd_sat(p, 1 << 22) + 32768) & 131071;
+        int32_t f = (shd_sat(p, SHD_SAT_HI) + 32768) & 131071;
         y = f < 65536 ? f - 32768 : 98304 - f;
         break;
     }
@@ -1030,7 +1033,7 @@ static int shd_gr_tick(track_t *t, voice_t *v, const slc_src_t *s, shd_vx_t *x, 
                     gv->run = 0;
             }
         } else {
-            uint32_t d = (gv->hfrac + 0x10000u - (gs->trate & 0xFFFFu)), back = (gs->trate >> 16) + 1u - (d >> 16);
+            uint32_t d = (gv->hfrac + 65536u - (gs->trate & 65535u)), back = (gs->trate >> 16) + 1u - (d >> 16);
             gv->hfrac = d & 0xFFFFu;
             if (gv->head < fz + back || gv->head < back) {
                 if (gv->mode == SHD_GM_FREEZE) {

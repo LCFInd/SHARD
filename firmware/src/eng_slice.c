@@ -270,7 +270,7 @@ static struct {
     uint32_t pos[SN_MAX];                   /* the note slices found, */
     int32_t sc[SN_MAX];                     /* .. their scores */
     uint32_t n, near;                       /* source samples within which two are one (the higher score) */
-} sn;
+} sn __attribute__((section(".pool")));     /* (main loop only: off the audio code's .bss) */
 
 /* frame f's pitch from the ring's last SN_WIN + SN_LMAX samples (n written so far), lag range lo .. hi */
 static int32_t sn_pitch(uint32_t n, uint32_t lo, uint32_t hi, uint32_t fd16)
