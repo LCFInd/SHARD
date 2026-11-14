@@ -512,7 +512,7 @@ static uint32_t shd_tempo_of(const slc_src_t *s, uint8_t *o)
     if (var <= 0)
         return 0;
     for (b10 = 600; b10 <= 2000u; b10 += 5u) {         /* the beat: 600 * hops per s / b10 hops (x 16) */
-        uint32_t l16 = (uint32_t)((uint64_t)hz * 16u * 600u / ((uint64_t)hop * b10));
+        uint32_t l16 = (uint32_t)((uint64_t)hz * 16u * 600u / (hop * b10));   /* (a 32-bit divisor: no 64 / 64) */
         int32_t sc = shd_beat_score(o, n, l16, mean);
         if (b10 < 800u || b10 > 1600u)
             sc -= (sc > 0 ? sc : -sc) / 8;
