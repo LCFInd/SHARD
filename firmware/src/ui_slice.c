@@ -335,11 +335,12 @@ static const shfx_desc_t SHFX_SL[SHFX_NSL] = {
     {"DRIVE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"AMT", 0, 127, 0, ""}, {"DELAY", 0, 127, 0, ""},
     {"ROUTE", 0, SHD_NROUTE - 1, N_SHD_ROUTE, ""}, {"CHOKE", 0, 4, N_SHD_CHOKE, ""},
 };
-enum { SHFX_BPM, SHFX_SENS, SHFX_BGRAIN, SHFX_BGSIZE, SHFX_BGDENS, SHFX_BGJIT, SHFX_XLOW, SHFX_XHIGH, SHFX_CH0 };   /* then TYPE DRV FDBK GATE LVL per channel */
+enum { SHFX_BPM, SHFX_SENS, SHFX_DETECT, SHFX_BGRAIN, SHFX_BGSIZE, SHFX_BGDENS, SHFX_BGJIT, SHFX_XLOW, SHFX_XHIGH, SHFX_CH0 };   /* then TYPE DRV FDBK GATE LVL per channel */
 #define SHFX_PER 5u
 static const shfx_desc_t SHFX_BUS[SHFX_CH0 + SHFX_PER * SHD_NCH + 1u] = {   /* (6 letters at most: the cards) */
     {"LOOP", 0, SHD_BPM_MAX, 0, ""},                 /* the source's tempo (BPM), 0 AUTO (shfx_knob); the song's: TEMPO */
     {"SENS", 0, 127, 0, ""},                         /* AUTO's hits (a user slot's: slc_rescan) */
+    {"DETECT", 0, SLC_NDET - 1, N_SLC_DET, ""},      /* .. at hits, notes, both */
     {"GRAIN", 0, SHD_NGM - 1, N_SHD_GRAIN, ""},       /* the track's GRAIN: the slices set to TRACK */
     {"SIZE", 0, 127, 0, "MS"}, {"DENS", 0, 127, 0, "X"}, {"JITTER", 0, 127, 0, ""},
     {"XLOW", 0, 127, 0, ""}, {"XHIGH", 0, 127, 0, ""},
@@ -364,7 +365,7 @@ static void shd_sens_poll(void)                     /* ui_input, every frame */
         return;
     for (k = 0; k < SMP_USER_SLOTS; k++)
         if (shd_sens_pend >> k & 1u)
-            slc_rescan(k, shd_kit[slc_src_of_slot(k)].bus.sens);
+            slc_rescan(k, shd_kit[slc_src_of_slot(k)].bus.sens, shd_kit[slc_src_of_slot(k)].bus.detect);
     shd_sens_pend = 0;
     ui.force = 1;
 }
@@ -389,6 +390,7 @@ static uint8_t *shfx_field(shd_kit_t *kit, uint32_t j, int bus, uint32_t k)
         switch (k) {
         case SHFX_BPM: return &b->bpm;
         case SHFX_SENS: return &b->sens;
+        case SHFX_DETECT: return &b->detect;
         case SHFX_XLOW: return &b->lo;
         case SHFX_XHIGH: return &b->hi;
         case SHFX_BGRAIN: return &b->gmode;
@@ -462,12 +464,14 @@ static void shfx_knob(uint32_t slot, int32_t steps)
         return;
     }
     d = bus ? &SHFX_BUS[k] : &SHFX_SL[k];
-    if (slot == 2u && bus && k == SHFX_SENS) {       /* SENS: a user slot's; BREAK's and PIANO's slices are fixed */
+    if (slot == 2u && bus && (k == SHFX_SENS || k == SHFX_DETECT)) {   /* SENS, DETECT: a user slot's (BREAK's and
+                                                     * PIANO's slices are fixed) */
+        uint8_t *fp = k == SHFX_SENS ? &kit->bus.sens : &kit->bus.detect;
         if (slc_slot_of_src(src) >= SMP_USER_SLOTS) {
-            ui_message("SENS: USER SAMPLES");
+            ui_message(k == SHFX_SENS ? "SENS: USER SAMPLES" : "DETECT: USER SAMPLES");
             return;
         }
-        shfx_set(&kit->bus.sens, d, kit->bus.sens + steps);
+        shfx_set(fp, d, *fp + steps);
         shd_sens_pend |= (uint8_t)(1u << slc_slot_of_src(src));
         shd_sens_at = fm1_ms;
     } else if (slot == 2u && bus && k == SHFX_TEMPO) {   /* TEMPO: the song's, as SELECT turned it */
@@ -547,7 +551,7 @@ static int shfx_card(uint32_t c, const char **lb, char *val, const char **u, int
     }
     v = shfx_get(shfx_field(kit, j, bus, k), k, bus);
     *lb = c == 2u ? d->name : "ALL";
-    if (bus && k == SHFX_SENS && slc_slot_of_src(src) >= SMP_USER_SLOTS) {
+    if (bus && (k == SHFX_SENS || k == SHFX_DETECT) && slc_slot_of_src(src) >= SMP_USER_SLOTS) {
         str_cpy(val, "FIXED", 12);                   /* (BREAK, PIANO: slices made with the firmware) */
         return 1;
     }

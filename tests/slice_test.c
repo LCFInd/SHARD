@@ -350,7 +350,7 @@ int main(int argc, char **argv)
         static slc_src_t tmp;
         tmp = SLC_BREAK;
         tmp.len = 0;
-        slc_scan(&tmp, SLC_BREAK.len, SLC_SENS_DEF);
+        slc_scan(&tmp, SLC_BREAK.len, SLC_SENS_DEF, SLC_DET_HITS);
         tmp.len = SLC_BREAK.len;
         bad = memcmp(tmp.grid, SLC_BREAK.grid, sizeof tmp.grid) != 0;
         check("BREAK: slc_scan grid == build-time grid", !bad, 0);

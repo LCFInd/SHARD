@@ -352,7 +352,7 @@ EXPORT(emu_sens_set) uint32_t emu_sens_set(uint32_t k, uint32_t sens)
     if (k >= SMP_USER_SLOTS)
         return 0;
     shd_kit[slc_src_of_slot(k)].bus.sens = (uint8_t)(sens > 127u ? 127u : sens);
-    slc_rescan(k, shd_kit[slc_src_of_slot(k)].bus.sens);
+    slc_rescan(k, shd_kit[slc_src_of_slot(k)].bus.sens, shd_kit[slc_src_of_slot(k)].bus.detect);
     ui.force = 1;
     return slc_usr[k].len ? slc_usr[k].nauto : 0u;
 }

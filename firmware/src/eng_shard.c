@@ -86,17 +86,19 @@ typedef struct {
     uint8_t sens;                                   /* AUTO's hits: 0 fewest .. 127 most (SHD_SENS_DEF: SLICE's) */
     uint8_t gmode, gsize, gdens, gjit;              /* the track's GRAIN (SHD_GM_*), SIZE, DENS, JITTER */
     uint8_t fb[SHD_NCH];                            /* FDBK: each channel's shaper fed back into itself (0 none) */
+    uint8_t detect, pad[3];                         /* DETECT: AUTO's slices at hits, notes or both (SLC_DET_*) */
 } shd_bus_t;
 typedef struct {
     shd_sl_t sl[SLC_AUTO];
     shd_bus_t bus;
 } shd_kit_t;
-_Static_assert(sizeof(shd_sl_t) == 20u && sizeof(shd_bus_t) == 28u, "SHARD kit layout");
+_Static_assert(sizeof(shd_sl_t) == 20u && sizeof(shd_bus_t) == 32u, "SHARD kit layout");
 /* neutral at power-on (the slot scans then read the stored kits): every slice as recorded, DIRECT */
 #define SHD_SL_DEF {0, 100, 0, 127, SHD_TRACK, SHD_FWD, SHD_F_OFF, 127, 0, SHD_D_OFF, 40, SHD_DIRECT, 0, 0, 0, 0, \
                     SHD_GT_TRACK, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0}
 #define SHD_BUS_DEF {51, 96, {SHD_D_TUBE, SHD_D_FOLD, SHD_D_CRUSH, SHD_D_OFF}, {40, 30, 60, 40}, {0, 0, 0, 0}, \
-                     {100, 100, 90, 127}, 0, SHD_SENS_DEF, SHD_GM_OFF, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0, {0, 0, 0, 0}}
+                     {100, 100, 90, 127}, 0, SHD_SENS_DEF, SHD_GM_OFF, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0, {0, 0, 0, 0}, \
+                     SLC_DET_DEF, {0, 0, 0}}
 #define SHD_KIT_DEF {{[0 ... SLC_AUTO - 1] = SHD_SL_DEF}, SHD_BUS_DEF}
 static shd_kit_t shd_kit[SHD_NSRC] = {[0 ... SHD_NSRC - 1] = SHD_KIT_DEF};
 static uint8_t shd_kit_save;                        /* bit k: user slot k's kit changed, to flash (slice_store.c) */
@@ -168,6 +170,7 @@ static void shd_kit_sane(shd_kit_t *k)
     if (k->bus.gsize > 127) k->bus.gsize = SHD_GSIZE_DEF;
     if (k->bus.gdens > 127) k->bus.gdens = SHD_GDENS_DEF;
     if (k->bus.gjit > 127) k->bus.gjit = 0;
+    if (k->bus.detect >= SLC_NDET) k->bus.detect = SLC_DET_DEF;
 }
 
 /* ---- a shaper's state (shd_shape): DECIM's held sample, and the analog models' filters and bias */

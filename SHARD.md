@@ -161,3 +161,18 @@ With no ARP pages, the ARP button is now a hold layer like FX: hold ARP and pres
 - **DEPTH:** RING and NOISE follow KNOB 4. At 0 % the output is the input, bit for bit.
 - **The FX map:** in the mangler, FX's key map can take any of these effects too (PRESETS while holding a key). In Felucca's full build, the list stops at ECHO THROW and there is no ARP layer.
 - **A fix along the way:** `pb_at` now wraps its neighbouring frame round the loop. Before, a read straddling the buffer's end took one sample from outside it. Only SCATTER reads across the wrap.
+
+## DETECT (SLICE FX: BUS, after SENS): what AUTO slices at
+
+AUTO slicing now has a DETECT setting with three options, HITS, NOTES and BOTH. BOTH is the default in SHARD; Felucca's own SLICE engine keeps HITS. HITS is pass 2 as before. NOTES is `slc_scan`'s pass 3 (`slc_notes`), and BOTH merges the two passes.
+
+- **Pitch tracking:** the material is decimated to about 5.5 kHz (the mean of `dec` samples). Every 64 decimated samples (about 11.6 ms) YIN runs over a 192-sample window: the first dip of the cumulative-mean-normalised difference under 0.2, searched between 1.1 kHz and 46 Hz, with a parabolic lag. No dip means the frame is unpitched. The frame's level is the peak over the 64 samples at the window's middle.
+- **A note change at frame c:** the 6 frames before and after it must all be pitched and steady within 0.35 semitone. Frames c±1, which straddle the change, are left out. The two means must be at least a semitone apart.
+  - The step scores min(1, semitones / 5).
+  - The dip is the lowest level within ±6 frames, below the lower of the highs either side, as a fraction of that high.
+  - With a dip of 8 % or more, the score is (step + dip) × 0.8, the crossover. Otherwise it is step × 0.5.
+  - It becomes a slice when the score is at least 0.8 − 0.6 × SENS / 127. Frames next to each other give one slice, the best scoring.
+- **Placement:** at the bottom of the dip (or at the step if there is no dip), then moved forward to the next rising zero crossing, at most 12.5 ms on.
+- **Merging (`slc_merge`):** in BOTH, a hit within 50 ms of a note slice replaces the note slice, because a hit's attack position is exact.
+- **Cost:** on the host, BOTH takes about 5 times as long as HITS (the pitch window read every 2nd sample), and this happens only when a sample loads or SENS or DETECT changes. My estimate is about 0.4 s on the device for a full slot; that hasn't been measured on hardware. A note change shorter than about 70 ms (6 frames) is not found.
+- **Storage:** DETECT is 1 byte in the bus, so the bus is now 32 bytes (SHF3). SHF2 kits load with DETECT set to HITS.

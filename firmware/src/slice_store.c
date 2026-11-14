@@ -68,6 +68,7 @@ static void shd_rec2_up(const shd_rec2_t *o, shd_rec_t *r)
     r->kit.bus.gdens = SHD_GDENS_DEF;
     r->kit.bus.gjit = 0;
     memset(r->kit.bus.fb, 0, sizeof r->kit.bus.fb);
+    r->kit.bus.detect = SLC_DET_HITS;                /* (as it was sliced then) */
 }
 _Static_assert(SHD_REC_OFF - SLC_REC_OFF >= sizeof(slc_rec_t) && SHD_REC_OFF + sizeof(shd_rec_t) <= SMP_USER_SIZE,
                "SHARD record in the slot's last sector");
@@ -136,8 +137,8 @@ static void slc_store_load(uint32_t k)
             kr.crc == ((const smp_user_hdr_t *)smp_user_xip(k))->crc) {
             shd_kit_sane(&kr.kit);
             shd_kit[slc_src_of_slot(k)] = kr.kit;
-            if (kr.kit.bus.sens != SHD_SENS_DEF)
-                slc_rescan(k, kr.kit.bus.sens);      /* its AUTO slices at the kit's SENS */
+            if (kr.kit.bus.sens != SHD_SENS_DEF || kr.kit.bus.detect != SLC_DET_DEF)
+                slc_rescan(k, kr.kit.bus.sens, kr.kit.bus.detect);   /* its AUTO slices at the kit's SENS, DETECT */
         }
     }
 #endif

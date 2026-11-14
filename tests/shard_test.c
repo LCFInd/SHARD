@@ -1,3 +1,4 @@
+#include <time.h>
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* SHARD engine tests (same sources as the firmware, through hostsim.c; run_tests.sh):
  *   build/host/shard_test LOOP DEMO_DIR      (LOOP: as slice_test's, tests/slice_loop.py + fm1_sample_upload.py build)
@@ -603,6 +604,93 @@ static void fb_tests(void)
           "%.2f, %.2f", e_tail[0], e_tail[1]);
 }
 
+
+/* 12: DETECT. A legato line in USR3 (22.05 kHz; a saw-ish tone): A2, C3 crossfading through a deep dip (0.6 s), E3
+ * through a shallow one (1.2 s), a bend up to G3 (1.8 .. 2.2 s), G3, noise (2.8 .. 3.2 s), D3 struck after it. NOTES:
+ * the two note changes, nothing in the bend or the noise, each on a rising zero crossing; more with SENS; HITS: what
+ * pass 2 finds (D3's strike); BOTH: all of those. And what it costs */
+static int16_t dt_y[22050 * 4];
+static int dt_near(uint32_t at)
+{
+    uint32_t i;
+    for (i = 1; i < slc_usr[2].nauto; i++)
+        if (slc_usr[2].apos[i] + 551u >= at && slc_usr[2].apos[i] <= at + 551u)   /* (25 ms) */
+            return 1;
+    return 0;
+}
+static uint32_t dt_in(uint32_t a, uint32_t b)
+{
+    uint32_t i, n = 0;
+    for (i = 1; i < slc_usr[2].nauto; i++)
+        n += slc_usr[2].apos[i] > a && slc_usr[2].apos[i] < b;
+    return n;
+}
+static void det_tests(void)
+{
+    const uint32_t FR = 22050;
+    uint32_t i, n0, n64, n127, zc = 1;
+    double ph = 0;
+    int32_t ns = 12345;
+    clock_t t0;
+    double th, tb;
+    for (i = 0; i < NELEM(dt_y); i++) {
+        double t = (double)i / FR, f, a = 0.7, x;
+        if (t < 0.6) f = 110;
+        else if (t < 1.2) f = 130.81;
+        else if (t < 1.8) f = 164.81;
+        else if (t < 2.2) f = 164.81 * pow(2, (t - 1.8) / 0.4 * 3 / 12.0);
+        else if (t < 2.8) f = 196;
+        else if (t < 3.2) f = 0;
+        else f = 146.83;
+        if (fabs(t - 0.6) < 0.05) a *= 0.45 + 0.55 * fabs(t - 0.6) / 0.05;   /* the deep dip */
+        if (fabs(t - 1.2) < 0.05) a *= 0.8 + 0.2 * fabs(t - 1.2) / 0.05;     /* the shallow one */
+        if (t >= 3.2 && t < 3.205) a *= (t - 3.2) / 0.005;                    /* D3 struck */
+        if (f > 0) {
+            ph += f / FR;
+            ph -= floor(ph);
+            x = sin(2 * M_PI * ph) + 0.4 * sin(4 * M_PI * ph) + 0.2 * sin(6 * M_PI * ph);
+        } else {
+            ns = ns * 1103515245 + 12345;
+            x = ((ns >> 16) & 0x7FFF) / 16384.0 - 1.0;
+            a = 0.5 * exp(-(t - 2.8) / 0.2);
+        }
+        dt_y[i] = (int16_t)(x * a * 14000);
+    }
+    slot_pcm(2, dt_y, NELEM(dt_y));
+    slc_rescan(2, 64, SLC_DET_NOTES);
+    n64 = slc_usr[2].nauto;
+    check("DETECT NOTES: the deep crossover (A2 to C3) and the shallow one (C3 to E3)", dt_near(FR * 6u / 10u) &&
+          dt_near(FR * 12u / 10u), "%u slices", n64 - 1u);
+    check("DETECT NOTES: nothing in the bend, at its ends or in the noise", !dt_in(FR * 17u / 10u, FR * 23u / 10u) &&
+          !dt_in(FR * 28u / 10u, FR * 32u / 10u), "%u, %u", dt_in(FR * 17u / 10u, FR * 23u / 10u), dt_in(FR * 28u / 10u, FR * 32u / 10u));
+    for (i = 1; i < slc_usr[2].nauto; i++) {
+        uint32_t p = slc_usr[2].apos[i];
+        if (!(p > 0 && dt_y[p - 1u] < 64 && dt_y[p] >= -64))
+            printf("shard:   (slice at %u: %d %d %d)\n", p, dt_y[p - 1u], dt_y[p], dt_y[p + 1u]);
+        zc &= p > 0 && dt_y[p - 1u] < 64 && dt_y[p] >= -64;   /* (ADPCM: within its error of the crossing) */
+    }
+    check("DETECT NOTES: each slice on a rising zero crossing", zc, 0);
+    slc_rescan(2, 0, SLC_DET_NOTES);
+    n0 = slc_usr[2].nauto;
+    slc_rescan(2, 127, SLC_DET_NOTES);
+    n127 = slc_usr[2].nauto;
+    check("DETECT NOTES: SENS 0 finds fewer, 127 more", n0 <= n64 && n64 <= n127 && n0 >= 2u, "%u %u %u", n0 - 1u, n64 - 1u, n127 - 1u);
+    t0 = clock();
+    for (i = 0; i < 4u; i++)
+        slc_rescan(2, 64, SLC_DET_HITS);
+    th = (double)(clock() - t0) / 4;
+    check("DETECT HITS: D3 struck after the noise", dt_near(FR * 32u / 10u), "%u slices", slc_usr[2].nauto - 1u);
+    t0 = clock();
+    for (i = 0; i < 4u; i++)
+        slc_rescan(2, 64, SLC_DET_BOTH);
+    tb = (double)(clock() - t0) / 4;
+    check("DETECT BOTH: the crossovers and the strike", dt_near(FR * 6u / 10u) && dt_near(FR * 12u / 10u) &&
+          dt_near(FR * 32u / 10u) && !dt_in(FR * 19u / 10u, FR * 21u / 10u), "%u slices", slc_usr[2].nauto - 1u);
+    check("DETECT BOTH: the scan a few times HITS's at most", tb < th * 10 + 1, "x %.1f (host)", tb / (th + 1e-9));
+    memset((uint8_t *)host_slots + 2u * SMP_USER_SIZE, 0, SMP_USER_SIZE);
+    smp_user_scan(2);
+}
+
 int main(int argc, char **argv)
 {
     const char *loop = argc > 1 ? argv[1] : "build/slice_demo/loop";
@@ -920,10 +1008,10 @@ int main(int argc, char **argv)
               shd_kit[src].bus.type[3] == SHD_D_FUZZ && shd_kit[src].bus.sens == 100, 0);
         {
             uint32_t na = slc_usr[0].nauto;
-            slc_rescan(0, SHD_SENS_DEF);
+            slc_rescan(0, SHD_SENS_DEF, SLC_DET_HITS);
             check("SENS from the kit at load: its AUTO slices are SENS 100's, not the default's", na >= slc_usr[0].nauto,
                   "%u at 100, %u at 64", na, slc_usr[0].nauto);
-            slc_rescan(0, 100);
+            slc_rescan(0, 100, SLC_DET_HITS);
         }
         m = (slc_man_t *)slc_man_of(slc_get(1));
         check("the MAN slices beside it come back too", m && m->n == nm + 1u, "%u slices", m ? m->n : 0);
@@ -1333,14 +1421,14 @@ int main(int argc, char **argv)
         static int16_t y[22050 * 4];
         uint32_t m = make_loop(x, NELEM(x), 120, "XHHHYHH.XHKHY.HH", 2, 0), n0, n64, n127;
         slot_pcm(2, y, to_pcm(x, y, m));
-        slc_rescan(2, 0);
+        slc_rescan(2, 0, SLC_DET_HITS);
         n0 = slc_usr[2].nauto;
-        slc_rescan(2, 64);
+        slc_rescan(2, 64, SLC_DET_HITS);
         n64 = slc_usr[2].nauto;
-        slc_rescan(2, 127);
+        slc_rescan(2, 127, SLC_DET_HITS);
         n127 = slc_usr[2].nauto;
         check("SENS: fewer slices at 0, more at 127", n0 <= n64 && n64 <= n127 && n0 < n127, "%u, %u, %u", n0, n64, n127);
-        slc_rescan(2, SHD_SENS_DEF);
+        slc_rescan(2, SHD_SENS_DEF, SLC_DET_DEF);
         check("SENS 64 is SLICE's scan", slc_usr[2].nauto == n64, 0);
         memset((uint8_t *)host_slots + 2u * SMP_USER_SIZE, 0, SMP_USER_SIZE);
         smp_user_scan(2);
@@ -1348,6 +1436,7 @@ int main(int argc, char **argv)
 
     sg_tests();
     fb_tests();
+    det_tests();
 
     /* 7: demos */
     {

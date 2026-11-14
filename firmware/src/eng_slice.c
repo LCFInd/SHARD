@@ -221,12 +221,240 @@ static void slc_bounds_v(const slc_src_t *s, const voice_t *v, uint32_t *a, uint
     slc_bounds(s, (pk >> 16) & 15u, (pk >> 8) & 63u, a, b, st);
 }
 
+/* ---- DETECT NOTES (slc_scan's pass 3, a user slot's): a slice where the pitch steps from one steady note to
+ * another, surer where the level dips there too (the crossover: one note fading as the next comes in). The material
+ * decimated to ~5.5 kHz (the mean of dec samples); every SN_FR of those a frame: the pitch (YIN: the cumulative-mean
+ * normalised difference over SN_WIN, its first dip under 0.2 between 1.1 kHz and 50 Hz, the lag refined between its
+ * neighbours; none: unpitched) and the level (the peak over the frame), both at the analysis window's middle. At a
+ * frame i: SN_W frames before and after (but the one either side, mixed) all pitched and each steady (within 0.35 semitone), the two means a semitone
+ * or more apart (a bend glides: not steady; noise: unpitched); the step's score min(1, semitones / 5); the dip the
+ * lowest level within SN_W frames under the lower of the highs either side, as a fraction of it. A dip of 8 % or
+ * more with the step: (step + dip) x 0.8 (the crossover), else step x 0.5; a slice from 0.8 - 0.6 x SENS / 127 on,
+ * at the dip's bottom (else the step), moved on to the next rising zero crossing (12.5 ms at most: a low note's cycle). */
+#define SN_FR 64u                           /* decimated samples per frame (~11.6 ms) */
+#define SN_WIN 192u                         /* the pitch window (~35 ms) */
+#define SN_LMAX 120u                        /* the longest lag (with fd ~5.5 kHz: 46 Hz) */
+#define SN_RING 512u                        /* decimated samples kept (>= SN_WIN + SN_LMAX + SN_FR) */
+#define SN_W 6u                             /* frames either side (~70 ms) */
+#define SN_FQ 16u                           /* frames kept (>= 2 SN_W + 3) */
+#define SN_MAX SLC_AUTO                     /* note slices at most */
+enum { SLC_DET_HITS, SLC_DET_NOTES, SLC_DET_BOTH, SLC_NDET };
+static const char *const N_SLC_DET[] = {"HITS", "NOTES", "BOTH"};
+#define SLC_DET_DEF (FELUCCA_MANGLER ? SLC_DET_BOTH : SLC_DET_HITS)
+
+/* log2(x) in Q12, x > 0 (as keytouch.c's: within 0.006 octave) */
+static int32_t slc_lg12(uint32_t x)
+{
+    uint32_t n = 31u - (uint32_t)__builtin_clz(x), f;
+    f = (n >= 16u ? x >> (n - 16u) : x << (16u - n)) & 0xFFFFu;
+    f += (((f * (65536u - f)) >> 16) * 22487u) >> 16;
+    return (int32_t)(n << 12) + (int32_t)(f >> 4);
+}
+/* the decoder state at pos of material len samples long (the grid as slc_scan left it: s->len is still 0) */
+static void slc_dec_seek(const slc_src_t *s, uint32_t len, uint32_t pos, slc_dec_t *d)
+{
+    uint32_t k = (uint32_t)((uint64_t)pos * SLC_GRID / len);
+    k = k < SLC_GRID ? k : SLC_GRID - 1u;
+    while (k && (uint32_t)((uint64_t)k * len / SLC_GRID) > pos)
+        k--;
+    slc_dec_at(d, (uint32_t)((uint64_t)k * len / SLC_GRID), s->grid[k]);
+    while (d->pos < pos)
+        slc_dec_next(s, d);
+}
+
+static struct {
+    int16_t x[SN_RING];                     /* the decimated material (>> 4: 12 bits) */
+    int32_t p[SN_FQ];                       /* each frame's pitch (Q12 octaves; INT32_MIN: unpitched) */
+    int32_t lv[SN_FQ];                      /* .. its level */
+    uint32_t at[SN_FQ];                     /* .. its source sample */
+    uint32_t pos[SN_MAX];                   /* the note slices found, */
+    int32_t sc[SN_MAX];                     /* .. their scores */
+    uint32_t n, near;                       /* source samples within which two are one (the higher score) */
+} sn;
+
+/* frame f's pitch from the ring's last SN_WIN + SN_LMAX samples (n written so far), lag range lo .. hi */
+static int32_t sn_pitch(uint32_t n, uint32_t lo, uint32_t hi, uint32_t fd16)
+{
+    uint32_t b = n - SN_WIN - hi, t, j;
+    uint64_t sum = 0;
+    uint32_t best = 0;
+    uint32_t dn[SN_LMAX + 2];               /* the normalised difference, Q10 */
+    dn[0] = 1024u;
+    for (t = 1; t <= hi + 1u && t <= SN_LMAX + 1u; t++) {
+        uint32_t dd = 0;
+        for (j = 0; j < SN_WIN; j += 2u) {   /* (every 2nd: the dips as deep, half the work) */
+            int32_t e = sn.x[(b + j) & (SN_RING - 1u)] - sn.x[(b + j + t) & (SN_RING - 1u)];
+            dd += (uint32_t)(e * e) >> 4;
+        }
+        sum += dd;
+        dn[t] = sum ? (uint32_t)(((uint64_t)dd * t << 10) / sum) : 1024u;
+    }
+    for (t = lo; t <= hi; t++)
+        if (dn[t] < 205u) {                 /* the first dip under 0.2 .. */
+            while (t < hi && dn[t + 1u] < dn[t])
+                t++;                        /* .. to its bottom */
+            best = t;
+            break;
+        }
+    if (!best)
+        return INT32_MIN;
+    {
+        int32_t a = (int32_t)dn[best - 1u], c = (int32_t)dn[best], e = (int32_t)dn[best + 1u], den = a - 2 * c + e;
+        int32_t q16 = (int32_t)best * 16 + (den > 0 ? clamp((a - e) * 8 / den, -8, 8) : 0);   /* the lag, Q4 */
+        return slc_lg12(fd16) - slc_lg12((uint32_t)(q16 > 16 ? q16 : 16));
+    }
+}
+
+/* at frame c (the ring's: SN_W frames on): a note slice? */
+static void sn_judge(uint32_t c, uint32_t sens)
+{
+    int32_t mb = 0, ma = 0, lob = INT32_MAX, hib = INT32_MIN, loa = INT32_MAX, hia = INT32_MIN, hl = 0, hr = 0, lo = INT32_MAX;
+    uint32_t j, lowat = c, semis8, at;
+    int32_t step, dip = 0, sc, thr;
+    for (j = 2; j <= SN_W + 1u; j++) {          /* (the frames either side of c straddle the change: left out) */
+        int32_t b = sn.p[(c - j) % SN_FQ], a = sn.p[(c + j) % SN_FQ];
+        if (b == INT32_MIN || a == INT32_MIN)
+            return;
+        mb += b;
+        ma += a;
+        lob = b < lob ? b : lob;
+        hib = b > hib ? b : hib;
+        loa = a < loa ? a : loa;
+        hia = a > hia ? a : hia;
+    }
+    if ((hib - lob) * 12 > 4096 * 35 / 100 || (hia - loa) * 12 > 4096 * 35 / 100)
+        return;                             /* not steady (a bend, vibrato) */
+    mb /= (int32_t)SN_W;
+    ma /= (int32_t)SN_W;
+    semis8 = (uint32_t)(ma > mb ? ma - mb : mb - ma) * 12u * 8u / 4096u;      /* semitones, Q3 */
+    if (semis8 < 8u)
+        return;
+    step = semis8 >= 40u ? 1024 : (int32_t)(semis8 * 1024u / 40u);   /* Q10: min(1, semitones / 5) */
+    for (j = 0; j <= 2u * SN_W; j++) {      /* the dip */
+        uint32_t f = c - SN_W + j;
+        int32_t l = sn.lv[f % SN_FQ];
+        if (j < SN_W)
+            hl = l > hl ? l : hl;
+        else if (j > SN_W)
+            hr = l > hr ? l : hr;
+        if (l < lo) {
+            lo = l;
+            lowat = f;
+        }
+    }
+    {
+        int32_t ref = hl < hr ? hl : hr;
+        if (ref > 16 && lo < ref)
+            dip = (ref - lo) * 1024 / ref;
+    }
+    sc = dip >= 82 ? (step + dip) * 819 / 1024 : step / 2;
+    thr = 819 - 614 * (int32_t)sens / 127;   /* Q10: 0.8 - 0.6 SENS / 127 */
+    if (sc < thr || sn.n >= SN_MAX)
+        return;
+    at = sn.at[(dip >= 82 ? lowat : c) % SN_FQ];
+    if (sn.n && at < sn.pos[sn.n - 1u] + sn.near) {   /* (the frames beside a step pass too: the best of them) */
+        if (sc > sn.sc[sn.n - 1u]) {
+            sn.pos[sn.n - 1u] = at > sn.pos[sn.n - 1u] ? at : sn.pos[sn.n - 1u];
+            sn.sc[sn.n - 1u] = sc;
+        }
+        return;
+    }
+    sn.sc[sn.n] = sc;
+    sn.pos[sn.n++] = at;
+}
+
+/* pass 3: the note slices of s (len samples) at sens into sn.pos (rising zero crossings) */
+static void slc_notes(const slc_src_t *s, uint32_t len, uint32_t sens)
+{
+    slc_dec_t d;
+    uint32_t src = (uint32_t)(((uint64_t)(s->rate ? s->rate : 32768u) * 44100u) >> 16);   /* the material's rate */
+    uint32_t dec = (src + 2756u) / 5512u, fd, lo, hi, n = 0, fr = 0, k = 0, i;
+    int32_t acc = 0, cnt = 0;
+    dec = dec ? dec : 1u;
+    fd = src / dec;
+    lo = fd / 1100u;
+    lo = lo < 2u ? 2u : lo;
+    hi = fd / 46u;
+    hi = hi > SN_LMAX ? SN_LMAX : hi;
+    sn.n = 0;
+    sn.near = 2u * SN_W * SN_FR * dec;
+    slc_dec_at(&d, 0, 0);
+    while (d.pos < len) {
+        acc += slc_dec_next(s, &d);
+        if (++cnt < (int32_t)dec)
+            continue;
+        sn.x[n++ & (SN_RING - 1u)] = (int16_t)(acc / cnt >> 4);
+        acc = cnt = 0;
+        if (n < SN_WIN + hi + 1u || (n - SN_WIN - hi - 1u) % SN_FR)
+            continue;
+        {                                   /* a frame: at the analysis window's middle */
+            uint32_t mid = n - (SN_WIN + hi) / 2u, f = fr % SN_FQ;
+            int32_t pk = 0;
+            for (i = mid - SN_FR / 2u; i < mid + SN_FR / 2u; i++) {
+                int32_t a = sn.x[i & (SN_RING - 1u)] < 0 ? -sn.x[i & (SN_RING - 1u)] : sn.x[i & (SN_RING - 1u)];
+                pk = a > pk ? a : pk;
+            }
+            sn.p[f] = sn_pitch(n, lo, hi, fd * 16u);
+            sn.lv[f] = pk;
+            sn.at[f] = mid * dec;
+            if (fr >= 2u * SN_W + 2u)
+                sn_judge(fr - SN_W - 1u, sens);
+            fr++;
+        }
+    }
+    for (k = 0; k < sn.n; k++) {            /* on to the next rising zero crossing (12.5 ms at most) */
+        int32_t prev;
+        uint32_t lim = sn.pos[k] + src / 80u;
+        slc_dec_seek(s, len, sn.pos[k], &d);
+        prev = slc_dec_next(s, &d);
+        while (d.pos < lim && d.pos < len) {
+            int32_t x = slc_dec_next(s, &d);
+            if (prev < 0 && x >= 0) {
+                sn.pos[k] = d.pos - 1u;
+                break;
+            }
+            prev = x;
+        }
+    }
+}
+
+/* the AUTO slices: hits (pass 2's, in s->apos), notes (sn.pos) or both, in order, SLC_MIN-like gap apart (a hit
+ * beats a note within it: its attack is exact) */
+static void slc_merge(slc_src_t *s, uint32_t len, uint32_t det, uint32_t gap)
+{
+    uint32_t hp[SLC_AUTO], nh = 0, a = 0, b = 0, last = 0, lastnote = 0;
+    slc_dec_t d;
+    for (a = 1; a < s->nauto; a++)
+        hp[nh++] = s->apos[a];
+    if (det == SLC_DET_NOTES)
+        nh = 0;
+    s->nauto = 1;
+    a = 0;
+    while ((a < nh || b < sn.n) && s->nauto < SLC_AUTO) {
+        int hit = a < nh && (b >= sn.n || hp[a] <= sn.pos[b]);
+        uint32_t p = hit ? hp[a++] : sn.pos[b++];
+        if (p < gap)
+            continue;
+        if (p < last + gap) {
+            if (hit && lastnote && s->nauto > 1u) {
+                s->nauto--;                 /* (the note before it: the hit instead) */
+            } else
+                continue;
+        }
+        slc_dec_seek(s, len, p, &d);
+        s->apos[s->nauto] = p;
+        s->ast[s->nauto++] = slc_dec_st(&d);
+        last = p;
+        lastnote = !hit;
+    }
+}
+
 /* ---- the slice table of a user slot (main loop) */
 /* the grid states and the AUTO slices of s (len samples; s->len stays 0 meanwhile): see the top */
 /* sens (0..127, SLC_SENS_DEF: as before SHARD's SENS): the hit thresholds x 2^((64 - sens) / 32) (x 4 at 0, about
  * x 1 / 4 at 127) and the rise a hit needs, 7 / 4 of the follower, from 11 / 4 (0) to 5 / 4 (127) */
 #define SLC_SENS_DEF 64u
-static void slc_scan(slc_src_t *s, uint32_t len, uint32_t sens)
+static void slc_scan(slc_src_t *s, uint32_t len, uint32_t sens, uint32_t det)
 {
     slc_dec_t d;
     uint32_t pos = 0, k = 0, gap = ((s->rate >> 4) * 44100u >> 12) / 20u, last = 0, h0 = 0, st0 = 0;
@@ -280,11 +508,15 @@ static void slc_scan(slc_src_t *s, uint32_t len, uint32_t sens)
         h0 = hs;
         st0 = hst;
     }
+    if (det == SLC_DET_NOTES || det == SLC_DET_BOTH) {   /* pass 3: the notes (DETECT) */
+        slc_notes(s, len, sens);
+        slc_merge(s, len, det, gap);
+    }
 }
 
 /* slot k's AUTO slices again at sens (SHARD's SENS: slice_store.c at the kit's load, ui_slice.c after an edit): its
  * voices stop meanwhile, as at a scan */
-static void slc_rescan(uint32_t k, uint32_t sens)
+static void slc_rescan(uint32_t k, uint32_t sens, uint32_t det)
 {
     slc_src_t *s = &slc_usr[k % SMP_USER_SLOTS];
     uint32_t len = s->len;
@@ -292,7 +524,7 @@ static void slc_rescan(uint32_t k, uint32_t sens)
         return;
     s->len = 0;
     RING_PUBLISH();
-    slc_scan(s, len, sens);
+    slc_scan(s, len, sens, det);
     RING_PUBLISH();
     s->len = len;
 }
@@ -334,7 +566,7 @@ static void slc_user_scan(uint32_t k, int valid)
     if (!s->nseg)
         return;
     s->rate = usr_zone[k][0].rate;
-    slc_scan(s, at, SLC_SENS_DEF);                  /* (SHARD's SENS, if the kit's is another: slc_rescan) */
+    slc_scan(s, at, SLC_SENS_DEF, SLC_DET_DEF);     /* (SHARD's SENS, DETECT, if the kit's are others: slc_rescan) */
     RING_PUBLISH();
     s->len = at;
     SLC_TEMPO_SCAN(k);
