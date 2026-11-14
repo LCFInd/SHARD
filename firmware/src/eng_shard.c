@@ -528,7 +528,8 @@ static uint32_t shd_tempo_of(const slc_src_t *s, uint8_t *o)
         uint64_t beats1000 = (uint64_t)len * best * 1000u / (600u * hz);   /* the sample's beats x 1000 */
         uint32_t m;
         for (m = 0; m < 3u; m++) {
-            uint64_t q = M[m] * 1000u, k = (beats1000 + q / 2u) / q * q;
+            uint32_t q = M[m] * 1000u;              /* (32-bit: the device has no 64 / 64 division) */
+            uint64_t k = (beats1000 + q / 2u) / q * q;
             if (k && (beats1000 > k ? beats1000 - k : k - beats1000) * 100u <= 3u * k) {
                 uint32_t exact = (uint32_t)((k / 1000u) * 600u * hz * 10u / len);   /* x 10: 0.01 BPM */
                 if (exact >= 6000u && exact <= 20000u)
@@ -574,7 +575,7 @@ static uint32_t shd_loop_len(const int16_t *p, const slc_src_t *s)
 {
     uint32_t b10 = clamp(p[P_E5], 0, 4) ? 0u : shd_bpm10(slc_src_of(p)), hz = shd_src_hz(s);
     if (b10 && hz) {
-        uint32_t l = (uint32_t)((uint64_t)s->len * b10 * beat_samples() / (600u * (uint64_t)hz));
+        uint32_t l = (uint32_t)((uint64_t)s->len * b10 * beat_samples() / (600u * hz));   /* (a 32-bit divisor) */
         if (l)
             return l;
     }
@@ -1410,7 +1411,8 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
                 hi = shd_sat(mem->fby[b] - mem->fbl[b] - (mem->fbb[b] >> 1), 1 << 17);
                 mem->fbb[b] = shd_sat(mem->fbb[b] + ((ff[b] * hi) >> 14), 1 << 17);
                 {
-                    int32_t o = mem->fao[b] > 512 ? mem->fao[b] : 512, cq = (int32_t)(((int64_t)mem->fai[b] << 13) / o);
+                    int32_t o = mem->fao[b] > 512 ? mem->fao[b] : 512;   /* (fai <= 2^17: 32-bit, each sample) */
+                    int32_t cq = (int32_t)(((uint32_t)(mem->fai[b] > 0 ? mem->fai[b] : 0) << 13) / (uint32_t)o);
                     cq = cq > 32768 ? 32768 : cq;   /* (Q13: the shaper's gain undone, up to 4; below -36 dB out less: the loop dies away in the quiet) */
                     in += (int32_t)(((((int64_t)mem->fbb[b] * fg[b]) >> 15) * cq) >> 13);
                 }

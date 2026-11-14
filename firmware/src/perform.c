@@ -890,7 +890,7 @@ static inline void perf_rn(uint32_t a, uint32_t t, int32_t *c, int32_t *x)
         int32_t env = 32768, y;
         if (pf.nsel != PF_NZH && dv) {
             uint32_t q = t % dv;
-            env = (int32_t)(32768u - (uint32_t)((uint64_t)q * 32768u / dv));
+            env = (int32_t)(32768u - q * 32768u / dv);   /* (q < dv <= 2 x a 1/16 at 40 BPM: 32-bit) */
             env = (int32_t)(((int64_t)env * env) >> 15);
         }
         y = mulq15((int32_t)rng() >> 17, env);      /* (-12 dB peaks: under the loop's) */
