@@ -47,14 +47,20 @@
  * PF_M1), then the mutes of the black keys */
 enum { PF_R8, PF_R16, PF_R32, PF_REV, PF_LPF, PF_HPF, PF_TAPE, PF_FRZ, PF_OUP, PF_ODN, PF_FLG, PF_PHS,
        PF_RTHR, PF_ETHR,                      /* 1.5.1: REV THROW, ECHO THROW */
+       PF_SC16, PF_SC32, PF_SWL,              /* the mangler's ARP bank: SCATTER 1/16 1/32, FEEDBACK SWELL, */
+       PF_RGL, PF_RGM, PF_RGH, PF_RGS,        /* RING LO MID HI SWEEP, */
+       PF_NZ8, PF_NZ16, PF_NZ32, PF_NZH,      /* NOISE 1/8 1/16 1/32 HOLD */
        PF_M1, PF_N = PF_M1 + NTRK };
 #define PF_NFX PF_M1                          /* the effects a white key can hold */
 #define PF_KEYS 16u                           /* the white keys F3 .. G5 */
 #define PF_BIT(e) (1u << (e))
 #define PF_REPEAT 0x7u                                         /* the three REPEAT rates */
-#define PF_Q (PF_REPEAT | PF_BIT(PF_REV))                      /* start on the 1/16 */
+#define PF_SCAT (PF_BIT(PF_SC16) | PF_BIT(PF_SC32))
+#define PF_RING (PF_BIT(PF_RGL) | PF_BIT(PF_RGM) | PF_BIT(PF_RGH) | PF_BIT(PF_RGS))
+#define PF_NOISE (PF_BIT(PF_NZ8) | PF_BIT(PF_NZ16) | PF_BIT(PF_NZ32) | PF_BIT(PF_NZH))
+#define PF_Q (PF_REPEAT | PF_BIT(PF_REV) | PF_SCAT)            /* start on the 1/16 */
 #define PF_HARM (PF_BIT(PF_OUP) | PF_BIT(PF_ODN))
-#define PF_BUF (PF_REPEAT | PF_BIT(PF_REV) | PF_BIT(PF_TAPE) | PF_BIT(PF_FRZ) | PF_HARM)
+#define PF_BUF (PF_REPEAT | PF_BIT(PF_REV) | PF_BIT(PF_TAPE) | PF_BIT(PF_FRZ) | PF_HARM | PF_SCAT)
 #define PF_MUTE (((1u << NTRK) - 1u) << PF_M1)
 #define PF_MOD (PF_BIT(PF_FLG) | PF_BIT(PF_PHS))   /* FLANGER, PHASER: their own stages after CRUSH */
 #define PB_FRAMES (NTRK * SL_LEN / 2u)        /* stereo frames in sl_buf: 8192, 371 ms at 22.05 kHz */
@@ -67,7 +73,7 @@ enum { PF_R8, PF_R16, PF_R32, PF_REV, PF_LPF, PF_HPF, PF_TAPE, PF_FRZ, PF_OUP, P
 #define HB_FB 269                             /* .. KNOB 4 (0 .. 100) -> the shimmer, Q15: 0 .. 0.82 */
 #define PF_TOP (63 << 8)                      /* filter cutoff index, Q8 (PF_SVF): the LPF's open end */
 #define PF_LOW (14 << 8)                      /* .. the LPF sweep's end, the HPF sweep's (and K1's) top */
-enum { BM_NONE, BM_LOOP, BM_TAPE, BM_FRZ, BM_HARM };
+enum { BM_NONE, BM_LOOP, BM_TAPE, BM_FRZ, BM_HARM, BM_SCAT };
 #define FL_LEN 356u                           /* FLANGER: its line's frames (8.1 ms: FL_MAX + 2) */
 #define FL_MIN 22u                            /* .. the delay's sweep, samples: 0.5 .. 8 ms */
 #define FL_MAX 353u
@@ -85,10 +91,14 @@ static volatile uint8_t perf_map[PF_KEYS] = {PF_R8, PF_R16, PF_R32, PF_REV, PF_L
                                              PF_ODN, PF_FLG, PF_PHS, PF_RTHR, PF_ETHR, PF_N, PF_N};
                                       /* main: white key p's effect (PF_N none), from the settings (ui_layer.c) */
 static volatile uint8_t perf_remap;   /* main: perf_map changed (seq.c: a key held takes its new effect) */
+/* the mangler's second bank: ARP held (ui_layer.c LAYER_ARP), the white keys these, the black keys the mutes as FX's */
+static const uint8_t PF_ARPMAP[PF_KEYS] = {PF_SC16, PF_SC32, PF_SWL, PF_N, PF_RGL, PF_RGM, PF_RGH, PF_RGS,
+                                           PF_NZ8, PF_NZ16, PF_NZ32, PF_NZH, PF_N, PF_N, PF_N, PF_N};
+static volatile uint32_t perf_arp;    /* main: ARP's button bit while its layer may own keys (layer_masks), 0 none */
 
 static volatile uint32_t perf_mask;   /* main: the FX button's bit while its layer may own keys, 0 = none */
 static volatile uint32_t kb_mask;     /* main: the button bits whose hold makes keys a layer's (ui_layer.c), 0 = none */
-static volatile uint8_t kb_lock;      /* main: a layer locked open (#83, no button held): 1 keys are the layer's, 2 FX's */
+static volatile uint8_t kb_lock;      /* main: a layer locked open (#83, no button held): 1 keys are the layer's, 2 FX's, 4 ARP's bank */
 static volatile uint8_t perf_solo;    /* main: tracks soloed in the GLO layer (the others muted as by a black key) */
 static volatile uint8_t perf_kill;    /* main: every effect off (the menu, a dialog, UBOOT) */
 static volatile int8_t perf_k[4];     /* main: the knob macros, 0 = untouched: FILTER -100..100 (- LPF, + HPF),
@@ -146,6 +156,13 @@ static struct {
     int32_t fw, pw;                    /* their shares, Q15 */
     uint32_t fwp, fn;                  /* FLANGER: the frame written next; frames written since it started */
     int32_t px[2][PH_ST], py[2][PH_ST], pfb[2];   /* PHASER: each stage's last input and output, L and R; the fed back */
+    /* the ARP bank */
+    uint32_t sbase, sseg;              /* SCATTER: the segment's first frame (as wr), segments since it started */
+    uint8_t sk, srev;                  /* .. its 1/16s back (0: live), backwards */
+    uint32_t rph;                      /* RING: the carrier's phase */
+    int32_t rgw, nw;                   /* RING, NOISE: their shares (Q15) */
+    uint8_t rsel, nsel;                /* .. the one playing (PF_*): the last pressed of those held */
+    uint32_t swq;                      /* FEEDBACK SWELL: shd_swell, Q8 */
 } pf = {.src = PF_N, .next = PF_N, .lc = PF_TOP, .mg = {32768, 32768, 32768, 32768}};
 
 static int16_t fl_buf[FL_LEN][2];      /* FLANGER's line: L R, at half the level (headroom) */
@@ -180,6 +197,12 @@ static uint32_t perf_avail(void)
     for (e = PF_R8; e <= PF_REV; e++)
         if (b > PB_MAX * PF_DEN[e])
             m &= ~PF_BIT(e);
+    if (b / 4u > PB_MAX / 2u)                       /* SCATTER: a 1/16 back must fit beside the one recording */
+        m &= ~PF_BIT(PF_SC16);
+    if (b / 8u > PB_MAX / 2u)
+        m &= ~PF_BIT(PF_SC32);
+    if (!FELUCCA_SHARD)
+        m &= ~PF_BIT(PF_SWL);
     return m;
 }
 
@@ -213,6 +236,15 @@ static void perf_drop_slicer(void)
         sl[k].rec = sl[k].loop = sl[k].rec_on = 0;
 }
 
+/* the last pressed of the effects in a (PF_N none) */
+static uint32_t perf_pick_of(uint32_t a)
+{
+    uint32_t e, best = PF_N;
+    for (e = 0; e < PF_M1; e++)
+        if (((a >> e) & 1u) && (best == PF_N || perf_ord[e] - perf_ord[best] < 0x80000000u))
+            best = e;
+    return best;
+}
 /* the buffer effect to play: the last pressed of those running */
 static uint32_t perf_pick(uint32_t a)
 {
@@ -249,6 +281,13 @@ static void perf_buf_start(uint32_t e)
         pf.hph = 0;
         pf.hinc = e == PF_OUP ? 0u - (1u << 21) : 1u << 20;   /* the delay: -1 / +0.5 sample a sample */
         pf.hfb = 0;
+    } else if (e == PF_SC16 || e == PF_SC32) {      /* SCATTER: live first, then a pick each 1/16 (1/32) */
+        pf.mode = BM_SCAT;
+        pf.len = beat_samples() / (e == PF_SC16 ? 4u : 8u);
+        pf.sk = 0;
+        pf.srev = 0;
+        pf.sseg = 0;
+        pf.sbase = 0;
     } else if (e == PF_FRZ) {
         pf.mode = BM_FRZ;
         pf.gp[0] = 0;
@@ -360,6 +399,23 @@ static __attribute__((noinline)) int perf_begin(uint32_t n)
         pf.ew1 += clamp((pf.act & PF_BIT(PF_ETHR) ? 32768 : 0) - pf.ew1, -s, s);
         pf.thr = (pf.rw | pf.rw1 | pf.ew | pf.ew1) != 0;
     }
+    {   /* the ARP bank: the RING and NOISE playing (the last pressed held), FEEDBACK SWELL rising over a bar while
+         * held (falling over a beat when let go) */
+        uint32_t b = beat_samples(), st;
+        uint32_t rs = perf_pick_of(pf.act & PF_RING), ns = perf_pick_of(pf.act & PF_NOISE);
+        if (rs != PF_N)
+            pf.rsel = (uint8_t)rs;
+        if (ns != PF_N)
+            pf.nsel = (uint8_t)ns;
+        st = (127u << 8) * n / (b ? b : 1u);
+        if (pf.act & PF_BIT(PF_SWL))
+            pf.swq = pf.swq + st / 4u + 1u > 127u << 8 ? 127u << 8 : pf.swq + st / 4u + 1u;
+        else
+            pf.swq = pf.swq > st + 1u ? pf.swq - st - 1u : 0u;
+#if FELUCCA_SHARD
+        shd_swell = pf.swq >> 8;
+#endif
+    }
     pf.mute = 0;
     for (k = 0; k < NTRK; k++)
         if (((held >> (PF_M1 + k)) & 1u) || pf.mg[k] != 32768)
@@ -448,9 +504,9 @@ static inline void pb_at(uint32_t s, uint32_t n, int32_t *l, int32_t *r)
     const int16_t *p = &sl_buf[0][0] + 2u * (f & (PB_FRAMES - 1u));
     const int16_t *q;                               /* a frame is the mean of samples 2f, 2f + 1: sample s */
     if (s & 1u)                                     /* lies a quarter frame from it, towards f + 1 or f - 1 */
-        q = f + 1u < n ? p + 2 : p;
+        q = f + 1u < n ? &sl_buf[0][0] + 2u * ((f + 1u) & (PB_FRAMES - 1u)) : p;   /* (round the loop: SCATTER) */
     else
-        q = f ? p - 2 : p;
+        q = f ? &sl_buf[0][0] + 2u * ((f - 1u) & (PB_FRAMES - 1u)) : p;
     *l = (3 * p[0] + q[0]) >> 1;
     *r = (3 * p[1] + q[1]) >> 1;
 }
@@ -541,6 +597,39 @@ static __attribute__((noinline)) void perf_harm(int32_t l, int32_t r, int32_t *y
     *yr = r + (r >> 3) + ((sr_ * 45875) >> 15);
 }
 
+/* SCATTER: the mix recorded all along (round the loop's frames); at each 1/16 (1/32) a pick: live (a third of the
+ * time), else one of the last ones again, as far back as the loop holds beside the one recording, a quarter of those
+ * backwards; each segment windowed at its ends (SL_RAMP). Live segments: yl / yr the live mix (the windows' dip
+ * aside: none, it plays straight through) */
+static __attribute__((noinline)) void perf_scat_pick(void)
+{
+    uint32_t r = rng(), lf = pf.len >> 1, kmax = lf ? PB_FRAMES / lf - 1u : 0u, have = lf ? pf.wr / lf : 0u;
+    kmax = kmax < have ? kmax : have;
+    pf.sseg++;
+    pf.sk = !kmax || (r >> 24) < 85u ? 0u : (uint8_t)(1u + (r >> 8) % kmax);
+    pf.srev = pf.sk && ((r >> 4) & 3u) == 0u;
+    pf.sbase = pf.wr - pf.sk * lf;
+}
+static inline void perf_scat(int32_t l, int32_t r, int32_t *yl, int32_t *yr)
+{
+    pf.wr = pb_rec(pf.wr, l, r);
+    if (!pf.sk) {
+        *yl = l;
+        *yr = r;
+    } else {
+        uint32_t e = pf.len - 1u - pf.rp, w = pf.rp < e ? pf.rp : e;
+        pb_at(2u * pf.sbase + (pf.srev ? e : pf.rp), pf.wr, yl, yr);
+        if (w < (uint32_t)SL_RAMP) {
+            *yl = (*yl * (int32_t)w) >> SL_RAMP_LOG2;
+            *yr = (*yr * (int32_t)w) >> SL_RAMP_LOG2;
+        }
+    }
+    if (++pf.rp >= pf.len) {
+        pf.rp = 0;
+        perf_scat_pick();
+    }
+}
+
 /* the buffer effect faded out: the next one, or the buffer back. Once per effect, out of the per-sample loop
  * (noinline: its calls stay out of perf_block's loop code) */
 static __attribute__((noinline)) void perf_buf_done(void)
@@ -615,6 +704,9 @@ static inline void perf_buf(int32_t *pl, int32_t *pr)
     } else if (pf.mode == BM_HARM) {
         perf_harm(l, r, &yl, &yr);
         on = 2;                                     /* (KNOB 4 is the shimmer: the level stays full) */
+    } else if (pf.mode == BM_SCAT) {
+        perf_scat(l, r, &yl, &yr);
+        on = 1;
     }
     pf.tw = on && pf.src != PF_N ? on == 2 ? 32768 : 32768 - perf_k[3] * 327 : 0;
     pf.w += clamp(pf.tw - pf.w, -SL_SLOPE, SL_SLOPE);
@@ -738,10 +830,49 @@ static __attribute__((noinline)) void perf_phaser(int32_t *bl, int32_t *br, uint
     }
 }
 
+/* RING: the mix times a sine: LO 60 Hz (a growl), MID 420 Hz, HI 1.7 kHz (bells, clang), SWEEP 40 Hz .. 2.4 kHz and
+ * back over a bar (exponential, in time with the transport). NOISE: white noise into the mix, each 1/8 (1/16, 1/32)
+ * a burst from full falling away (squared) over it, on the transport's clock; HOLD: steady. Both at KNOB 4 DEPTH, gliding
+ * in and out (SL_SLOPE); the last pressed of each plays. t: the sample on the 1/16 clock (pf.ph). noinline: out of
+ * perf_block's loop code */
+static const uint16_t RG_HZ[3] = {60, 420, 1700};
+static __attribute__((noinline)) void perf_noise(uint32_t a, uint32_t t, int32_t *l, int32_t *r)
+{
+    int32_t d = (100 - perf_k[3]) * 32768 / 100, rt = (a & PF_RING) ? d : 0, nt = (a & PF_NOISE) ? d : 0;
+    pf.rgw += clamp(rt - pf.rgw, -SL_SLOPE, SL_SLOPE);
+    pf.nw += clamp(nt - pf.nw, -SL_SLOPE, SL_SLOPE);
+    if (pf.rgw) {
+        uint32_t hz;
+        int32_t c;
+        if (pf.rsel == PF_RGS) {                    /* SWEEP: 40 .. 2400 Hz, a triangle over the bar, log */
+            uint32_t bar = 16u * (pf.P ? pf.P : 1u), q = t % bar, tri = q < bar / 2u ? q * 2u : (bar - q) * 2u;
+            hz = (uint32_t)((40ull * pow2_q16((int32_t)((uint64_t)tri * 1134u / bar))) >> 16);   /* (5.9 oct: x 60) */
+        } else
+            hz = RG_HZ[(pf.rsel - PF_RGL) % 3u];
+        c = osc_sine(pf.rph);
+        pf.rph += hz * 97391u;                      /* (2^32 / 44100) */
+        *l = pf_mix(*l, mulq15(*l, c), pf.rgw);
+        *r = pf_mix(*r, mulq15(*r, c), pf.rgw);
+    }
+    if (pf.nw) {
+        uint32_t dv = pf.nsel == PF_NZ8 ? 2u * pf.P : pf.nsel == PF_NZ16 ? pf.P : pf.P / 2u;
+        int32_t env = 32768, x;
+        if (pf.nsel != PF_NZH && dv) {
+            uint32_t q = t % dv;
+            env = (int32_t)(32768u - (uint32_t)((uint64_t)q * 32768u / dv));
+            env = (int32_t)(((int64_t)env * env) >> 15);
+        }
+        x = mulq15((int32_t)rng() >> 17, env);      /* (-12 dB peaks: under the loop's) */
+        x = mulq15(x, pf.nw);
+        *l += x;
+        *r += (int32_t)(((int64_t)x * 29491) >> 15) - (x >> 4);   /* (a hair apart: not quite mono) */
+    }
+}
+
 /* after the master level: the buffer effect, LPF, HPF, CRUSH on l / r (stereo, Q15) */
 static __attribute__((noinline)) void perf_block(int32_t *bl, int32_t *br, uint32_t n)
 {
-    uint32_t i, a = pf.act0, sh, hold;
+    uint32_t i, a = pf.act0, sh, hold, ph0 = pf.ph - n;     /* (ph0: this block's first sample on the 1/16 clock) */
     int32_t c = perf_k[1], lt, ht, ct;
     if (c)
         pf.cc = c;
@@ -759,6 +890,8 @@ static __attribute__((noinline)) void perf_block(int32_t *bl, int32_t *br, uint3
         }
         if (pf.mode != BM_NONE)
             perf_buf(&l, &r);
+        if ((a & (PF_RING | PF_NOISE)) || pf.rgw || pf.nw)
+            perf_noise(a, ph0 + i, &l, &r);
         lt = (a & PF_BIT(PF_LPF)) || perf_k[0] < 0 || pf.lc < PF_TOP ? 32768 : 0;
         pf.la += clamp(lt - pf.la, -SL_SLOPE, SL_SLOPE);
         if (pf.la) {
@@ -799,5 +932,5 @@ static __attribute__((noinline)) void perf_block(int32_t *bl, int32_t *br, uint3
     if ((pf.act & PF_BIT(PF_PHS)) || pf.pw)
         perf_phaser(bl, br, n);
     pf.busy = pf.act || pf.mode != BM_NONE || pf.w || pf.la || pf.ha || pf.cw || pf.td || pf.mute || pf.fw || pf.pw || pf.thr ||
-              pf.fn || perf_k[0] || perf_k[1] || perf_k[2];
+              pf.fn || perf_k[0] || perf_k[1] || perf_k[2] || pf.rgw || pf.nw || pf.swq;
 }

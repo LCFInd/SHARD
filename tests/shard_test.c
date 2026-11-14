@@ -538,8 +538,12 @@ static void sg_tests(void)
             memcpy(o.sl[i], &shd_kit[3].sl[i], 16u);
         }
         o.sl[1][0] = (uint8_t)-5;                          /* slice 2's PITCH */
-        shd_bus_default(&o.bus);
-        o.bus.gmode = 0xAA;                                /* (SHF2's pad: anything) */
+        {
+            shd_bus_t db;
+            shd_bus_default(&db);
+            memcpy(o.bus, &db, sizeof o.bus);
+            o.bus[20] = 0xAA;                              /* (SHF2's pad: anything) */
+        }
         o.rcrc = st_crc32(&o, sizeof o - 4u);
         if (!slc_rec_room(2))
             check("SHF2: room for the kit in the slot", 0, 0);
@@ -554,6 +558,49 @@ static void sg_tests(void)
     memset((uint8_t *)host_slots + 2u * SMP_USER_SIZE, 0, SMP_USER_SIZE);
     smp_user_scan(2);
     song.g[G_BPM] = 120;
+}
+
+
+/* 11: FDBK: a channel's shaper fed back into itself. Off: as before; low: rings and dies; high: howls on after the
+ * voices, bounded; back to 0: quiet again. ARP's FEEDBACK SWELL (shd_swell) does the same at any FDBK */
+static void fb_tests(void)
+{
+    uint32_t k, i;
+    double e_tail[4];
+    static const uint8_t AMT[4] = {0, 30, 100, 0};
+    for (k = 0; k < 4u; k++) {
+        fresh(1, SHD_M_ONE, 5);
+        T->p[P_E6] = 127;
+        for (i = 0; i < SLC_AUTO; i++)
+            shd_kit[0].sl[i].route = k == 3u ? SHD_DIRECT : SHD_MID;   /* (SWELL: the kit as it comes, DIRECT) */
+        shd_kit[0].bus.type[1] = SHD_D_HARD;
+        shd_kit[0].bus.drive[1] = 60;
+        shd_kit[0].bus.fb[1] = AMT[k];
+        shd_swell = k == 3u ? 100u : 0u;
+        trk_note_on(T, 60, 110);
+        blocks(FS / 4u / CTL);
+        trk_note_off(T, 60);
+        voices_off();                                  /* the voices gone: what is left is the bus */
+        blocks(2u * FS / CTL);                         /* two seconds on */
+        out_peak = 0;
+        out_energy = 0;
+        blocks(FS / 2u / CTL);
+        e_tail[k] = out_energy / (FS / 2u);
+        if (k >= 2u)
+            check(k == 2u ? "FDBK 100: the MID channel howls on after the voices, bounded" :
+                            "FEEDBACK SWELL (ARP): DIRECT slices howl through FULL at FDBK 0, bounded",
+                  e_tail[k] > 1e6 && out_peak < 32767, "rms %.0f, peak %d", sqrt(e_tail[k]), out_peak);
+        if (k == 2u) {
+            shd_kit[0].bus.fb[1] = 0;
+            blocks(FS / 2u / CTL);
+            out_peak = 0;
+            blocks(FS / 4u / CTL);
+            check("FDBK back to 0: the howl stops", out_peak < 50, "peak %d", out_peak);
+        }
+    }
+    shd_swell = 0;
+    check("FDBK 0 and 30: nothing left two seconds after the voices", e_tail[0] < 1.0 && e_tail[1] < 1.0,
+          "%.2f, %.2f", e_tail[0], e_tail[1]);
 }
 
 int main(int argc, char **argv)
@@ -1300,6 +1347,7 @@ int main(int argc, char **argv)
     }
 
     sg_tests();
+    fb_tests();
 
     /* 7: demos */
     {
@@ -1337,6 +1385,17 @@ int main(int argc, char **argv)
         shd_kit[0].bus.gjit = 70;
         shd_kit[0].bus.gdens = 100;
         demo(dir, "grain_cloud_break_90_up7.wav", 90, 4, SHD_M_PLAY, SHD_DIV_AUTO, 0, ONE, 16);
+        /* FDBK: the kit routed through the bus, MID (DIST) fed back to its edge, LOW (TUBE) a little */
+        fresh(1, SHD_M_ONE, 5);
+        for (i = 0; i < SLC_AUTO; i++)
+            shd_kit[0].sl[i].route = i % 3u ? SHD_MID : SHD_LOW;
+        T->p[P_E6] = 127;
+        shd_kit[0].bus.type[1] = SHD_D_HARD;
+        shd_kit[0].bus.drive[1] = 70;
+        shd_kit[0].bus.fb[1] = 72;
+        shd_kit[0].bus.fb[0] = 50;
+        shd_kit[0].bus.gate[1] = 30;
+        demo(dir, "fdbk_kit_128.wav", 128, 4, SHD_M_ONE, 5, 0, CHOP, 16);
     }
     printf(fails ? "shard: %d FAILED\n" : "shard: all passed\n", fails);
     return fails != 0;

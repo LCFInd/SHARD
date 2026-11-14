@@ -130,3 +130,34 @@ GRAIN plays a slice as grains so that its pitch and its length are separate. A h
 - **Cost:** at most 4 grains per voice and 8 per part. Grain starts are found from the nearest saved decoder state: the head's, one kept every 128 samples behind it, the slice's start, or SLICE's grid. Seeking has a budget of 384 decoded samples per block, saved up to 2048. A grain that does not fit the budget is left out, or started without alignment. On the host, 8 voices of STRETCH cost about 1.5× SHARD without grains, comparable to the GRAIN engine's worst case.
 - **Storage:** the kit record is now SHF3 (each slice 20 bytes; the bus's 4 spare bytes hold the track's GRAIN). SHF2 kits load with GRAIN set to TRACK and the bus set to OFF.
 - **The GRAIN engine stays** for synth-style granular work on SAMPLE zones.
+
+## FDBK (SLICE FX: BUS, per channel)
+
+Each BUS channel (LOW, MID, HIGH, FULL) has an FDBK setting, listed between DRV and GATE. It feeds the channel's shaper output back into its own input, the way a no-input mixer is played.
+
+- **The loop's pitch:** the feedback passes through a band-pass (Q 2) at a pitch set by the channel: LOW 150 Hz, MID 900 Hz, HIGH 4 kHz, FULL 500 Hz.
+- **Same onset for every shaper:** the loop's gain is divided by the shaper's own gain, which `fai` / `fao` measure as mean input and mean output. A RAT at full drive therefore starts howling at about the same setting as a clean channel.
+- **Settings:** about 0–60 thickens the sound and rings. From about 64–80 (depending on type and drive) the loop sustains itself after the slices stop, held at the shaper's ceiling. GATE does not close on the howl, because the follower hears the loop.
+- **When the bus stops:** the bus keeps running while the band-passed loop is above −36 dBFS (`hot`). Below that, the gain estimate is clamped (`fao` ≥ 512), so the loop dies away in quiet instead of humming.
+- **Storage:** FDBK is 4 bytes at the end of the bus, so the bus is now 28 bytes (SHF3, still unreleased). SHF2 kits load with FDBK 0.
+
+## The ARP layer: a second effects bank (the mangler)
+
+With no ARP pages, the ARP button is now a hold layer like FX: hold ARP and press keys. It uses FX's engine (`perform.c`), knobs (FILTER, CRUSH, THROW, DEPTH), latch, double-tap lock and black-key mutes. The white keys play `PF_ARPMAP`:
+
+| Row | F / C / G | G / D / A | A / E / B | B / F / C |
+|---|---|---|---|---|
+| 1 (F3–B3) | SCATTER 1/16 | SCATTER 1/32 | FDBK SWELL | – |
+| 2 (C4–F4) | RING LO 60 Hz | RING MID 420 Hz | RING HI 1.7 kHz | RING SWEEP |
+| 3 (G4–C5) | NOISE 1/8 | NOISE 1/16 | NOISE 1/32 | NOISE HOLD |
+
+- **SCATTER:** records the mix into the loop buffer continuously. At each 1/16 (or 1/32) it picks one of these:
+  - Live, a third of the time.
+  - One of the last few divisions again (as many as the 371 ms buffer holds beside the one recording). A quarter of these play backwards.
+  - It starts on the 1/16. It is a buffer effect: the last-pressed rule applies, the same as for REPEAT and TAPE.
+- **FDBK SWELL:** raises `shd_swell`, a floor under every SHARD track's FDBK. It rises over a bar while held and falls over a beat when let go. While swelling, DIRECT slices also feed the FULL channel in proportion, so the default kit howls too.
+- **RING:** multiplies the mix by a sine. SWEEP glides 40 Hz–2.4 kHz and back over a bar, in time with the transport.
+- **NOISE:** white noise in squared-decay bursts on the 1/8, 1/16 or 1/32 grid; HOLD is steady.
+- **DEPTH:** RING and NOISE follow KNOB 4. At 0 % the output is the input, bit for bit.
+- **The FX map:** in the mangler, FX's key map can take any of these effects too (PRESETS while holding a key). In Felucca's full build, the list stops at ECHO THROW and there is no ARP layer.
+- **A fix along the way:** `pb_at` now wraps its neighbouring frame round the loop. Before, a read straddling the buffer's end took one sample from outside it. Only SCATTER reads across the wrap.

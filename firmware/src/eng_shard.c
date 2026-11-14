@@ -85,17 +85,18 @@ typedef struct {
     uint8_t bpm;                                    /* the source's tempo (40..250), 0: AUTO (shd_tempo_scan) */
     uint8_t sens;                                   /* AUTO's hits: 0 fewest .. 127 most (SHD_SENS_DEF: SLICE's) */
     uint8_t gmode, gsize, gdens, gjit;              /* the track's GRAIN (SHD_GM_*), SIZE, DENS, JITTER */
+    uint8_t fb[SHD_NCH];                            /* FDBK: each channel's shaper fed back into itself (0 none) */
 } shd_bus_t;
 typedef struct {
     shd_sl_t sl[SLC_AUTO];
     shd_bus_t bus;
 } shd_kit_t;
-_Static_assert(sizeof(shd_sl_t) == 20u && sizeof(shd_bus_t) == 24u, "SHARD kit layout");
+_Static_assert(sizeof(shd_sl_t) == 20u && sizeof(shd_bus_t) == 28u, "SHARD kit layout");
 /* neutral at power-on (the slot scans then read the stored kits): every slice as recorded, DIRECT */
 #define SHD_SL_DEF {0, 100, 0, 127, SHD_TRACK, SHD_FWD, SHD_F_OFF, 127, 0, SHD_D_OFF, 40, SHD_DIRECT, 0, 0, 0, 0, \
                     SHD_GT_TRACK, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0}
 #define SHD_BUS_DEF {51, 96, {SHD_D_TUBE, SHD_D_FOLD, SHD_D_CRUSH, SHD_D_OFF}, {40, 30, 60, 40}, {0, 0, 0, 0}, \
-                     {100, 100, 90, 127}, 0, SHD_SENS_DEF, SHD_GM_OFF, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0}
+                     {100, 100, 90, 127}, 0, SHD_SENS_DEF, SHD_GM_OFF, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0, {0, 0, 0, 0}}
 #define SHD_KIT_DEF {{[0 ... SLC_AUTO - 1] = SHD_SL_DEF}, SHD_BUS_DEF}
 static shd_kit_t shd_kit[SHD_NSRC] = {[0 ... SHD_NSRC - 1] = SHD_KIT_DEF};
 static uint8_t shd_kit_save;                        /* bit k: user slot k's kit changed, to flash (slice_store.c) */
@@ -159,6 +160,7 @@ static void shd_kit_sane(shd_kit_t *k)
         if (k->bus.drive[b] > 127) k->bus.drive[b] = db.drive[b];
         if (k->bus.gate[b] > 127) k->bus.gate[b] = 0;
         if (k->bus.level[b] > 127) k->bus.level[b] = db.level[b];
+        if (k->bus.fb[b] > 127) k->bus.fb[b] = 0;
     }
     if (k->bus.bpm && (k->bus.bpm < SHD_BPM_MIN || k->bus.bpm > SHD_BPM_MAX)) k->bus.bpm = 0;
     if (k->bus.sens > 127) k->bus.sens = SHD_SENS_DEF;
@@ -203,6 +205,13 @@ typedef struct {
     uint8_t first;                                  /* the slice's first grains still to make (shd_gr_setup) */
 } shd_gv_t;
 
+/* FDBK: each channel's loop band-pass, Chamberlin f = 2 sin(pi fc / fs) Q14: LOW 150 Hz, MID 900 Hz, HIGH 4 kHz,
+ * FULL 500 Hz; the gain FDBK^2 x 4 (Q15: 64 = 0.5, 127 = 2.0), over the shaper's gain as the followers find it
+ * (in / out, up to 4: its drive out of the loop), times the band-pass's 2: from about 64 the loop sustains itself,
+ * whatever the type and drive, held at the shaper's ceiling */
+static const int32_t SHD_FB_F[SHD_NCH] = {350, 2100, 9226, 1167};
+static volatile uint32_t shd_swell;                 /* perform.c (ARP's FEEDBACK SWELL): every FDBK at least this */
+
 /* ---- the part's engine memory */
 typedef struct {
     int32_t lo, bd;                                 /* the filter */
@@ -224,6 +233,8 @@ typedef struct {
     int32_t lpl, lph, dcx, dcy;                     /* the split, the DC blocker */
     int32_t fol[SHD_NCH], gain[SHD_NCH];
     shd_ds_t ds[SHD_NCH];                           /* the channels' shapers */
+    int32_t fbl[SHD_NCH], fbb[SHD_NCH], fby[SHD_NCH];   /* FDBK: the loop's band-pass (low, band), the last out, */
+    int32_t fai[SHD_NCH], fao[SHD_NCH];             /* .. the shaper's mean in and out (its gain: their ratio) */
     shd_gv_t gv[NVOICE];                            /* GRAIN: each voice's grains */
     uint32_t gload, gbud;                           /* GRAIN: grains sounding (counted each block), seek budget */
     int32_t grng;
@@ -1270,9 +1281,13 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
             mem->dsend[i] += (int32_t)(((int64_t)q * ((int32_t)(sl->dly & 127) * 258)) >> 15);
             mem->dused = 1;
         }
-        if (sl->route == SHD_DIRECT || sl->route >= SHD_NROUTE)
+        if (sl->route == SHD_DIRECT || sl->route >= SHD_NROUTE) {
             out[i] += q;
-        else {
+            if (shd_swell) {                        /* (ARP's FEEDBACK SWELL: DIRECT feeds FULL as it rises) */
+                mem->bus[SHD_NCH][i] += (int32_t)(((int64_t)q * (int32_t)shd_swell) >> 7);
+                mem->used |= 1u << SHD_NCH;
+            }
+        } else {
             mem->bus[sl->route - 1u][i] += q;
             mem->used |= 1u << (sl->route - 1u);
         }
@@ -1320,8 +1335,11 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
     const shd_bus_t *bs = &shd_kit[slc_src_of(t->p)].bus;
     int32_t al = SHD_ONEPOLE[bs->lo & 127], ah = SHD_ONEPOLE[bs->hi & 127], mix = clamp(t->p[P_E6], 0, 127);
     int32_t bias = clamp(t->p[P_E7], -64, 63);
-    uint32_t i, b, dr[SHD_NCH];
-    if (mem->used)
+    uint32_t i, b, dr[SHD_NCH], hot = 0;
+    int32_t fg[SHD_NCH];
+    for (b = 0; b < SHD_NCH; b++)                   /* (FDBK: a loop still ringing keeps the bus on) */
+        hot |= (bs->fb[b] || shd_swell) && (mem->fbb[b] > 512 || mem->fbb[b] < -512);   /* (the band: no DC) */
+    if (mem->used || hot)
         mem->tail = 64u;                            /* ~46 ms of shaper and gate tails */
     else if (!mem->tail)
         return 0;
@@ -1332,8 +1350,11 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
         al = ah;
         ah = tmp;
     }
-    for (b = 0; b < SHD_NCH; b++)
+    for (b = 0; b < SHD_NCH; b++) {
+        uint32_t a = bs->fb[b] > shd_swell ? bs->fb[b] : shd_swell;   /* (ARP's FEEDBACK SWELL: at least this) */
         dr[b] = (uint32_t)clamp((int32_t)bs->drive[b] + bias, 0, 127);
+        fg[b] = (int32_t)(a * a * 4u);
+    }
     for (i = 0; i < n; i++) {
         int32_t xx = shd_sat(mem->bus[0][i], 1 << 17), split[3], wet = 0, dc;
         mem->lpl += (int32_t)(((int64_t)(xx - mem->lpl) * al) >> 15);
@@ -1342,11 +1363,29 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
         split[1] = mem->lph - mem->lpl;
         split[2] = xx - mem->lph;
         for (b = 0; b < SHD_NCH; b++) {             /* LOW MID HIGH: the split + their own; FULL: its own */
-            int32_t in = shd_sat((b < 3u ? split[b] : 0) + mem->bus[b + 1u][i], 1 << 17), a = in < 0 ? -in : in, tg, y;
+            int32_t in = (b < 3u ? split[b] : 0) + mem->bus[b + 1u][i], a, tg, y;
+            if (fg[b]) {                            /* FDBK: the last out, band-passed at the channel's own */
+                int32_t hi;                         /* pitch (Q 2), back in (the shaper limits the howl) */
+                mem->fbl[b] = shd_sat(mem->fbl[b] + ((SHD_FB_F[b] * mem->fbb[b]) >> 14), 1 << 17);
+                hi = shd_sat(mem->fby[b] - mem->fbl[b] - (mem->fbb[b] >> 1), 1 << 17);
+                mem->fbb[b] = shd_sat(mem->fbb[b] + ((SHD_FB_F[b] * hi) >> 14), 1 << 17);
+                {
+                    int32_t o = mem->fao[b] > 512 ? mem->fao[b] : 512, cq = (int32_t)(((int64_t)mem->fai[b] << 13) / o);
+                    cq = cq > 32768 ? 32768 : cq;   /* (Q13: the shaper's gain undone, up to 4; below -36 dB out less: the loop dies away in the quiet) */
+                    in += (int32_t)(((((int64_t)mem->fbb[b] * fg[b]) >> 15) * cq) >> 13);
+                }
+            }
+            in = shd_sat(in, 1 << 17);
+            a = in < 0 ? -in : in;
             mem->fol[b] += a > mem->fol[b] ? (a - mem->fol[b]) >> 4 : -(mem->fol[b] >> 11);
             tg = !bs->gate[b] || mem->fol[b] > SHD_GATE_Q15[bs->gate[b] & 127] ? 32768 : 0;
             mem->gain[b] += (tg - mem->gain[b]) >> 7;
             y = shd_shape(bs->type[b], in, dr[b], &mem->ds[b]);
+            mem->fby[b] = fg[b] ? shd_sat(y, 1 << 16) : 0;   /* (before the gate: the loop howls on through it) */
+            if (fg[b]) {                            /* (means over ~3 ms) */
+                mem->fai[b] += (a - mem->fai[b]) >> 7;
+                mem->fao[b] += ((y < 0 ? -y : y) - mem->fao[b]) >> 7;
+            }
             y = (int32_t)(((int64_t)y * mem->gain[b]) >> 15);
             wet += (int32_t)(((int64_t)y * ((int32_t)(bs->level[b] & 127) * 258)) >> 15);
         }

@@ -34,7 +34,7 @@ _Static_assert(sizeof(slc_rec_t) == 152u, "SLICE record layout");
  * record: magic "SHF3", the material (as slc_rec_t), the kit, a CRC. Written together with the slices' record (one
  * erase), read at the same scans; a kit that is not the slot's sample's is ignored (the kit stays neutral). */
 #define SHD_REC_OFF (SLC_REC_OFF + 0x200u)
-#define SHD_REC_MAGIC 0x33464853u                    /* "SHF3" (SHF2: before GRAIN; SHF1: before SUSTAIN .. SENS) */
+#define SHD_REC_MAGIC 0x33464853u                    /* "SHF3" (SHF2: before GRAIN, FDBK; SHF1: before SUSTAIN .. SENS) */
 #define SHD_REC2_MAGIC 0x32464853u                   /* "SHF2": read, its slices' 16 bytes widened (shd_rec2_up) */
 typedef struct {
     uint32_t magic;
@@ -46,7 +46,7 @@ typedef struct {                                     /* SHF2: each slice 16 byte
     uint32_t magic;
     uint32_t len, crc;
     uint8_t sl[SLC_AUTO][16];
-    shd_bus_t bus;
+    uint8_t bus[24];                                 /* (shd_bus_t up to gjit: SHF2's pad there) */
     uint32_t rcrc;
 } shd_rec2_t;
 _Static_assert(sizeof(shd_rec2_t) == 552u, "SHF2 record layout");
@@ -61,11 +61,13 @@ static void shd_rec2_up(const shd_rec2_t *o, shd_rec_t *r)
         shd_sl_default(&r->kit.sl[i]);
         memcpy(&r->kit.sl[i], o->sl[i], 16u);
     }
-    r->kit.bus = o->bus;
+    shd_bus_default(&r->kit.bus);
+    memcpy(&r->kit.bus, o->bus, sizeof o->bus);
     r->kit.bus.gmode = SHD_GM_OFF;
     r->kit.bus.gsize = SHD_GSIZE_DEF;
     r->kit.bus.gdens = SHD_GDENS_DEF;
     r->kit.bus.gjit = 0;
+    memset(r->kit.bus.fb, 0, sizeof r->kit.bus.fb);
 }
 _Static_assert(SHD_REC_OFF - SLC_REC_OFF >= sizeof(slc_rec_t) && SHD_REC_OFF + sizeof(shd_rec_t) <= SMP_USER_SIZE,
                "SHARD record in the slot's last sector");

@@ -1357,8 +1357,8 @@ static int test_throw(void)
         perf_map_put(m, 0, PF_RTHR);
         perf_map_put(m, 1, PF_ETHR);
         ok = (m[0] & 31u) == 14u && ((m[0] >> 5 | m[1] << 3) & 31u) == 15u && perf_map_of(m, 0) == PF_RTHR &&
-             perf_map_of(m, 1) == PF_ETHR && PF_NFX == 14 && PF_DEF[12] == PF_RTHR && PF_DEF[13] == PF_ETHR;
-        m[0] = (uint8_t)((m[0] & ~31u) | 16u);         /* code 16: a later firmware's effect -> the key's default */
+             perf_map_of(m, 1) == PF_ETHR && PF_NFX == 25 && PF_DEF[12] == PF_RTHR && PF_DEF[13] == PF_ETHR;
+        m[0] = (uint8_t)((m[0] & ~31u) | 30u);         /* code 30: a later firmware's effect -> the key's default */
         ok &= perf_map_of(m, 0) == PF_DEF[0];
         perf_map_put(m, 12, PF_RTHR);                   /* D5's default: code 0 */
         ok &= perf_map_of(m, 12) == PF_RTHR && !(m[7] & 0xF0u) && !(m[8] & 1u);
@@ -1598,6 +1598,107 @@ static void throw_demos(const char *dir)
     printf("perform: demo %s/throw_tour.wav (the three in a row)\n", dir);
 }
 
+
+/* ---------------------------------------- 11. the mangler's ARP bank (perform.c PF_ARPMAP) --- */
+/* SCATTER 1/32 at 120 BPM on a slow sine (each 1/32 told apart by its phase): from its start on the 1/16 each 1/32 is
+ * the live input, or one of the last four 1/32s again, forwards or backwards (within the 22.05 kHz loop's error,
+ * its ends' windows aside); all three kinds turn up; let go: live again, bit for bit. RING MID on 1 kHz: the lines at
+ * 580 and 1420 Hz, none at 1 kHz; DEPTH 0 %: live. NOISE 1/16 on silence: bursts on the 1/16, falling; HOLD steady;
+ * bounded. FEEDBACK SWELL: shd_swell to 127 over a bar held, back to 0 within about a beat let go */
+static int test_arp(void)
+{
+    int bad = 0;
+    uint32_t t, s0, j, kinds[3] = {0, 0, 0}, unk = 0;
+    const uint32_t L = P16 / 2u;
+    {
+        ev_t ev[] = {{1000, PF_SC32 + 1}, {1000 + 40u * L, -(PF_SC32 + 1)}};
+        for (t = 0; t < NT; t++)
+            in_l[t] = in_r[t] = (int32_t)lrint(20000 * sin(2 * M_PI * 3.0 * t / FS));
+        run(120, 1, ev, 2, 1000 + 46u * L);
+        s0 = P16;                                       /* (the first 1/16 after the press at 1000) */
+        for (j = 0; j < 36u; j++) {
+            uint32_t a = s0 + j * L, k, hit = 0;
+            int32_t e;
+            for (t = a + 160u, e = 0; t < a + L - 160u; t++)
+                e = abs(out_l[t] - in_l[t]) > e ? abs(out_l[t] - in_l[t]) : e;
+            if (e < 150) {
+                kinds[0]++;
+                continue;
+            }
+            for (k = 1; k <= 4u && !hit && a >= k * L; k++) {
+                int32_t ef = 0, er = 0;
+                for (t = a + 160u; t < a + L - 160u; t++) {
+                    int32_t f = abs(out_l[t] - in_l[t - k * L]), r = abs(out_l[t] - in_l[a - k * L + L - 1u - (t - a)]);
+                    ef = f > ef ? f : ef;
+                    er = r > er ? r : er;
+                }
+                if (ef < 150)
+                    hit = 1, kinds[1]++;
+                else if (er < 150)
+                    hit = 1, kinds[2]++;
+            }
+            unk += !hit;
+        }
+        bad += check("SCATTER 1/32: each 1/32 live, or one of the last four again, forwards or backwards", unk == 0u);
+        bad += check("SCATTER 1/32: all three turn up (live, again, backwards)", kinds[0] && kinds[1] && kinds[2]);
+        printf("perform:   (live %u, again %u, backwards %u, other %u of 36)\n", kinds[0], kinds[1], kinds[2], unk);
+        bad += check("SCATTER: let go, the live input back bit for bit", same(1000 + 40u * L + P16, 1000 + 46u * L));
+    }
+    {
+        ev_t ev[] = {{0, PF_RGM + 1}};
+        double p0, p1, p2;
+        test_signal(1000, 16000, 1000, 16000);
+        run(120, 1, ev, 1, FS);
+        p0 = dft_pow(out_l, 4410, FS, 1000);
+        p1 = dft_pow(out_l, 4410, FS, 580);
+        p2 = dft_pow(out_l, 4410, FS, 1420);
+        bad += check("RING MID on 1 kHz: 580 and 1420 Hz, 1 kHz gone", p1 > 100 * p0 && p2 > 100 * p0 &&
+                     peak(out_l, 4410, FS) < 16500);
+        run_k4 = 100;
+        run(120, 1, ev, 1, FS / 4u);
+        run_k4 = 0;
+        bad += check("RING at DEPTH 0 %: the live input", same(0, FS / 4u));
+    }
+    {
+        ev_t ev[] = {{0, PF_NZ16 + 1}};
+        double e1 = 0, e4 = 0;
+        int32_t pk;
+        memset(in_l, 0, sizeof in_l);
+        memset(in_r, 0, sizeof in_r);
+        run(120, 1, ev, 1, 8u * P16);
+        for (j = 2; j < 7u; j++)
+            for (t = 0; t < P16 / 4u; t++) {
+                e1 += fabs((double)out_l[j * P16 + t]);
+                e4 += fabs((double)out_l[j * P16 + 3u * P16 / 4u + t]);
+            }
+        pk = peak(out_l, 0, 8u * P16);
+        bad += check("NOISE 1/16: a burst on each 1/16, falling away, bounded", e1 > 8 * e4 && pk > 4000 && pk < 20000);
+        ev[0].e = PF_NZH + 1;
+        run(120, 1, ev, 1, 8u * P16);
+        for (e1 = e4 = 0, j = 2; j < 7u; j++)
+            for (t = 0; t < P16 / 4u; t++) {
+                e1 += fabs((double)out_l[j * P16 + t]);
+                e4 += fabs((double)out_l[j * P16 + 3u * P16 / 4u + t]);
+            }
+        bad += check("NOISE HOLD: steady", e1 < 1.2 * e4 && e4 < 1.2 * e1);
+    }
+#if FELUCCA_SHARD
+    {
+        ev_t ev[] = {{0, PF_SWL + 1}, {16u * P16, -(PF_SWL + 1)}};
+        uint32_t at_bar, after;
+        test_signal(200, 1000, 200, 1000);
+        run(120, 1, ev, 1, 16u * P16);
+        at_bar = shd_swell;
+        run(120, 1, ev, 2, 16u * P16 + P16 * 5u);
+        after = shd_swell;
+        bad += check("FEEDBACK SWELL: shd_swell to 127 over a bar held, 0 again a beat after", at_bar >= 126u && after == 0u);
+        printf("perform:   (a bar held %u, a beat and a 1/16 after %u)\n", at_bar, after);
+        shd_swell = 0;
+    }
+#endif
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     int bad = 0;
@@ -1612,6 +1713,7 @@ int main(int argc, char **argv)
     bad += test_mod();
     bad += test_map();
     bad += test_throw();
+    bad += test_arp();
     bad += test_cost();
     if (argc > 1)
         demos(argv[1]);
