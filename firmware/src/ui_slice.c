@@ -324,19 +324,23 @@ typedef struct {
     const char *const *names;
     const char *unit;
 } shfx_desc_t;
-enum { SHFX_PITCH, SHFX_LEVEL, SHFX_ATK, SHFX_DEC, SHFX_SUS, SHFX_REL, SHFX_MODE, SHFX_DIR, SHFX_FILT, SHFX_CUT,
-       SHFX_RES, SHFX_DRIVE, SHFX_AMT, SHFX_DLY, SHFX_ROUTE, SHFX_CHOKE, SHFX_NSL };
+enum { SHFX_PITCH, SHFX_LEVEL, SHFX_ATK, SHFX_DEC, SHFX_SUS, SHFX_REL, SHFX_MODE, SHFX_DIR, SHFX_GRAIN, SHFX_GSIZE,
+       SHFX_GDENS, SHFX_GJIT, SHFX_FILT, SHFX_CUT, SHFX_RES, SHFX_DRIVE, SHFX_AMT, SHFX_DLY, SHFX_ROUTE, SHFX_CHOKE,
+       SHFX_NSL };
 static const shfx_desc_t SHFX_SL[SHFX_NSL] = {
     {"PITCH", -24, 24, 0, "ST"}, {"LEVEL", 0, 127, 0, ""}, {"ATTACK", 0, 127, 0, ""}, {"DECAY", 0, 127, 0, ""},
     {"SUS", 0, 127, 0, ""}, {"REL", 0, 127, 0, ""}, {"MODE", 0, 3, N_SHD_SMODE, ""}, {"DIR", 0, SHD_NDIR - 1, N_SHD_DIR, ""},
+    {"GRAIN", 0, SHD_NGM, N_SHD_SGRAIN, ""}, {"SIZE", 0, 127, 0, "MS"}, {"DENS", 0, 127, 0, "X"}, {"JITTER", 0, 127, 0, ""},
     {"FILTER", 0, SHD_NFILT - 1, N_SHD_FILT, ""}, {"CUT", 0, 127, 0, ""}, {"RES", 0, 127, 0, ""},
     {"DRIVE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"AMT", 0, 127, 0, ""}, {"DELAY", 0, 127, 0, ""},
     {"ROUTE", 0, SHD_NROUTE - 1, N_SHD_ROUTE, ""}, {"CHOKE", 0, 4, N_SHD_CHOKE, ""},
 };
-enum { SHFX_BPM, SHFX_SENS, SHFX_XLOW, SHFX_XHIGH, SHFX_CH0 };   /* then TYPE DRV GATE LVL per channel */
+enum { SHFX_BPM, SHFX_SENS, SHFX_BGRAIN, SHFX_BGSIZE, SHFX_BGDENS, SHFX_BGJIT, SHFX_XLOW, SHFX_XHIGH, SHFX_CH0 };   /* then TYPE DRV GATE LVL per channel */
 static const shfx_desc_t SHFX_BUS[SHFX_CH0 + 4u * SHD_NCH + 1u] = {   /* (6 letters at most: the cards) */
     {"LOOP", 0, SHD_BPM_MAX, 0, ""},                 /* the source's tempo (BPM), 0 AUTO (shfx_knob); the song's: TEMPO */
     {"SENS", 0, 127, 0, ""},                         /* AUTO's hits (a user slot's: slc_rescan) */
+    {"GRAIN", 0, SHD_NGM - 1, N_SHD_GRAIN, ""},       /* the track's GRAIN: the slices set to TRACK */
+    {"SIZE", 0, 127, 0, "MS"}, {"DENS", 0, 127, 0, "X"}, {"JITTER", 0, 127, 0, ""},
     {"XLOW", 0, 127, 0, ""}, {"XHIGH", 0, 127, 0, ""},
     {"L TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"L DRV", 0, 127, 0, ""}, {"L GATE", 0, 127, 0, ""},
     {"L LVL", 0, 127, 0, ""}, {"M TYPE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"M DRV", 0, 127, 0, ""},
@@ -384,6 +388,10 @@ static uint8_t *shfx_field(shd_kit_t *kit, uint32_t j, int bus, uint32_t k)
         case SHFX_SENS: return &b->sens;
         case SHFX_XLOW: return &b->lo;
         case SHFX_XHIGH: return &b->hi;
+        case SHFX_BGRAIN: return &b->gmode;
+        case SHFX_BGSIZE: return &b->gsize;
+        case SHFX_BGDENS: return &b->gdens;
+        case SHFX_BGJIT: return &b->gjit;
         default: break;
         }
         switch ((k - SHFX_CH0) % 4u) {
@@ -410,6 +418,10 @@ static uint8_t *shfx_field(shd_kit_t *kit, uint32_t j, int bus, uint32_t k)
     case SHFX_AMT: return &s->drv;
     case SHFX_DLY: return &s->dly;
     case SHFX_ROUTE: return &s->route;
+    case SHFX_GRAIN: return &s->grain;
+    case SHFX_GSIZE: return &s->gsize;
+    case SHFX_GDENS: return &s->gdens;
+    case SHFX_GJIT: return &s->gjit;
     default: return &s->choke;
     }
 }
@@ -550,6 +562,13 @@ static int shfx_card(uint32_t c, const char **lb, char *val, const char **u, int
         str_cpy(val, "NONE", 12);                    /* DECAY 127: no decay */
     else if (!bus && (k == SHFX_REL || k == SHFX_DLY) && !v)
         str_cpy(val, "OFF", 12);                     /* RELEASE 0: the track's; DELAY 0: no send */
+    else if ((!bus && k == SHFX_GSIZE) || (bus && k == SHFX_BGSIZE)) {
+        fmt_int(val, (int32_t)((shd_glen((uint32_t)v) * 10u + 220u) / 441u));   /* SIZE: ms */
+        *u = d->unit;
+    } else if ((!bus && k == SHFX_GDENS) || (bus && k == SHFX_BGDENS)) {
+        fmt_fix(val, (int32_t)(shd_gov((uint32_t)v) * 10u / 256u), 1);           /* DENS: grains overlapping */
+        *u = d->unit;
+    }
     else {
         if (d->min < 0 && v > 0) {
             val[0] = '+';

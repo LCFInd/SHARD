@@ -43,6 +43,11 @@ enum { SHD_FWD, SHD_REV, SHD_PING, SHD_NDIR };
 #define SHD_SENS_DEF 64u                            /* SENS: slc_scan as SLICE's */
 #define SHD_COMB 512u                               /* comb filters: samples of line per voice (90 Hz) */
 #define SHD_FADE 32u                                /* PLAY: samples of fade at a slice change */
+/* GRAIN (the slice's, or the track's on SLICE FX's BUS): the slice played as grains, its pitch apart from its time */
+enum { SHD_GM_OFF, SHD_GM_STRETCH, SHD_GM_CLOUD, SHD_GM_FREEZE, SHD_NGM };
+#define SHD_GT_TRACK 0u                             /* a slice's GRAIN: 0 the track's, else SHD_GM_* + 1 */
+#define SHD_GSIZE_DEF 77u                           /* SIZE 0..127: 4 .. 256 ms (77: 50 ms) */
+#define SHD_GDENS_DEF 42u                           /* DENS 0..127: grains overlapping, 1 .. 4 (42: 2) */
 
 static const char *const N_SHD_MODE[] = {"ONE", "GATE", "LOOP", "PLAY"};
 static const char *const N_SHD_BARS[] = {"AUTO", "1", "2", "4", "8"};
@@ -59,29 +64,38 @@ static const char *const N_SHD_DIR[] = {"FWD", "REV", "PING"};
 static const char *const N_SHD_DRIVE[] = {"OFF", "OVRDRV", "DIST", "FOLD", "CRUSH", "DECIM", "HALF", "TUBE", "FUZZ"};
 static const char *const N_SHD_ROUTE[] = {"DIRECT", "MULTI", "LOW", "MID", "HIGH", "FULL"};
 static const char *const N_SHD_CHOKE[] = {"OFF", "1", "2", "3", "4"};
+#if FELUCCA_MANGLER
+#define SHD_STRETCH "STRETCH"
+#else
+#define SHD_STRETCH "STRTCH"                        /* (Felucca's card font: 6 letters fit) */
+#endif
+static const char *const N_SHD_GRAIN[] = {"OFF", SHD_STRETCH, "CLOUD", "FREEZE"};
+static const char *const N_SHD_SGRAIN[] = {"TRACK", "OFF", SHD_STRETCH, "CLOUD", "FREEZE"};
 
 /* ---- the kit: per source, per slice (SLC_AUTO = 32 at most), and the bus */
 typedef struct {
     int8_t pitch;
     uint8_t level, atk, dec, mode, rev, filt, cut, res, dtype, drv, route, choke;
     uint8_t sus, rel, dly;                          /* SUSTAIN, RELEASE (0: OFF, the track's), DELAY's send */
+    uint8_t grain, gsize, gdens, gjit;              /* GRAIN (SHD_GT_TRACK, else SHD_GM_* + 1), SIZE, DENS, JITTER */
 } shd_sl_t;
 typedef struct {
     uint8_t lo, hi;                                 /* split points: 40 Hz .. 12 kHz */
     uint8_t type[SHD_NCH], drive[SHD_NCH], gate[SHD_NCH], level[SHD_NCH];   /* low, mid, high, full */
     uint8_t bpm;                                    /* the source's tempo (40..250), 0: AUTO (shd_tempo_scan) */
     uint8_t sens;                                   /* AUTO's hits: 0 fewest .. 127 most (SHD_SENS_DEF: SLICE's) */
-    uint8_t pad[4];
+    uint8_t gmode, gsize, gdens, gjit;              /* the track's GRAIN (SHD_GM_*), SIZE, DENS, JITTER */
 } shd_bus_t;
 typedef struct {
     shd_sl_t sl[SLC_AUTO];
     shd_bus_t bus;
 } shd_kit_t;
-_Static_assert(sizeof(shd_sl_t) == 16u && sizeof(shd_bus_t) == 24u, "SHARD kit layout");
+_Static_assert(sizeof(shd_sl_t) == 20u && sizeof(shd_bus_t) == 24u, "SHARD kit layout");
 /* neutral at power-on (the slot scans then read the stored kits): every slice as recorded, DIRECT */
-#define SHD_SL_DEF {0, 100, 0, 127, SHD_TRACK, SHD_FWD, SHD_F_OFF, 127, 0, SHD_D_OFF, 40, SHD_DIRECT, 0, 0, 0, 0}
+#define SHD_SL_DEF {0, 100, 0, 127, SHD_TRACK, SHD_FWD, SHD_F_OFF, 127, 0, SHD_D_OFF, 40, SHD_DIRECT, 0, 0, 0, 0, \
+                    SHD_GT_TRACK, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0}
 #define SHD_BUS_DEF {51, 96, {SHD_D_TUBE, SHD_D_FOLD, SHD_D_CRUSH, SHD_D_OFF}, {40, 30, 60, 40}, {0, 0, 0, 0}, \
-                     {100, 100, 90, 127}, 0, SHD_SENS_DEF, {0, 0, 0, 0}}
+                     {100, 100, 90, 127}, 0, SHD_SENS_DEF, SHD_GM_OFF, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0}
 #define SHD_KIT_DEF {{[0 ... SLC_AUTO - 1] = SHD_SL_DEF}, SHD_BUS_DEF}
 static shd_kit_t shd_kit[SHD_NSRC] = {[0 ... SHD_NSRC - 1] = SHD_KIT_DEF};
 static uint8_t shd_kit_save;                        /* bit k: user slot k's kit changed, to flash (slice_store.c) */
@@ -133,6 +147,10 @@ static void shd_kit_sane(shd_kit_t *k)
         if (s->sus > 127) s->sus = 0;
         if (s->rel > 127) s->rel = 0;
         if (s->dly > 127) s->dly = 0;
+        if (s->grain > SHD_NGM) s->grain = SHD_GT_TRACK;
+        if (s->gsize > 127) s->gsize = SHD_GSIZE_DEF;
+        if (s->gdens > 127) s->gdens = SHD_GDENS_DEF;
+        if (s->gjit > 127) s->gjit = 0;
     }
     if (k->bus.lo > 127) k->bus.lo = db.lo;
     if (k->bus.hi > 127) k->bus.hi = db.hi;
@@ -144,6 +162,10 @@ static void shd_kit_sane(shd_kit_t *k)
     }
     if (k->bus.bpm && (k->bus.bpm < SHD_BPM_MIN || k->bus.bpm > SHD_BPM_MAX)) k->bus.bpm = 0;
     if (k->bus.sens > 127) k->bus.sens = SHD_SENS_DEF;
+    if (k->bus.gmode >= SHD_NGM) k->bus.gmode = SHD_GM_OFF;
+    if (k->bus.gsize > 127) k->bus.gsize = SHD_GSIZE_DEF;
+    if (k->bus.gdens > 127) k->bus.gdens = SHD_GDENS_DEF;
+    if (k->bus.gjit > 127) k->bus.gjit = 0;
 }
 
 /* ---- a shaper's state (shd_shape): DECIM's held sample, and the analog models' filters and bias */
@@ -153,6 +175,33 @@ typedef struct {
     int32_t env;                                    /* OVRDRV: the grid's bias */
     uint16_t cnt;
 } shd_ds_t;
+
+/* ---- GRAIN: a voice's grains, and the head that walks its slice (shd_gr_*) */
+#define SHD_GN 4u                                   /* grains per voice (DENS: 4 overlap at most) */
+#define SHD_GCP 16u                                 /* the head's decoder states kept: every SHD_GCPS source samples */
+#define SHD_GCPS 128u
+#define SHD_GPART 8u                                /* grains sounding per part at most (the CPU: GRAIN's worst alike) */
+#define SHD_GBUD 384u                               /* samples decoded to seek new grains: per block, per part, */
+#define SHD_GBUD_MAX 2048u                          /* saved up to this (a grain now and then: aligned) */
+typedef struct {
+    uint32_t pos;                                   /* its decoder (as slc_dec_t, packed): the next sample to read */
+    int16_t pred;
+    uint8_t idx, seg;
+    uint32_t frac, rate;                            /* Q16: between a and b; source samples per output sample */
+    uint32_t wph, winc;                             /* the window's phase (2^32 over the grain); winc 0 = free */
+    int16_t a, b;
+} shd_gr_t;
+typedef struct {
+    shd_gr_t g[SHD_GN];
+    slc_dec_t hd;                                   /* the head's decoder (forward: the states it leaves in cp) */
+    uint32_t head, hfrac;                           /* the head: source sample, Q16 fraction */
+    uint32_t cp[SHD_GCP];                           /* decoder states at multiples of SHD_GCPS: cplo .. hd.pos */
+    uint32_t cplo;
+    uint32_t anc, ancst;                            /* the slice's start and its state */
+    uint32_t wait, hold;                            /* output samples to the next grain; FREEZE (ONE): held for */
+    uint8_t mode, rev, run, held;                   /* SHD_GM_* (0: not grains); the head goes back; makes grains */
+    uint8_t first;                                  /* the slice's first grains still to make (shd_gr_setup) */
+} shd_gv_t;
 
 /* ---- the part's engine memory */
 typedef struct {
@@ -175,6 +224,9 @@ typedef struct {
     int32_t lpl, lph, dcx, dcy;                     /* the split, the DC blocker */
     int32_t fol[SHD_NCH], gain[SHD_NCH];
     shd_ds_t ds[SHD_NCH];                           /* the channels' shapers */
+    shd_gv_t gv[NVOICE];                            /* GRAIN: each voice's grains */
+    uint32_t gload, gbud;                           /* GRAIN: grains sounding (counted each block), seek budget */
+    int32_t grng;
 } shd_mem_t;
 ENG_MEM_FITS("SHARD", sizeof(shd_mem_t));
 static shd_mem_t *shd_mem(const track_t *t) { return (shd_mem_t *)ENG_MEM((uint32_t)(t - trk) % NPART); }
@@ -509,7 +561,9 @@ static uint32_t shd_at(const slc_src_t *s, uint32_t div, uint32_t f, uint32_t k,
     return (uint32_t)((uint64_t)((a + len - a0) % len) * loop / len);
 }
 
-/* start slice j on a voice (a note, or PLAY moving on): decoder, envelope */
+static shd_gv_t *shd_gv(track_t *t, voice_t *v);
+static void shd_gr_start(shd_gv_t *gv, uint32_t src, const shd_sl_t *sl, uint32_t a, uint32_t b, uint32_t st, uint32_t rev);
+/* start slice j on a voice (a note, or PLAY moving on): decoder, envelope, its grains (GRAIN) */
 static void shd_start(track_t *t, voice_t *v, const slc_src_t *s, uint32_t src, uint32_t div, uint32_t j)
 {
     uint32_t a, b, st, rev;
@@ -533,6 +587,7 @@ static void shd_start(track_t *t, voice_t *v, const slc_src_t *s, uint32_t src, 
         v->s[0] = (int16_t)(st & 0xFFFFu);
         v->s[1] = (int32_t)((st >> 16) & 127u);
     }
+    shd_gr_start(shd_gv(t, v), src, sl, a, b, st, rev);
 }
 
 static void shard_note_on(track_t *t, voice_t *v)
@@ -552,6 +607,7 @@ static void shard_note_on(track_t *t, voice_t *v)
     x->fadein = SHD_FADE;
     x->cw = 0;
     memset(shd_mem(t)->comb[(uint32_t)(v - t->v) % NVOICE], 0, sizeof shd_mem(t)->comb[0]);
+    memset(shd_gv(t, v), 0, sizeof(shd_gv_t));       /* (no grains: the sine has none) */
     if (!s) {                                       /* no material: the sine (as SLICE) */
         v->s[4] = (int32_t)SLC_SINE;
         v->s[6] = 1;
@@ -645,6 +701,389 @@ static void shd_turn(const slc_src_t *s, voice_t *v, slc_dec_t *d, uint32_t to_r
     }
 }
 
+/* ---- GRAIN: the slice as grains, its pitch apart from its time. A head walks the slice at the time rate (the
+ * material's own; PLAY: what fills the slice's steps at the song's tempo); every hop a grain (a Hann window, SIZE long,
+ * DENS overlapping) starts at the head (STRETCH, FREEZE: up to JITTER grains behind it; CLOUD: anywhere around it as
+ * far as JITTER, at random hops, detuned at random by up to a semitone) and reads at the pitch rate (PTCH, the slice's
+ * PITCH, the modulation: the length stays). The slice's first grains begin on its first sample at their peak: its
+ * attack whole. No grain reads past the slice's end (SIZE shortens for a short slice). FREEZE: the head stops where the
+ * last grain fits and the grains go on there (held: while the key is; ONE: as long again as the slice; PLAY: to the
+ * next slice). REV walks the head back (the grains still read forwards); PING turns it. Seeking a grain's start
+ * decodes from the nearest state kept (the head's, every SHD_GCPS behind it, the slice's start, SLICE's grid), within
+ * SHD_GBUD a block per part (saved up to SHD_GBUD_MAX); at most SHD_GPART grains sound per part (a grain past either
+ * is left out, or not aligned). */
+typedef struct {
+    uint32_t prate, trate;                          /* Q16 source samples per output sample: the grains, the head */
+    uint32_t len, winc, hop;                        /* a grain: output samples, its window's step; between grains */
+    uint32_t span, scat, a, b;                      /* source samples: a grain's, the scatter; the slice */
+    int32_t gain;                                   /* Q15: the overlap's level */
+    uint32_t jit;
+} shd_gs_t;
+static shd_gv_t *shd_gv(track_t *t, voice_t *v) { return &shd_mem(t)->gv[(uint32_t)(v - t->v) % NVOICE]; }
+
+/* the GRAIN a slice plays (SHD_GM_*): its own, or the track's (SLICE FX's BUS); g: SIZE DENS JITTER */
+static uint32_t shd_gmode(uint32_t src, const shd_sl_t *sl, uint8_t *g)
+{
+    const shd_bus_t *b = &shd_kit[src < SHD_NSRC ? src : 0u].bus;
+    if (sl->grain == SHD_GT_TRACK) {
+        g[0] = b->gsize;
+        g[1] = b->gdens;
+        g[2] = b->gjit;
+        return b->gmode < SHD_NGM ? b->gmode : SHD_GM_OFF;
+    }
+    g[0] = sl->gsize;
+    g[1] = sl->gdens;
+    g[2] = sl->gjit;
+    return sl->grain <= SHD_NGM ? sl->grain - 1u : SHD_GM_OFF;
+}
+/* SIZE (0..127) in output samples: 4 ms x 2^(6 v / 127) */
+static uint32_t shd_glen(uint32_t v) { return (uint32_t)((176ull * pow2_q16((int32_t)(clamp(v, 0, 127) * 1152 / 127))) >> 16); }
+/* DENS (0..127): grains overlapping, Q8: 1 .. 4 (42: 2 exactly, the windows summing flat) */
+static uint32_t shd_gov(uint32_t v)
+{
+    uint32_t ov = 256u + (uint32_t)clamp(v, 0, 127) * 768u / 126u;
+    return ov > 1024u ? 1024u : ov;
+}
+
+/* a slice starts (shd_start): its GRAIN, the head at its start (REV: its end), no grains yet */
+static void shd_gr_start(shd_gv_t *gv, uint32_t src, const shd_sl_t *sl, uint32_t a, uint32_t b, uint32_t st, uint32_t rev)
+{
+    uint8_t g[3];
+    uint32_t i;
+    gv->mode = (uint8_t)shd_gmode(src, sl, g);
+    for (i = 0; i < SHD_GN; i++)
+        gv->g[i].winc = 0;
+    gv->anc = a;
+    gv->ancst = st;
+    slc_dec_at(&gv->hd, a, st);
+    gv->cplo = (a + SHD_GCPS - 1u) & ~(SHD_GCPS - 1u);
+    gv->head = rev ? b : a;
+    gv->hfrac = 0;
+    gv->rev = (uint8_t)rev;
+    gv->run = 1;
+    gv->held = 0;
+    gv->hold = 0;
+    gv->first = 1;
+    gv->wait = 0;
+}
+/* the head back to the slice's start, going forwards (LOOP, PING) */
+static void shd_gr_rewind(shd_gv_t *gv)
+{
+    gv->head = gv->anc;
+    gv->hfrac = 0;
+    gv->rev = 0;
+    slc_dec_at(&gv->hd, gv->anc, gv->ancst);
+    gv->cplo = (gv->anc + SHD_GCPS - 1u) & ~(SHD_GCPS - 1u);
+}
+
+/* once a block (and at PLAY's next slice): the rates and the grains' shape now */
+static void shd_gr_setup(track_t *t, voice_t *v, const slc_src_t *s, const shd_vx_t *x, const vmod_t *m, shd_gs_t *gs,
+                         int play)
+{
+    shd_gv_t *gv = shd_gv(t, v);
+    const shd_sl_t *sl = shd_sl(v);
+    uint32_t st, l, lim, ov, prate;
+    uint8_t g[3];
+    slc_bounds_v(s, v, &gs->a, &gs->b, &st);
+    if (gs->b <= gs->a)
+        gs->b = gs->a + 1u;
+    (void)shd_gmode((uint32_t)v->s[4] & 7u, sl, g);     /* (SIZE DENS JITTER as they are now; the mode as it began) */
+    prate = shd_step(t->p, sl, s, m, v);
+    prate = prate < 64u ? 64u : prate > 2u << 16 ? 2u << 16 : prate;
+    gs->prate = prate;
+    gs->trate = s->rate;
+    if (play && gv->mode != SHD_GM_FREEZE) {         /* PLAY: the rest of the slice in the rest of its steps */
+        uint32_t rem = gv->rev ? (gv->head > gs->a ? gv->head - gs->a : 0u) : (gs->b > gv->head ? gs->b - gv->head : 0u);
+        uint32_t out = x->next > x->clock ? x->next - x->clock : 1u;
+        uint64_t r = ((uint64_t)rem << 16) / out;
+        gs->trate = r > 4u << 16 ? 4u << 16 : (uint32_t)r;
+    }
+    l = shd_glen(g[0]);
+    lim = (uint32_t)(((uint64_t)(gs->b - gs->a) << 16) / prate);
+    l = l > lim ? lim : l;
+    l = l < 64u ? 64u : l;
+    gs->len = l;
+    gs->winc = 0xFFFFFFFFu / l;
+    ov = shd_gov(g[1]);
+    gs->hop = l * 256u / ov;
+    gs->hop = gs->hop < 16u ? 16u : gs->hop;
+    gs->gain = ov <= 512u ? 32768 : (int32_t)(32768u * 512u / ov);
+    gs->span = (uint32_t)(((uint64_t)l * prate) >> 16);
+    gs->span = gs->span > gs->b - gs->a ? gs->b - gs->a : gs->span;
+    gs->jit = g[2];
+    gs->scat = gv->mode == SHD_GM_CLOUD ? (gs->b - gs->a) * gs->jit / 254u : gs->span * gs->jit / 127u;
+}
+
+/* the nearest decoder state at or before pos: SLICE's grid, the slice's start, one the head kept, the head's, hint's
+ * (0: none) */
+static void shd_gr_seek(const shd_gv_t *gv, const slc_src_t *s, uint32_t pos, const slc_dec_t *hint, slc_dec_t *d)
+{
+    uint32_t k = (uint32_t)((uint64_t)pos * SLC_GRID / s->len), bp;
+    k = k < SLC_GRID ? k : SLC_GRID - 1u;
+    while (k && slc_gpos(s, k) > pos)
+        k--;
+    while (k + 1u < SLC_GRID && slc_gpos(s, k + 1u) <= pos)
+        k++;
+    slc_dec_at(d, slc_gpos(s, k), s->grid[k]);
+    if (gv->anc <= pos && gv->anc > d->pos)
+        slc_dec_at(d, gv->anc, gv->ancst);
+    bp = pos & ~(SHD_GCPS - 1u);
+    if (bp >= gv->cplo && bp < gv->hd.pos && bp + SHD_GCP * SHD_GCPS > gv->hd.pos && bp > d->pos)
+        slc_dec_at(d, bp, gv->cp[(bp / SHD_GCPS) % SHD_GCP]);
+    if (gv->hd.pos <= pos && gv->hd.pos > d->pos)
+        *d = gv->hd;
+    if (hint && hint->pos <= pos && hint->pos > d->pos)
+        *d = *hint;
+}
+
+/* a grain from source sample pos, age output samples into its window, at rate (hint: a state to seek from, or 0) */
+static void shd_gr_spawn(shd_mem_t *mem, shd_gv_t *gv, const slc_src_t *s, const shd_gs_t *gs, uint32_t pos, uint32_t age,
+                         uint32_t rate, const slc_dec_t *hint)
+{
+    shd_gr_t *g = 0;
+    slc_dec_t d;
+    uint32_t i, cost;
+    for (i = 0; i < SHD_GN && !g; i++)
+        if (!gv->g[i].winc)
+            g = &gv->g[i];
+    if (!g || mem->gload >= SHD_GPART || pos + 2u >= s->len || age >= gs->len)
+        return;
+    shd_gr_seek(gv, s, pos, hint, &d);
+    cost = pos - d.pos;
+    if (cost > mem->gbud)
+        return;
+    mem->gbud -= cost;
+    while (d.pos < pos)
+        slc_dec_next(s, &d);
+    g->a = (int16_t)slc_dec_next(s, &d);
+    g->b = (int16_t)slc_dec_next(s, &d);
+    g->pos = d.pos;
+    g->pred = (int16_t)d.pred;
+    g->idx = (uint8_t)d.idx;
+    g->seg = (uint8_t)d.seg;
+    g->frac = 0;
+    g->rate = rate;
+    g->winc = gs->winc;
+    g->wph = age * gs->winc;
+    mem->gload++;
+}
+
+/* STRETCH, FREEZE: a new grain's start moved (within SHD_WD of pos, in lo .. hi) to where the material runs on as the
+ * loudest grain sounding does (WSOLA: the best match over SHD_WW source samples, every 2nd; a coarse pass then +-1):
+ * the grains add in phase, a held tone keeps its pitch. Within the part's budget, else pos as it was; *hint: the state
+ * at the search's start (to seek the grain from), pos UINT32_MAX for none */
+#define SHD_WD 64u
+#define SHD_WW 64u
+static uint32_t shd_gr_align(shd_mem_t *mem, const shd_gv_t *gv, const slc_src_t *s, uint32_t pos, uint32_t lo,
+                             uint32_t hi, slc_dec_t *hint)
+{
+    int8_t r[SHD_WW], c[2u * SHD_WD + SHD_WW];
+    const shd_gr_t *ref = 0;
+    slc_dec_t d;
+    int32_t wmax = 8192;
+    uint32_t i, j, a, b, n, cost, best = pos, o;
+    hint->pos = UINT32_MAX;
+    for (i = 0; i < SHD_GN; i++)                    /* the loudest grain now */
+        if (gv->g[i].winc && gr_win(gv->g[i].wph) > wmax) {
+            wmax = gr_win(gv->g[i].wph);
+            ref = &gv->g[i];
+        }
+    a = pos > lo + SHD_WD ? pos - SHD_WD : lo;
+    b = pos + SHD_WD < hi ? pos + SHD_WD : hi;
+    if (!ref || b <= a || b + SHD_WW >= s->len)
+        return pos;
+    n = b - a + SHD_WW;
+    shd_gr_seek(gv, s, a, 0, &d);
+    cost = (a - d.pos) + n + SHD_WW + (b - a) * SHD_WW / 32u;   /* (decodes; the products / 16) */
+    if (cost + 64u > mem->gbud)
+        return pos;
+    mem->gbud -= cost;
+    {                                               /* the reference: the grain's next samples */
+        slc_dec_t rd;
+        rd.pos = ref->pos;
+        rd.pred = ref->pred;
+        rd.idx = ref->idx;
+        rd.seg = ref->seg;
+        r[0] = (int8_t)(ref->a >> 8);
+        r[1] = (int8_t)(ref->b >> 8);
+        for (i = 2; i < SHD_WW; i++)
+            r[i] = (int8_t)(rd.pos < s->len ? slc_dec_next(s, &rd) >> 8 : 0);
+    }
+    while (d.pos < a)
+        slc_dec_next(s, &d);
+    *hint = d;
+    for (i = 0; i < n; i++)
+        c[i] = (int8_t)(slc_dec_next(s, &d) >> 8);
+    {
+        int64_t bn = 0, be = 1;                     /* the best so far: bn / be = sc^2 / E (sc > 0) */
+        uint32_t pass, lo2 = a, hi2 = b, st = 2u;
+        best = UINT32_MAX;
+        for (pass = 0; pass < 3u; pass++) {         /* pos itself; every 2nd; then the best's neighbours */
+            if (pass == 1u)
+                lo2 = a, hi2 = b, st = 2u;
+            else if (pass == 2u) {
+                if (best == UINT32_MAX)
+                    break;
+                lo2 = best > a ? best - 1u : a;
+                hi2 = best + 1u < b ? best + 1u : b;
+                st = 2u;
+            } else
+                lo2 = hi2 = pos;
+            for (o = lo2; o <= hi2; o += st) {
+                int32_t sc = 0, e = 1;
+                if (pass && o == pos)
+                    continue;
+                for (j = 0; j < SHD_WW; j += 2u) {
+                    int32_t x = c[o - a + j];
+                    sc += r[j] * x;
+                    e += x * x;
+                }
+                if (sc > 0 && (int64_t)sc * sc * be > bn * e + (pass ? bn * e >> 5 : 0)) {
+                    bn = (int64_t)sc * sc;          /* (another start must beat pos's by 1 / 32) */
+                    be = e;
+                    best = o;
+                }
+            }
+        }
+        if (best == UINT32_MAX)
+            best = pos;
+    }
+    return best;
+}
+
+/* one output sample of the voice's grains into *y; 0 when they are over (the head done, no grain sounding).
+ * loop: LOOP held (the head goes round); ping: DIR PING; one: ONE (FREEZE holds as long again); play: PLAY */
+static int shd_gr_tick(track_t *t, voice_t *v, const slc_src_t *s, shd_vx_t *x, const shd_gs_t *gs, int32_t *y,
+                       int loop, int ping, int one, int play)
+{
+    shd_mem_t *mem = shd_mem(t);
+    shd_gv_t *gv = shd_gv(t, v);
+    uint32_t i, live = 0, hi = gs->b - gs->span, fz = gv->rev ? gs->a : hi;
+    int32_t acc = 0;
+    if (gv->first) {                                /* the slice's first grains: on its first sample, at their peak */
+        uint32_t k, half = gs->len / 2u, at = gv->rev ? hi : gs->a;
+        gv->first = 0;
+        for (k = 0; k * gs->hop <= half && k < SHD_GN; k++)
+            shd_gr_spawn(mem, gv, s, gs, at, half - k * gs->hop, gs->prate, 0);
+        gv->wait = k * gs->hop > half ? k * gs->hop - half : gs->hop;
+    }
+    if (gv->run) {                                  /* the head */
+        if (gv->held) {                             /* FREEZE: held while the key is; ONE: as long again; PLAY: on */
+            if (play)
+                ;
+            else if (one ? !gv->hold || !--gv->hold : !v->gate)
+                gv->run = 0;
+        } else if (!gv->rev) {
+            uint32_t f = gv->hfrac + gs->trate, end = gv->mode == SHD_GM_FREEZE ? fz : gs->b;
+            gv->head += f >> 16;
+            gv->hfrac = f & 0xFFFFu;
+            while (gv->hd.pos < gv->head && gv->hd.pos + 1u < s->len) {   /* its decoder, keeping states */
+                if (!(gv->hd.pos & (SHD_GCPS - 1u)))
+                    gv->cp[(gv->hd.pos / SHD_GCPS) % SHD_GCP] = slc_dec_st(&gv->hd);
+                slc_dec_next(s, &gv->hd);
+            }
+            if (gv->mode != SHD_GM_FREEZE && !loop && !ping && gv->head < end &&
+                ((uint64_t)(end - gv->head) << 16) < (uint64_t)(gs->len / 2u) * gs->trate)
+                gv->wait = gs->hop;                 /* (the last grains end with the slice: no new one past it) */
+            if (gv->head >= end) {
+                if (gv->mode == SHD_GM_FREEZE) {
+                    gv->head = end;
+                    gv->held = 1;
+                    gv->hold = (uint32_t)((((uint64_t)(gs->b - gs->a)) << 16) / (gs->trate ? gs->trate : 1u));
+                    gv->hold = gv->hold > 441000u ? 441000u : gv->hold;
+                } else if (ping && (loop || !x->pinged)) {
+                    gv->head = gs->b;               /* PING: back (once; LOOP: to and fro) */
+                    gv->hfrac = 0;
+                    gv->rev = 1;
+                    x->pinged = 1;
+                } else if (loop)
+                    shd_gr_rewind(gv);
+                else
+                    gv->run = 0;
+            }
+        } else {
+            uint32_t d = (gv->hfrac + 0x10000u - (gs->trate & 0xFFFFu)), back = (gs->trate >> 16) + 1u - (d >> 16);
+            gv->hfrac = d & 0xFFFFu;
+            if (gv->head < fz + back || gv->head < back) {
+                if (gv->mode == SHD_GM_FREEZE) {
+                    gv->head = fz;
+                    gv->held = 1;
+                    gv->hold = (uint32_t)((((uint64_t)(gs->b - gs->a)) << 16) / (gs->trate ? gs->trate : 1u));
+                    gv->hold = gv->hold > 441000u ? 441000u : gv->hold;
+                } else if (ping && loop)
+                    shd_gr_rewind(gv);              /* PING: forwards again */
+                else if (loop && !ping) {
+                    gv->head = gs->b;               /* REV, LOOP: round from the end */
+                    gv->hfrac = 0;
+                } else {
+                    gv->head = gs->a;
+                    gv->run = 0;
+                }
+            } else
+                gv->head -= back;
+        }
+    }
+    if (gv->run) {                                  /* the next grain */
+        if (gv->wait)
+            gv->wait--;
+        else {
+            uint32_t r = (uint32_t)noise32(&mem->grng), h = gv->head, rate = gs->prate, w = gs->hop;
+            int64_t pos;
+            h = h < gs->a ? gs->a : h > gs->b ? gs->b : h;
+            if (gv->mode == SHD_GM_CLOUD) {
+                int32_t jd = (int32_t)(gs->jit * 16u / 127u), dt;
+                pos = (int64_t)h - gs->span / 2u + (gs->scat ? (int64_t)(r % (2u * gs->scat + 1u)) - gs->scat : 0);
+                dt = jd ? (int32_t)((r >> 20) % (2u * (uint32_t)jd + 1u)) - jd : 0;
+                rate = (rate >> 8) * (pow2_q16(dt) >> 8);
+                w = gs->hop / 2u + (r >> 8) % (gs->hop ? gs->hop : 1u);
+            } else if (gv->rev)
+                pos = (int64_t)h - gs->span + (gs->scat ? r % (gs->scat + 1u) : 0u);
+            else
+                pos = (int64_t)h - (gs->scat ? r % (gs->scat + 1u) : 0u);
+            pos = pos < gs->a ? gs->a : pos > hi ? hi : pos;
+            if (gv->mode != SHD_GM_CLOUD) {
+                slc_dec_t hint;
+                uint32_t p2 = shd_gr_align(mem, gv, s, (uint32_t)pos, gs->a, hi, &hint);
+                shd_gr_spawn(mem, gv, s, gs, p2, 0, rate, hint.pos == UINT32_MAX ? 0 : &hint);
+            } else
+                shd_gr_spawn(mem, gv, s, gs, (uint32_t)pos, 0, rate, 0);
+            gv->wait = w ? w - 1u : 0u;
+        }
+    }
+    for (i = 0; i < SHD_GN; i++) {                  /* the grains */
+        shd_gr_t *g = &gv->g[i];
+        uint32_t nw;
+        if (!g->winc)
+            continue;
+        live = 1;
+        acc += ((g->a + (((g->b - g->a) * (int32_t)(g->frac >> 1)) >> 15)) * gr_win(g->wph)) >> 15;
+        g->frac += g->rate;
+        if (g->frac >= 65536u) {
+            slc_dec_t d;
+            d.pos = g->pos;
+            d.pred = g->pred;
+            d.idx = g->idx;
+            d.seg = g->seg;
+            do {
+                g->a = g->b;
+                g->b = d.pos < s->len ? (int16_t)slc_dec_next(s, &d) : 0;
+                g->frac -= 65536u;
+            } while (g->frac >= 65536u);
+            g->pos = d.pos;
+            g->pred = (int16_t)d.pred;
+            g->idx = (uint8_t)d.idx;
+            g->seg = (uint8_t)d.seg;
+        }
+        nw = g->wph + g->winc;
+        if (nw < g->wph)
+            g->winc = 0;
+        else
+            g->wph = nw;
+    }
+    *y = (int32_t)(((int64_t)acc * gs->gain) >> 15);
+    return live || gv->run;
+}
+
 static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const vmod_t *m)
 {
     const int16_t *p = t->p;
@@ -656,6 +1095,8 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
     const shd_sl_t *sl;
     slc_dec_t d;
     int32_t xin = 0;
+    shd_gv_t *gv = shd_gv(t, v);
+    shd_gs_t gs;
     if ((pk & 7u) == SLC_SINE && v->s[6] != 2) {
         smp_sine(out, n, m, p[P_E3] * 16, 32767, &v->ph[0], &v->s[7]);
         return;
@@ -679,6 +1120,8 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
     d.seg = (pk >> 3) & 15u;
     sl = shd_sl(v);
     stepq = shd_step(p, sl, s, m, v);
+    if (gv->mode)
+        shd_gr_setup(t, v, s, x, m, &gs, play);
     for (i = 0; i < n; i++) {
         int32_t y, g, f, q;
         uint32_t rev;
@@ -695,6 +1138,8 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
             d.seg = ((uint32_t)v->s[4] >> 3) & 15u;
             frac = 0;
             stepq = shd_step(p, shd_sl(v), s, m, v);
+            if (gv->mode)
+                shd_gr_setup(t, v, s, x, m, &gs, play);
         }
         pk = (uint32_t)v->s[4];
         rev = (pk >> 7) & 1u;
@@ -707,38 +1152,46 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
             }
             continue;
         }
-        if (!v->s[6]) {                             /* prime the interpolator */
-            if (!(rev ? slc_rev(s, v, rb, 0, &xin) : slc_fwd(s, v, &d, 0, &xin))) {
+        if (gv->mode) {                             /* GRAIN */
+            if (!shd_gr_tick(t, v, s, x, &gs, &y, mode == SHD_M_LOOP && v->gate, sl->rev == SHD_PING, mode == SHD_M_ONE,
+                             play)) {
                 x->idle = 1;
                 continue;
             }
-            v->s[3] = xin;
-            v->s[6] = 1;
-        }
-        frac += stepq;
-        while (frac >= 65536u) {
-            int loop = mode == SHD_M_LOOP && v->gate, ping = sl->rev == SHD_PING;
-            frac -= 65536u;
-            v->s[2] = v->s[3];
-            if (!(rev ? slc_rev(s, v, rb, loop && !ping, &xin) : slc_fwd(s, v, &d, loop && !ping, &xin))) {
-                int ok = 0;
-                if (ping && (loop || (!rev && !x->pinged))) {   /* PING: back (once), or to and fro (LOOP) */
-                    rev ^= 1u;
-                    x->pinged = 1;
-                    shd_turn(s, v, &d, rev);
-                    ok = rev ? slc_rev(s, v, rb, 0, &xin) : slc_fwd(s, v, &d, 0, &xin);
+        } else {
+            if (!v->s[6]) {                             /* prime the interpolator */
+                if (!(rev ? slc_rev(s, v, rb, 0, &xin) : slc_fwd(s, v, &d, 0, &xin))) {
+                    x->idle = 1;
+                    continue;
                 }
-                if (!ok) {
-                    x->idle = 1;                    /* the slice ended */
-                    v->s[3] = 0;
-                    break;
-                }
+                v->s[3] = xin;
+                v->s[6] = 1;
             }
-            v->s[3] = xin;
+            frac += stepq;
+            while (frac >= 65536u) {
+                int loop = mode == SHD_M_LOOP && v->gate, ping = sl->rev == SHD_PING;
+                frac -= 65536u;
+                v->s[2] = v->s[3];
+                if (!(rev ? slc_rev(s, v, rb, loop && !ping, &xin) : slc_fwd(s, v, &d, loop && !ping, &xin))) {
+                    int ok = 0;
+                    if (ping && (loop || (!rev && !x->pinged))) {   /* PING: back (once), or to and fro (LOOP) */
+                        rev ^= 1u;
+                        x->pinged = 1;
+                        shd_turn(s, v, &d, rev);
+                        ok = rev ? slc_rev(s, v, rb, 0, &xin) : slc_fwd(s, v, &d, 0, &xin);
+                    }
+                    if (!ok) {
+                        x->idle = 1;                    /* the slice ended */
+                        v->s[3] = 0;
+                        break;
+                    }
+                }
+                v->s[3] = xin;
+            }
+            if (x->idle)
+                continue;
+            y = v->s[2] + (((v->s[3] - v->s[2]) * (int32_t)(frac >> 1)) >> 15);
         }
-        if (x->idle)
-            continue;
-        y = v->s[2] + (((v->s[3] - v->s[2]) * (int32_t)(frac >> 1)) >> 15);
         if (sl->filt >= SHD_F_COMBN) {              /* a feedback comb: CUT its pitch, RES its feedback (- odd) */
             uint32_t dq = SHD_COMB_D[sl->cut & 127], di = dq >> 8, df = dq & 255u;
             uint32_t r0 = (x->cw - di) & (SHD_COMB - 1u), r1 = (r0 - 1u) & (SHD_COMB - 1u);
@@ -800,7 +1253,7 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
             }
             if (left < SHD_FADE)
                 g = g * (int32_t)left / (int32_t)SHD_FADE;
-        } else {                                    /* the last ~1.5 ms of a one-shot */
+        } else if (!gv->mode) {                     /* the last ~1.5 ms of a one-shot (grains end in their windows) */
             uint32_t rem = rev ? v->ph[0] - v->ph[2] : v->ph[2] - d.pos;
             if (!(mode == SHD_M_LOOP && v->gate) && !(sl->rev == SHD_PING && !rev && !x->pinged) &&
                 rem < ((stepq * 64u) >> 16) + 1u) {
@@ -825,7 +1278,9 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
         }
     }
     v->ph[1] = frac;
-    if (!((uint32_t)v->s[4] >> 7 & 1u)) {
+    if (gv->mode)
+        v->ph[0] = gv->head;                        /* (LOOP's playheads) */
+    else if (!((uint32_t)v->s[4] >> 7 & 1u)) {
         v->ph[0] = d.pos;
         v->s[0] = d.pred;
         v->s[1] = d.idx;
@@ -848,6 +1303,14 @@ static void shard_block(track_t *t)
         for (i = 0; i < CTL; i++)
             mem->dsend[i] = 0;
     mem->used = mem->dused = 0;
+    mem->gbud = mem->gbud + SHD_GBUD > SHD_GBUD_MAX ? SHD_GBUD_MAX : mem->gbud + SHD_GBUD;   /* GRAIN: the seeking, */
+    mem->gload = 0;                                 /* the grains sounding */
+    for (b = 0; b < NVOICE; b++)
+        if (t->v[b].active && mem->gv[b].mode)
+            for (i = 0; i < SHD_GN; i++)
+                mem->gload += mem->gv[b].g[i].winc != 0u;
+    if (!mem->grng)
+        mem->grng = 0x2545F491;
 }
 
 /* after the voices: the multiband distortion over the buses, into the part */

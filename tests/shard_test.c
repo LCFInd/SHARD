@@ -333,6 +333,229 @@ static uint32_t to_pcm(const double *x, int16_t *y, uint32_t n)
     return n;
 }
 
+/* 10: GRAIN. A note's render (the left channel) into sg_buf, the key released at rel (frames; 0 = held); the frames
+ * until the voices end (frames: did not) */
+static int32_t sg_buf[FS * 3];
+static uint32_t sg_run(uint32_t frames, uint32_t rel, uint8_t note)
+{
+    int32_t o[2 * CTL];
+    uint32_t f, i, end = frames;
+    trk_note_on(T, note, 110);
+    for (f = 0; f + CTL <= frames; f += CTL) {
+        if (rel && f <= rel && f + CTL > rel)
+            trk_note_off(T, note);
+        mix_block(o, CTL);
+        for (i = 0; i < CTL; i++)
+            sg_buf[f + i] = o[2 * i];
+        if (end == frames && !nvoices())
+            end = f;
+    }
+    return end;
+}
+/* the tone's frequency over [a, b) (rising zero crossings), the peak over it */
+static double sg_hz(uint32_t a, uint32_t b)
+{
+    uint32_t i, z = 0, z0 = 0, z1 = 0;
+    for (i = a + 1u; i < b; i++)
+        if (sg_buf[i - 1] < 0 && sg_buf[i] >= 0) {
+            if (!z++)
+                z0 = i;
+            z1 = i;
+        }
+    return z > 1u ? (z - 1u) * (double)FS / (z1 - z0) : 0;
+}
+/* the strongest frequency in [lo, hi) Hz over [a, b) (Goertzel, 1 Hz): the pitch through grains' phase steps */
+static double sg_tone(uint32_t a, uint32_t b, double lo, double hi)
+{
+    double f, best = 0, bp = -1;
+    uint32_t i;
+    for (f = lo; f < hi; f += 1.0) {
+        double w = 2 * cos(2 * M_PI * f / FS), s0, s1 = 0, s2 = 0, p;
+        for (i = a; i < b; i++) {
+            s0 = sg_buf[i] + w * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        p = s1 * s1 + s2 * s2 - w * s1 * s2;
+        if (p > bp) {
+            bp = p;
+            best = f;
+        }
+    }
+    return best;
+}
+static int32_t sg_peak(uint32_t a, uint32_t b)
+{
+    int32_t p = 0;
+    uint32_t i;
+    for (i = a; i < b; i++)
+        p = abs(sg_buf[i]) > p ? abs(sg_buf[i]) : p;
+    return p;
+}
+/* every slice of source src to GRAIN g (the slice's own), SIZE DENS JITTER */
+static void sg_all(uint32_t src, uint8_t g, uint8_t size, uint8_t dens, uint8_t jit)
+{
+    uint32_t i;
+    for (i = 0; i < SLC_AUTO; i++) {
+        shd_kit[src].sl[i].grain = g;
+        shd_kit[src].sl[i].gsize = size;
+        shd_kit[src].sl[i].gdens = dens;
+        shd_kit[src].sl[i].gjit = jit;
+    }
+}
+static void sg_tests(void)
+{
+    static int16_t y[22050];
+    static int32_t ref[FS];
+    uint32_t i, d0, d1, d2, d3, sil, k;
+    double h0, h1, h2, h3, c, e0, e1;
+    int ok;
+    /* the material: 1 s of 220 Hz in USR3 (source 3), two slices (DIV 2) of 0.5 s */
+    for (i = 0; i < NELEM(y); i++)
+        y[i] = (int16_t)(sin(2 * M_PI * 220 * i / 22050.0) * 16000);
+    slot_pcm(2, y, NELEM(y));
+#define GR_FRESH(mode) do { fresh(1, mode, 0); T->p[P_E0] = 3; T->p[P_DLY] = T->p[P_REV] = 0; } while (0)
+    GR_FRESH(SHD_M_ONE);
+    d0 = sg_run(FS * 2u, 0, 60);
+    h0 = sg_hz(FS / 10u, FS * 3u / 10u);
+    GR_FRESH(SHD_M_ONE);
+    T->p[P_E3] = 12;
+    d1 = sg_run(FS * 2u, 0, 60);
+    h1 = sg_hz(FS / 20u, FS * 2u / 10u);
+    check("GRAIN OFF: PTCH +12 an octave up, half as long (varispeed)", h1 > h0 * 1.95 && h1 < h0 * 2.05 &&
+          d1 * 2u < d0 + 2u * CTL && d1 * 2u + 2u * CTL > d0, "%.1f -> %.1f Hz, %u -> %u", h0, h1, d0, d1);
+    GR_FRESH(SHD_M_ONE);
+    sg_all(3, SHD_GM_STRETCH + 1u, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0);
+    d2 = sg_run(FS * 2u, 0, 60);
+    h2 = sg_hz(FS / 10u, FS * 3u / 10u);
+    GR_FRESH(SHD_M_ONE);
+    sg_all(3, SHD_GM_STRETCH + 1u, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0);
+    T->p[P_E3] = 12;
+    d3 = sg_run(FS * 2u, 0, 60);
+    h3 = sg_tone(FS / 10u, FS * 4u / 10u, 150, 700);
+    check("STRETCH: the slice's pitch as it is, as long (+ half a grain)", fabs(h2 - h0) < 2.0 && d2 >= d0 &&
+          d2 <= d0 + shd_glen(SHD_GSIZE_DEF) / 2u + 2u * CTL, "%.1f Hz, %u for %u", h2, d2, d0);
+    check("STRETCH: PTCH +12 an octave up, the length the same", h3 > h0 * 1.97 && h3 < h0 * 2.03 &&
+          d3 + 2u * CTL >= d2 && d3 <= d2 + 2u * CTL, "%.1f Hz, %u for %u", h3, d3, d2);
+    T->p[P_E3] = -12;
+    GR_FRESH(SHD_M_ONE);
+    sg_all(3, SHD_GM_STRETCH + 1u, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0);
+    T->p[P_E3] = -12;
+    d3 = sg_run(FS * 2u, 0, 60);
+    h3 = sg_tone(FS / 10u, FS * 4u / 10u, 60, 400);
+    check("STRETCH: PTCH -12 an octave down, the length the same", h3 > h0 * 0.48 && h3 < h0 * 0.52 &&
+          d3 + 2u * CTL >= d2 && d3 <= d2 + 2u * CTL, "%.1f Hz, %u for %u", h3, d3, d2);
+    /* the attack whole: BREAK's first slice (a kick) as grains = as played (DENS 2, no jitter, PTCH 0) */
+    fresh(1, SHD_M_ONE, 0);
+    sg_run(FS, 0, 60);
+    memcpy(ref, sg_buf, sizeof ref);
+    fresh(1, SHD_M_ONE, 0);
+    sg_all(0, SHD_GM_STRETCH + 1u, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0);
+    sg_run(FS, 0, 60);
+    for (c = e0 = e1 = 0, i = 0; i < FS / 4u; i++) {
+        c += (double)ref[i] * sg_buf[i];
+        e0 += (double)ref[i] * ref[i];
+        e1 += (double)sg_buf[i] * sg_buf[i];
+    }
+    c /= sqrt(e0 * e1 + 1);
+    check("STRETCH: a slice as grains (PTCH 0) is the slice: its attack whole", c > 0.995 &&
+          abs(sg_buf[3]) * 10 > abs(ref[3]) * 9 - 50, "correlation %.4f", c);
+    /* PLAY at half the tempo: varispeed's slices end and leave gaps; STRETCH fills them, at pitch */
+    for (k = 0; k < 2u; k++) {
+        GR_FRESH(SHD_M_PLAY);
+        T->p[P_SGATE] = 127;
+        shd_kit[3].bus.bpm = 120;                          /* (1 s = 2 beats at 120) */
+        song.g[G_BPM] = 60;
+        if (k)
+            shd_kit[3].bus.gmode = SHD_GM_STRETCH;         /* the track's GRAIN: the slices at TRACK */
+        sg_run(FS * 3u, 0, 60);
+        for (sil = 0, i = FS / 2u; i + 256u <= FS * 5u / 2u; i += 256u)
+            sil += sg_peak(i, i + 256u) < 500;
+        h0 = sg_tone(FS / 10u, FS * 4u / 10u, 150, 300);
+        if (!k)
+            check("PLAY at half the tempo, GRAIN OFF: gaps after each slice", sil > 60u, "%u quiet of 172", sil);
+        else
+            check("PLAY at half the tempo, the track's STRETCH: no gaps, the pitch kept", sil == 0u && h0 > 218 && h0 < 222,
+                  "%u quiet, %.1f Hz", sil, h0);
+    }
+    song.g[G_BPM] = 120;
+    /* FREEZE: GATE holds past the slice's end while held, ends after the release; ONE: as long again */
+    GR_FRESH(SHD_M_GATE);
+    sg_all(3, SHD_GM_FREEZE + 1u, SHD_GSIZE_DEF, SHD_GDENS_DEF, 20);
+    d0 = sg_run(FS * 3u, FS * 3u / 2u, 60);
+    check("FREEZE (GATE): held past the slice's end, at its pitch", sg_peak(FS * 5u / 4u, FS * 11u / 8u) > 4000 &&
+          fabs(sg_tone(FS, FS * 11u / 8u, 150, 300) - 220) < 3, "%d, %.1f Hz", sg_peak(FS * 5u / 4u, FS * 11u / 8u),
+          sg_tone(FS, FS * 11u / 8u, 150, 300));
+    check("FREEZE (GATE): ends after the release", d0 > FS * 3u / 2u && d0 < FS * 5u / 2u, "%u", d0);
+    GR_FRESH(SHD_M_ONE);
+    sg_all(3, SHD_GM_FREEZE + 1u, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0);
+    d0 = sg_run(FS * 3u, 0, 60);
+    check("FREEZE (ONE): the slice, then its end held as long again", d0 > FS * 9u / 10u && d0 < FS * 23u / 20u, "%u", d0);
+    /* LOOP held goes round; REV, PING, CLOUD end and stay bounded */
+    GR_FRESH(SHD_M_LOOP);
+    sg_all(3, SHD_GM_STRETCH + 1u, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0);
+    d0 = sg_run(FS * 2u, FS * 3u / 2u, 60);
+    check("STRETCH LOOP: round while held, no gap", sg_peak(FS / 2u - 2000u, FS / 2u + 2000u) > 8000 && d0 > FS * 3u / 2u &&
+          d0 < FS * 2u, "%u", d0);
+    for (k = 0; k < 4u; k++) {
+        static const char *const W[] = {"REV", "PING", "CLOUD", "CLOUD REV"};
+        char what[80];
+        GR_FRESH(SHD_M_ONE);
+        sg_all(3, k >= 2u ? SHD_GM_CLOUD + 1u : SHD_GM_STRETCH + 1u, 30, 127, 127);
+        for (i = 0; i < SLC_AUTO; i++)
+            shd_kit[3].sl[i].rev = k == 1u ? SHD_PING : k != 2u ? SHD_REV : SHD_FWD;
+        T->p[P_E3] = 7;
+        d0 = sg_run(FS * 3u, 0, 60);
+        snprintf(what, sizeof what, "%s (small, dense, all jitter): audible, bounded, ends", W[k]);
+        check(what, sg_peak(0, FS / 2u) > 3000 && sg_peak(0, FS * 3u) < 32767 && d0 < (k == 1u ? FS * 3u / 2u : FS * 3u / 4u),
+              "%d, %u", sg_peak(0, FS * 3u), d0);
+    }
+    /* the load: 8 voices of small dense CLOUD; at most SHD_GPART grains, the seeking within SHD_GBUD */
+    GR_FRESH(SHD_M_GATE);
+    sg_all(3, SHD_GM_CLOUD + 1u, 0, 127, 127);
+    for (i = 0; i < 8u; i++)
+        trk_note_on(T, (uint8_t)(60 + i), 110);
+    for (ok = 1, k = 0; k < 400u; k++) {
+        uint32_t g = 0, v, j;
+        blocks(1);
+        for (v = 0; v < NVOICE; v++)
+            if (T->v[v].active)
+                for (j = 0; j < SHD_GN; j++)
+                    g += shd_mem(T)->gv[v].g[j].winc != 0u;
+        ok &= g <= SHD_GPART + SHD_GN;
+    }
+    check("8 voices of CLOUD: the grains held to the part's limit, bounded", ok && out_peak < 32767 && out_peak > 2000, "%d", out_peak);
+    /* the kit before GRAIN (SHF2) read: GRAIN TRACK, the defaults; the track's GRAIN OFF */
+    {
+        static shd_rec2_t o;
+        smp_user_hdr_t *h = (smp_user_hdr_t *)((uint8_t *)host_slots + 2u * SMP_USER_SIZE);
+        memset(&o, 0, sizeof o);
+        o.magic = SHD_REC2_MAGIC;
+        o.len = slc_usr[2].len;
+        o.crc = h->crc;
+        for (i = 0; i < SLC_AUTO; i++) {
+            shd_sl_default(&shd_kit[3].sl[i]);
+            memcpy(o.sl[i], &shd_kit[3].sl[i], 16u);
+        }
+        o.sl[1][0] = (uint8_t)-5;                          /* slice 2's PITCH */
+        shd_bus_default(&o.bus);
+        o.bus.gmode = 0xAA;                                /* (SHF2's pad: anything) */
+        o.rcrc = st_crc32(&o, sizeof o - 4u);
+        if (!slc_rec_room(2))
+            check("SHF2: room for the kit in the slot", 0, 0);
+        memset((uint8_t *)h + SLC_REC_OFF, 0xFF, 0x1000u);
+        memcpy((uint8_t *)h + SHD_REC_OFF, &o, sizeof o);
+        smp_user_scan(2);
+        check("a kit saved before GRAIN (SHF2) reads: its settings, GRAIN TRACK, the track's OFF",
+              shd_kit[3].sl[1].pitch == -5 && shd_kit[3].sl[1].grain == SHD_GT_TRACK &&
+              shd_kit[3].sl[1].gsize == SHD_GSIZE_DEF && shd_kit[3].bus.gmode == SHD_GM_OFF &&
+              shd_kit[3].bus.gdens == SHD_GDENS_DEF, "%d %u %u", shd_kit[3].sl[1].pitch, shd_kit[3].sl[1].grain, shd_kit[3].bus.gmode);
+    }
+    memset((uint8_t *)host_slots + 2u * SMP_USER_SIZE, 0, SMP_USER_SIZE);
+    smp_user_scan(2);
+    song.g[G_BPM] = 120;
+}
+
 int main(int argc, char **argv)
 {
     const char *loop = argc > 1 ? argv[1] : "build/slice_demo/loop";
@@ -1076,6 +1299,8 @@ int main(int argc, char **argv)
         smp_user_scan(2);
     }
 
+    sg_tests();
+
     /* 7: demos */
     {
         static const uint8_t ONE[16] = {60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -1102,6 +1327,16 @@ int main(int argc, char **argv)
         fresh(0, SHD_M_PLAY, SHD_DIV_AUTO);
         T->p[P_SGATE] = 127;
         demo(dir, "play_usr_loop_110.wav", 110, 4, SHD_M_PLAY, SHD_DIV_AUTO, 1, ONE, 16);
+        /* GRAIN: BREAK at 90 BPM, PTCH +7: STRETCH keeps the beat and moves the pitch; then CLOUD */
+        fresh(0, SHD_M_PLAY, SHD_DIV_AUTO);
+        T->p[P_SGATE] = 127;
+        T->p[P_E3] = 7;
+        shd_kit[0].bus.gmode = SHD_GM_STRETCH;
+        demo(dir, "grain_stretch_break_90_up7.wav", 90, 4, SHD_M_PLAY, SHD_DIV_AUTO, 0, ONE, 16);
+        shd_kit[0].bus.gmode = SHD_GM_CLOUD;
+        shd_kit[0].bus.gjit = 70;
+        shd_kit[0].bus.gdens = 100;
+        demo(dir, "grain_cloud_break_90_up7.wav", 90, 4, SHD_M_PLAY, SHD_DIV_AUTO, 0, ONE, 16);
     }
     printf(fails ? "shard: %d FAILED\n" : "shard: all passed\n", fails);
     return fails != 0;

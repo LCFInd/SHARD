@@ -805,7 +805,7 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
        S_MENU_SELECT, S_PROJECT_ERASE, S_CONFIRM_ERASE_PROJ, S_TOOLS_CLEAN, S_CONFIRM_CLEAN,
        S_MENU_MIDI_TRACK, S_MENU_MIDI_TCH_UNUSED, S_MENU_MIDI_AUTO, S_HOME_TRACKS_MIDI, S_MIXER_MIDI, S_EDIT_PHASE_FOLD,
        S_SHFX_SLICE, S_SHFX_BUS, S_SHFX_ENUM, S_SHFX_NOFILE, S_SHARD_EDIT1, S_SHARD_EDIT2, S_SHARD_PRESETS,
-       S_SHARD_SLICES, S_SHARD_HOME, S_LOOP, S_LOOP_PLAY, S_LOOP_REL, S_ENV_SHARD,
+       S_SHARD_SLICES, S_SHARD_HOME, S_LOOP, S_LOOP_PLAY, S_LOOP_REL, S_ENV_SHARD, S_SHFX_GRAIN, S_SHFX_GSIZE, S_SHFX_BGRAIN,
 #if FELUCCA_MANGLER
        S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY, S_LIVE_OFF, S_LIVE_PLAY, S_LIVE_LAYER,
 #endif
@@ -842,7 +842,7 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "menu_select", "project_erase", "confirm_erase_project", "tools_clean", "confirm_clean",
     "menu_midi_track", "menu_midi_channels_unused", "menu_midi_auto_select", "home_tracks_midi", "mixer_midi", "edit_phase_fold",
     "shard_slice_fx", "shard_slice_fx_bus", "shard_slice_fx_route", "shard_slice_fx_nofile", "shard_edit1", "shard_edit2",
-    "shard_presets", "shard_slices", "shard_home", "loop", "loop_playing", "loop_release", "env_family_shard",
+    "shard_presets", "shard_slices", "shard_home", "loop", "loop_playing", "loop_release", "env_family_shard", "shfx_grain", "shfx_grain_size", "shfx_bus_grain",
 #if FELUCCA_MANGLER
     "bounce", "bounce_used", "bounce_busy", "live_off", "live_playing", "live_layer",
 #endif
@@ -1714,6 +1714,16 @@ static void setup(int s)
         ui.hot_col = 3; ui.hot_t = 30; ui.msg_t = 0;
         break;
     case S_ENV_SHARD: eng(ENGI_SHARD); open_family(FAM_ENV); break;
+    case S_SHFX_GRAIN:                               /* a slice's GRAIN: STRETCH */
+        eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 2; shfx_sl_param = SHFX_GRAIN; shfx_knob(2, 2); ui.msg_t = 0;
+        break;
+    case S_SHFX_GSIZE:                               /* its SIZE, in ms */
+        eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 2; shfx_sl_param = SHFX_GSIZE; shfx_knob(2, -20); ui.msg_t = 0;
+        break;
+    case S_SHFX_BGRAIN:                              /* the track's GRAIN on the BUS: CLOUD */
+        eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 0; shfx_knob(0, 40); shfx_bus_param = SHFX_BGRAIN; shfx_knob(2, 2);
+        ui.msg_t = 0;
+        break;
 #endif
 #if FELUCCA_MANGLER
     case S_BOUNCE: go_page(GR_BOUNCE); bnc.bars = 3; bnc.from = 0; bnc.to = 1; ui.hot_col = 0; ui.hot_t = 30; break;

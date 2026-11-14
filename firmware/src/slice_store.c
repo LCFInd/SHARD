@@ -31,16 +31,42 @@ _Static_assert(sizeof(slc_rec_t) == 152u, "SLICE record layout");
 
 #if FELUCCA_SHARD
 /* SHARD's kit (eng_shard.c: per-slice settings and the bus) for the same slot, in the same sector after the slices'
- * record: magic "SHF2", the material (as slc_rec_t), the kit, a CRC. Written together with the slices' record (one
+ * record: magic "SHF3", the material (as slc_rec_t), the kit, a CRC. Written together with the slices' record (one
  * erase), read at the same scans; a kit that is not the slot's sample's is ignored (the kit stays neutral). */
 #define SHD_REC_OFF (SLC_REC_OFF + 0x200u)
-#define SHD_REC_MAGIC 0x32464853u                    /* "SHF2" (SHF1: the kit before SUSTAIN .. SENS) */
+#define SHD_REC_MAGIC 0x33464853u                    /* "SHF3" (SHF2: before GRAIN; SHF1: before SUSTAIN .. SENS) */
+#define SHD_REC2_MAGIC 0x32464853u                   /* "SHF2": read, its slices' 16 bytes widened (shd_rec2_up) */
 typedef struct {
     uint32_t magic;
     uint32_t len, crc;
     shd_kit_t kit;
     uint32_t rcrc;
 } shd_rec_t;
+typedef struct {                                     /* SHF2: each slice 16 bytes (no GRAIN), the bus's last 4 zero */
+    uint32_t magic;
+    uint32_t len, crc;
+    uint8_t sl[SLC_AUTO][16];
+    shd_bus_t bus;
+    uint32_t rcrc;
+} shd_rec2_t;
+_Static_assert(sizeof(shd_rec2_t) == 552u, "SHF2 record layout");
+/* an SHF2 record read as SHF3: GRAIN TRACK and the defaults (the bus: GRAIN OFF) */
+static void shd_rec2_up(const shd_rec2_t *o, shd_rec_t *r)
+{
+    uint32_t i;
+    r->magic = SHD_REC_MAGIC;
+    r->len = o->len;
+    r->crc = o->crc;
+    for (i = 0; i < SLC_AUTO; i++) {
+        shd_sl_default(&r->kit.sl[i]);
+        memcpy(&r->kit.sl[i], o->sl[i], 16u);
+    }
+    r->kit.bus = o->bus;
+    r->kit.bus.gmode = SHD_GM_OFF;
+    r->kit.bus.gsize = SHD_GSIZE_DEF;
+    r->kit.bus.gdens = SHD_GDENS_DEF;
+    r->kit.bus.gjit = 0;
+}
 _Static_assert(SHD_REC_OFF - SLC_REC_OFF >= sizeof(slc_rec_t) && SHD_REC_OFF + sizeof(shd_rec_t) <= SMP_USER_SIZE,
                "SHARD record in the slot's last sector");
 static void shd_rec_make(uint32_t k, shd_rec_t *r)
@@ -92,9 +118,19 @@ static void slc_store_load(uint32_t k)
         return;
 #if FELUCCA_SHARD
     {
-        static shd_rec_t kr;                         /* (552 bytes: off the main loop's stack) */
+        static shd_rec_t kr;                         /* (680 bytes: off the main loop's stack) */
+        static shd_rec2_t k2;
+        int ok;
         memcpy(&kr, smp_user_xip(k) + SHD_REC_OFF, sizeof kr);
-        if (kr.magic == SHD_REC_MAGIC && kr.rcrc == st_crc32(&kr, sizeof kr - 4u) && kr.len == s->len &&
+        ok = kr.magic == SHD_REC_MAGIC && kr.rcrc == st_crc32(&kr, sizeof kr - 4u);
+        if (!ok && kr.magic == SHD_REC2_MAGIC) {     /* a kit saved before GRAIN */
+            memcpy(&k2, smp_user_xip(k) + SHD_REC_OFF, sizeof k2);
+            if (k2.rcrc == st_crc32(&k2, sizeof k2 - 4u)) {
+                shd_rec2_up(&k2, &kr);
+                ok = 1;
+            }
+        }
+        if (ok && kr.len == s->len &&
             kr.crc == ((const smp_user_hdr_t *)smp_user_xip(k))->crc) {
             shd_kit_sane(&kr.kit);
             shd_kit[slc_src_of_slot(k)] = kr.kit;

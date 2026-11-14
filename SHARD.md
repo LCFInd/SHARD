@@ -112,3 +112,21 @@ In the mangler build, SCL opens LIVE instead of scales and chords. LIVE launches
 - **Launch timing:** a launch waits for the end of the track's loop (LAUNCH LOOP) or plays from step 1 in the next block (LAUNCH NOW).
 - **OCT+ (OWN):** every track back to its own steps; stopped, LIVE turns off.
 - **How it works:** LIVE runs as an endless one-section song (`chain.live`, `chain.want`, `live_due` in seq.c's step loop, `CHAIN_OWN` lanes). PLAY with LIVE on loads the saved slots (`live_load`). STOP keeps the lanes, and a SONG started from GLO > SONG ends LIVE.
+
+## GRAIN (SLICE FX: each slice's, or the track's on BUS)
+
+GRAIN plays a slice as grains so that its pitch and its length are separate. A head moves through the slice at the material's own speed. In PLAY it moves at whatever speed makes the slice fill its steps at the song's tempo. Every hop, a grain starts at the head and reads at the pitch rate (PTCH, the slice's PITCH and modulation). Changing the pitch therefore leaves the length alone, and changing the tempo leaves the pitch alone.
+
+- **Modes:** OFF (varispeed, as before) / STRETCH / CLOUD / FREEZE. A slice set to TRACK (the default) follows BUS > GRAIN, so one setting can apply to the whole loop.
+  - **STRETCH:** clean pitch and time.
+  - **CLOUD:** random start points across the slice (as far as JITTER reaches), random hops and up to ±1 semitone of random detune.
+  - **FREEZE:** the slice plays, then its end keeps sounding: while the key is held (GATE, LOOP), for as long again as the slice (ONE), or until the next slice (PLAY).
+- **SIZE:** 4–256 ms per grain (50 ms by default). A short slice gets shorter grains, so no grain reads past the slice's end.
+- **DENS:** 1–4 grains overlapping (2 by default; at 2 the windows sum flat).
+- **JITTER:** how far grains may start behind the head (CLOUD: around it).
+- **The attack:** a slice's first grains start on its first sample at the peak of their windows, so the transient is kept. At PTCH 0 with no jitter, STRETCH gives back the slice itself (correlation 0.998 in shard_test).
+- **Held tones:** STRETCH and FREEZE move each new grain's start (up to ±64 source samples) to where it best matches the grain already sounding (WSOLA, normalised correlation; the nominal start wins ties). Without this, a tone shifted with grains comes out detuned by the phase slip between grains.
+- **DIR:** REV moves the head backwards and PING turns it; the grains themselves always read forwards.
+- **Cost:** at most 4 grains per voice and 8 per part. Grain starts are found from the nearest saved decoder state: the head's, one kept every 128 samples behind it, the slice's start, or SLICE's grid. Seeking has a budget of 384 decoded samples per block, saved up to 2048. A grain that does not fit the budget is left out, or started without alignment. On the host, 8 voices of STRETCH cost about 1.5× SHARD without grains, comparable to the GRAIN engine's worst case.
+- **Storage:** the kit record is now SHF3 (each slice 20 bytes; the bus's 4 spare bytes hold the track's GRAIN). SHF2 kits load with GRAIN set to TRACK and the bus set to OFF.
+- **The GRAIN engine stays** for synth-style granular work on SAMPLE zones.
