@@ -834,6 +834,28 @@ static void pre_tests(void)
     smp_user_scan(2);
 }
 
+
+/* 15: udiv64 (core.h: the device has no 64-bit division) against the compiler's, on random and edge values */
+static void udiv_tests(void)
+{
+    uint64_t x = 0x9E3779B97F4A7C15ull;
+    uint32_t i, bad = 0;
+    static const uint64_t A[] = {0, 1, 0xFFFFFFFFull, 0x100000000ull, 0xFFFFFFFFFFFFFFFFull, 123456789012345ull};
+    static const uint32_t B[] = {1, 2, 3, 7, 0xFFFFFFFFu, 65536u};
+    for (i = 0; i < NELEM(A) * NELEM(B); i++)
+        bad += udiv64(A[i / NELEM(B)], B[i % NELEM(B)]) != A[i / NELEM(B)] / B[i % NELEM(B)];
+    for (i = 0; i < 200000u; i++) {
+        uint64_t a;
+        uint32_t b;
+        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+        a = x >> (x & 63u);
+        b = (uint32_t)(x >> 32) >> ((x >> 8) & 31u);
+        if (b)
+            bad += udiv64(a, b) != a / b;
+    }
+    check("udiv64: as the compiler's 64-bit division (200k random, the edges)", bad == 0u && udiv64(5, 0) == 0u, "%u wrong", bad);
+}
+
 int main(int argc, char **argv)
 {
     const char *loop = argc > 1 ? argv[1] : "build/slice_demo/loop";
@@ -1582,6 +1604,7 @@ int main(int argc, char **argv)
     det_tests();
     fp_tests();
     pre_tests();
+    udiv_tests();
 
     /* 7: demos */
     {

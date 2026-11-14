@@ -69,6 +69,32 @@
 #endif
 #define UP_SLOTS 32u             /* user presets (upreset.c) */
 
+/* a / b for a 64-bit a and a 32-bit b (0: 0). The FM-1's compiler has no 64-bit division (no __udivdi3 in its
+ * runtime: the link fails), so SHARD's code divides through this: the high half in 32 bits, the rest a bit at a
+ * time (32 steps; a fits 32 bits: one 32-bit division) */
+static inline uint64_t udiv64(uint64_t a, uint32_t b)
+{
+    uint32_t hi = (uint32_t)(a >> 32), lo = (uint32_t)a, qh, ql = 0;
+    uint64_t r;
+    int i;
+    if (!b)
+        return 0;
+    if (!hi)
+        return lo / b;
+    qh = hi / b;
+    r = hi % b;
+    for (i = 31; i >= 0; i--) {
+        r = (r << 1) | ((lo >> i) & 1u);
+        if (r >= b) {
+            r -= b;
+            ql |= 1u << i;
+        }
+    }
+    return (uint64_t)qh << 32 | ql;
+}
+/* a x b / c, all 32-bit (the product in 64), the quotient cut to 32 bits */
+static inline uint32_t muldiv32(uint32_t a, uint32_t b, uint32_t c) { return (uint32_t)udiv64((uint64_t)a * b, c); }
+
 /* ------------------------------------------------------- parameters --- */
 /* the engine interface (Felucca-Engines, MIT: engines/, a git submodule): param_desc_t and F_*, voice_t,
  * vmod_t, preset_t with FX() / PAT(), engine_t, NELEM */

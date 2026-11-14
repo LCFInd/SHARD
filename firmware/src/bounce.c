@@ -187,7 +187,7 @@ static void bnc_render(uint32_t k, uint32_t n44, int rec)
                     be.odd = m;
             }
         if (!(f & 2047u))
-            bnc_progress(rec ? 2u : 1u, (uint32_t)(((uint64_t)(rec ? n44 + f : f) * 100u) / total));
+            bnc_progress(rec ? 2u : 1u, muldiv32(rec ? n44 + f : f, 100u, total));
     }
 }
 

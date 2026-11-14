@@ -512,7 +512,7 @@ static uint32_t shd_tempo_of(const slc_src_t *s, uint8_t *o)
     if (var <= 0)
         return 0;
     for (b10 = 600; b10 <= 2000u; b10 += 5u) {         /* the beat: 600 * hops per s / b10 hops (x 16) */
-        uint32_t l16 = (uint32_t)((uint64_t)hz * 16u * 600u / (hop * b10));   /* (a 32-bit divisor: no 64 / 64) */
+        uint32_t l16 = (uint32_t)udiv64((uint64_t)hz * 16u * 600u, hop * b10);   /* (a 32-bit divisor: no 64 / 64) */
         int32_t sc = shd_beat_score(o, n, l16, mean);
         if (b10 < 800u || b10 > 1600u)
             sc -= (sc > 0 ? sc : -sc) / 8;
@@ -525,13 +525,13 @@ static uint32_t shd_tempo_of(const slc_src_t *s, uint8_t *o)
         return 0;
     {   /* a whole number of beats, if the sample is within 3 % of one: exactly that */
         static const uint8_t M[3] = {4, 2, 1};
-        uint64_t beats1000 = (uint64_t)len * best * 1000u / (600u * hz);   /* the sample's beats x 1000 */
+        uint64_t beats1000 = udiv64((uint64_t)len * best * 1000u, 600u * hz);   /* the sample's beats x 1000 */
         uint32_t m;
         for (m = 0; m < 3u; m++) {
             uint32_t q = M[m] * 1000u;              /* (32-bit: the device has no 64 / 64 division) */
-            uint64_t k = (beats1000 + q / 2u) / q * q;
+            uint64_t k = udiv64(beats1000 + q / 2u, q) * q;
             if (k && (beats1000 > k ? beats1000 - k : k - beats1000) * 100u <= 3u * k) {
-                uint32_t exact = (uint32_t)((k / 1000u) * 600u * hz * 10u / len);   /* x 10: 0.01 BPM */
+                uint32_t exact = (uint32_t)udiv64(udiv64(k, 1000u) * 600u * hz * 10u, len);   /* x 10: 0.01 BPM */
                 if (exact >= 6000u && exact <= 20000u)
                     return (exact + 5u) / 10u;
             }
@@ -563,7 +563,7 @@ static uint32_t shd_bars(const int16_t *p, const slc_src_t *s)
         return b;
     hz = shd_src_hz(s);
     for (k = 1; k <= 16; k <<= 1) {                 /* no tempo: the bars that put the loop at 80..160 BPM */
-        uint32_t bpm = (uint32_t)((uint64_t)k * 240u * hz / (s->len ? s->len : 1u));
+        uint32_t bpm = (uint32_t)udiv64((uint64_t)k * 240u * hz, s->len ? s->len : 1u);
         best = k;
         if (bpm >= 80u)
             break;
@@ -575,7 +575,7 @@ static uint32_t shd_loop_len(const int16_t *p, const slc_src_t *s)
 {
     uint32_t b10 = clamp(p[P_E5], 0, 4) ? 0u : shd_bpm10(slc_src_of(p)), hz = shd_src_hz(s);
     if (b10 && hz) {
-        uint32_t l = (uint32_t)((uint64_t)s->len * b10 * beat_samples() / (600u * hz));   /* (a 32-bit divisor) */
+        uint32_t l = (uint32_t)udiv64((uint64_t)s->len * b10 * beat_samples(), 600u * hz);
         if (l)
             return l;
     }
@@ -586,7 +586,7 @@ static uint32_t shd_at(const slc_src_t *s, uint32_t div, uint32_t f, uint32_t k,
     uint32_t a, b, st, a0, len = s->len ? s->len : 1u;
     slc_bounds(s, div, f, &a0, &b, &st);
     slc_bounds(s, div, k, &a, &b, &st);
-    return (uint32_t)((uint64_t)((a + len - a0) % len) * loop / len);
+    return muldiv32((a + len - a0) % len, loop, len);
 }
 
 static shd_gv_t *shd_gv(track_t *t, voice_t *v);
@@ -823,11 +823,11 @@ static void shd_gr_setup(track_t *t, voice_t *v, const slc_src_t *s, const shd_v
     if (play && gv->mode != SHD_GM_FREEZE) {         /* PLAY: the rest of the slice in the rest of its steps */
         uint32_t rem = gv->rev ? (gv->head > gs->a ? gv->head - gs->a : 0u) : (gs->b > gv->head ? gs->b - gv->head : 0u);
         uint32_t out = x->next > x->clock ? x->next - x->clock : 1u;
-        uint64_t r = ((uint64_t)rem << 16) / out;
+        uint64_t r = udiv64((uint64_t)rem << 16, out);
         gs->trate = r > 4u << 16 ? 4u << 16 : (uint32_t)r;
     }
     l = shd_glen(g[0]);
-    lim = (uint32_t)(((uint64_t)(gs->b - gs->a) << 16) / prate);
+    lim = (uint32_t)udiv64((uint64_t)(gs->b - gs->a) << 16, prate);
     l = l > lim ? lim : l;
     l = l < 64u ? 64u : l;
     gs->len = l;
@@ -846,7 +846,7 @@ static void shd_gr_setup(track_t *t, voice_t *v, const slc_src_t *s, const shd_v
  * (0: none) */
 static void shd_gr_seek(const shd_gv_t *gv, const slc_src_t *s, uint32_t pos, const slc_dec_t *hint, slc_dec_t *d)
 {
-    uint32_t k = (uint32_t)((uint64_t)pos * SLC_GRID / s->len), bp;
+    uint32_t k = muldiv32(pos, SLC_GRID, s->len), bp;
     k = k < SLC_GRID ? k : SLC_GRID - 1u;
     while (k && slc_gpos(s, k) > pos)
         k--;
@@ -1017,7 +1017,7 @@ static int shd_gr_tick(track_t *t, voice_t *v, const slc_src_t *s, shd_vx_t *x, 
                 if (gv->mode == SHD_GM_FREEZE) {
                     gv->head = end;
                     gv->held = 1;
-                    gv->hold = (uint32_t)((((uint64_t)(gs->b - gs->a)) << 16) / (gs->trate ? gs->trate : 1u));
+                    gv->hold = (uint32_t)udiv64((uint64_t)(gs->b - gs->a) << 16, gs->trate ? gs->trate : 1u);
                     gv->hold = gv->hold > 441000u ? 441000u : gv->hold;
                 } else if (ping && (loop || !x->pinged)) {
                     gv->head = gs->b;               /* PING: back (once; LOOP: to and fro) */
@@ -1036,7 +1036,7 @@ static int shd_gr_tick(track_t *t, voice_t *v, const slc_src_t *s, shd_vx_t *x, 
                 if (gv->mode == SHD_GM_FREEZE) {
                     gv->head = fz;
                     gv->held = 1;
-                    gv->hold = (uint32_t)((((uint64_t)(gs->b - gs->a)) << 16) / (gs->trate ? gs->trate : 1u));
+                    gv->hold = (uint32_t)udiv64((uint64_t)(gs->b - gs->a) << 16, gs->trate ? gs->trate : 1u);
                     gv->hold = gv->hold > 441000u ? 441000u : gv->hold;
                 } else if (ping && loop)
                     shd_gr_rewind(gv);              /* PING: forwards again */
@@ -1137,8 +1137,8 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
     if (play) {                                     /* the tempo moved: the loop with it, the clock in proportion */
         uint32_t loop = shd_loop_len(p, s);
         if (loop != x->loop && x->loop) {
-            x->clock = (uint32_t)((uint64_t)x->clock * loop / x->loop);
-            x->next = (uint32_t)((uint64_t)x->next * loop / x->loop);
+            x->clock = muldiv32(x->clock, loop, x->loop);
+            x->next = muldiv32(x->next, loop, x->loop);
             x->loop = loop;
         }
     }

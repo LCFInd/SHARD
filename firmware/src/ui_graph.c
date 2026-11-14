@@ -718,7 +718,7 @@ static int32_t loop_exp(uint32_t t, uint32_t T)          /* exp(-4.6 t / T), Q15
     uint32_t x;
     if (!T)
         return 0;
-    x = (uint32_t)((uint64_t)t * 1274u / T);            /* 4.6 / ln 2 = 6.64 octaves: 1274 / 192 */
+    x = muldiv32(t, 1274u, T);            /* 4.6 / ln 2 = 6.64 octaves: 1274 / 192 */
     return x >= 1536u ? 0 : (int32_t)(pow2_q16(-(int32_t)x) >> 1);
 }
 /* the envelope t output samples into a note held for h: 0..32767 */
@@ -726,7 +726,7 @@ static int32_t loop_env_at(const int16_t *p, uint32_t t, uint32_t h, int one)
 {
     uint32_t A = loop_env_t(p, P_ATK), D = loop_env_t(p, P_DEC), R = loop_env_t(p, P_REL);
     int32_t sus = p[P_SUS] * 32767 / 127, lh;
-#define LP_HELD(u) ((u) < A ? (int32_t)((uint64_t)(u) * 32767u / A) : \
+#define LP_HELD(u) ((u) < A ? (int32_t)muldiv32((u), 32767u, A) : \
                     sus + (int32_t)((int64_t)(32767 - sus) * loop_exp((u) - A, D) >> 15))
     if (one || t < h)
         return LP_HELD(t);
@@ -757,12 +757,12 @@ static void graph_loop(void)
         lit[(m - 1u) & 63u] = 1;
         cols[k] = q * SP_COLS / len;
     }
-#define LX(q) (12 + (int32_t)((uint64_t)(q) * SP_COLS / len))
+#define LX(q) (12 + (int32_t)muldiv32((q), SP_COLS, len))
     for (i = 0; i < n && i < 64u; i++)
         if (lit[i])
             cv_rect(LX(slice_mark(i)), 6, LX(slice_mark(i + 1u)) - LX(slice_mark(i)), 81, T_TEXT);
     for (i = 0; i < SP_COLS; i++) {
-        uint32_t q = (uint32_t)((uint64_t)i * len / SP_COLS), m;
+        uint32_t q = muldiv32(i, len, SP_COLS), m;
         for (m = n; m > 1u && slice_mark(m - 1u) > q; m--)
             ;
         cv_line(12 + (int32_t)i, 46 - sp.hi[i] * 38 / 64, 12 + (int32_t)i, 46 - sp.lo[i] * 38 / 64,
@@ -778,7 +778,7 @@ static void graph_loop(void)
     /* the envelope, in the loop's time: PLAY the loop at the song's tempo, otherwise the material at its rate */
     hz = (s->rate >> 4) * 44100u >> 12;
     out = clamp(p[P_E4], 0, SHD_M_PLAY) == SHD_M_PLAY ? shd_loop_len(p, s)
-                                                      : (uint32_t)((uint64_t)len * 44100u / (hz ? hz : 1u));
+                                                      : muldiv32(len, 44100u, hz ? hz : 1u);
     anc = nh ? first[nh - 1u] % n : j < n ? j : 0u;
     a0 = slice_mark(anc);
     a1 = slice_mark(anc + 1u);
@@ -786,8 +786,8 @@ static void graph_loop(void)
     if (ui.hot_t && ui.hot_col < 4u)
         seg = ui.hot_col;                            /* the knob being turned: 0 ATK, 1 DEC, 2 SUS, 3 REL */
     for (i = 0; i < SP_COLS; i++) {
-        uint32_t ts = (uint32_t)((uint64_t)i * out / SP_COLS);   /* output samples since the anchor */
-        uint32_t h = (uint32_t)((uint64_t)(a1 - a0) * out / len), A = loop_env_t(p, P_ATK);
+        uint32_t ts = muldiv32(i, out, SP_COLS);    /* output samples since the anchor */
+        uint32_t h = muldiv32(a1 - a0, out, len), A = loop_env_t(p, P_ATK);
         int32_t lv = loop_env_at(p, ts, h, one), y = 86 - lv * 78 / 32767, x = 12 + (int32_t)((LX(a0) - 12 + i) % SP_COLS);
         uint32_t part = one || ts < h ? (ts < A ? 0u : 1u) : 3u;
         int w = (part == seg || (seg == 2u && part == 1u && ts >= A + loop_env_t(p, P_DEC))) ? 3 : 2;

@@ -253,11 +253,11 @@ static int32_t slc_lg12(uint32_t x)
 /* the decoder state at pos of material len samples long (the grid as slc_scan left it: s->len is still 0) */
 static void slc_dec_seek(const slc_src_t *s, uint32_t len, uint32_t pos, slc_dec_t *d)
 {
-    uint32_t k = (uint32_t)((uint64_t)pos * SLC_GRID / len);
+    uint32_t k = muldiv32(pos, SLC_GRID, len);
     k = k < SLC_GRID ? k : SLC_GRID - 1u;
-    while (k && (uint32_t)((uint64_t)k * len / SLC_GRID) > pos)
+    while (k && muldiv32(k, len, SLC_GRID) > pos)
         k--;
-    slc_dec_at(d, (uint32_t)((uint64_t)k * len / SLC_GRID), s->grid[k]);
+    slc_dec_at(d, muldiv32(k, len, SLC_GRID), s->grid[k]);
     while (d->pos < pos)
         slc_dec_next(s, d);
 }
@@ -287,7 +287,7 @@ static int32_t sn_pitch(uint32_t n, uint32_t lo, uint32_t hi, uint32_t fd16)
             dd += (uint32_t)(e * e) >> 8;
         }
         sum += dd;
-        dn[t] = sum ? (uint32_t)(((uint64_t)dd * t << 10) / sum) : 1024u;
+        dn[t] = sum >= 1024u ? dd * t / (sum >> 10) : 1024u;   /* (dd t < 2^30: 32-bit) */
     }
     for (t = lo; t <= hi; t++)
         if (dn[t] < 205u) {                 /* the first dip under 0.2 .. */
