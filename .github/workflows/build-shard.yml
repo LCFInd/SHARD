@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: write                     # (the shard-latest release)
+  pages: write                        # (the installer site)
+  id-token: write
 
 jobs:
   build:
@@ -80,4 +82,25 @@ jobs:
           gh release delete shard-latest --yes --cleanup-tag || true
           gh release create shard-latest "felucca-shard-${GITHUB_SHA::7}.fwsc" --prerelease --target "$GITHUB_SHA" \
             --title "SHARD latest (${GITHUB_SHA::7})" \
-            --notes "The newest SHARD build from the shard branch (${GITHUB_SHA::7}). Install the .fwsc with the web installer or tools/fm1_install.py. Untested on hardware until you test it."
+            --notes "The newest SHARD build from the shard branch (${GITHUB_SHA::7}). Install it in Chrome or Edge with SHARD's own installer (https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/), or with tools/fm1_install.py. Felucca's hosted installer installs only Felucca's own releases."
+
+      # SHARD's own web installer (Felucca's installer page with this build inside), for GitHub Pages
+      - name: The installer site
+        run: python3 web/make_site.py build/felucca.fwsc "shard-${GITHUB_SHA::7}" site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  # Needs Settings > Pages > Source: GitHub Actions. Until then this job fails on its own; the build and release stand.
+  pages:
+    needs: build
+    if: github.ref == 'refs/heads/shard'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

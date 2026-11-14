@@ -185,7 +185,7 @@ AUTO slicing now has a DETECT setting with three options, HITS, NOTES and BOTH. 
   - **CHAOS:** SCATTER's live share goes from 1/3 at the centre to 1 (left) or 0 (right); the backwards share from 1/4 to 5/8 (right).
   - **PITCH:** `shd_fbpitch`, which moves every FDBK loop's band-pass ±2 octaves. The Chamberlin f is capped at 1.4.
   - **Full level:** RING and NOISE play at full level on the ARP layer (`perf_arp`); FX's DEPTH only applies to them on FX's keys.
-- **PANIC (OCT- on the ARP layer, held or locked):** turns off every ARP effect, latched ones included, and every `arp_k` knob. It also increments `shd_kill`, which each SHARD part notices once per block: it zeroes its loop states and holds FDBK off for 690 blocks (about 0.5 s). OCT+ does nothing on this layer. The shapers' own tails die away in about 50 ms, at about −44 dB.
+- **PANIC (OCT- on the ARP layer, held or locked):** turns off every ARP effect, latched ones included, and every `arp_k` knob. It also increments `shd_kill`, which each SHARD part notices once per block: it zeroes its loop states and holds FDBK off for 690 blocks (about 0.5 s). (OCT+ switches PRE and POST: see below.) The shapers' own tails die away in about 50 ms, at about −44 dB.
 - **The howl's ceiling:** a channel with FDBK on is compressed 4:1 above 12000 (−9 dBFS), and its output is capped at 20000. The master limiter and soft clip still sit after it.
 - **PRESS (BUS, after DETECT; 0 = off):** pressure (`t->at` × PRESS / 127) is added at half strength to every channel's DRV, and to FDBK on channels whose FDBK is already above 0.
   - **Enabling the sensing:** `mangler_trim` sets the track's AFTERTOUCH sensing to 6 while PRESS is on, and keeps AT's own modulation amount at 0.
