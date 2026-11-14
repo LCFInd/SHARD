@@ -1,7 +1,7 @@
 # SHARD
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
-[![build-shard](https://github.com/LCFInd/shard/actions/workflows/build-shard.yml/badge.svg?branch=shard)](https://github.com/LCFInd/shard/actions/workflows/build-shard.yml)
+[![build-shard](https://github.com/LCFInd/SHARD/actions/workflows/build-shard.yml/badge.svg?branch=shard)](https://github.com/LCFInd/SHARD/actions/workflows/build-shard.yml)
 
 SHARD is sample-mangler firmware for the **M-VAVE FM-1**. It cuts a loop into slices, plays them from the step
 sequencer, and pushes them through grains, feedback and noise until they break. It's a fork of
@@ -16,10 +16,10 @@ The synth engines are gone. Three engines remain: **SHARD** (the slice engine), 
 ## Install
 
 1. Connect the FM-1 by USB.
-2. Open **[SHARD's installer](https://lcfind.github.io/shard/)** in Chrome or Edge and press Install. It always has
+2. Open **[SHARD's installer](https://lcfind.github.io/SHARD/)** in Chrome or Edge and press Install. It always has
    the newest build.
 
-Or download the `.fwsc` from the [shard-latest release](https://github.com/LCFInd/shard/releases/tag/shard-latest)
+Or download the `.fwsc` from the [shard-latest release](https://github.com/LCFInd/SHARD/releases/tag/shard-latest)
 and install it from the command line (needs `pip3 install mido python-rtmidi`):
 
 ```
@@ -67,7 +67,7 @@ are in `tests/run_host_tests.sh`.
 SHARD is built on [Felucca](https://github.com/hugelton/Felucca) by Leo Kuroshita
 ([@kurogedelic](https://github.com/kurogedelic)), Hügelton Instruments. Felucca's own readme is kept as
 [FELUCCA.md](FELUCCA.md). SHARD is an independent modification, and Felucca's maintainer does not test or support it,
-so please report SHARD problems [here](https://github.com/LCFInd/shard/issues), not on Felucca's tracker.
+so please report SHARD problems [here](https://github.com/LCFInd/SHARD/issues), not on Felucca's tracker.
 
 SHARD was developed with an AI coding assistant (Claude), from the owner's direction and design.
 
