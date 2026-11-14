@@ -99,6 +99,10 @@ static volatile uint32_t perf_arp;    /* main: ARP's button bit while its layer 
  * COLOR (NOISE: - darker, + thinner), CHAOS (SCATTER: - more live, + more jumps and more backwards), PITCH (every
  * SHARD track's FDBK loop, +-2 octaves: eng_shard.c shd_fbpitch) */
 static volatile int8_t arp_k[4];
+static volatile uint8_t arp_pre;      /* main (ARP's OCT+): RING and NOISE before SHARD's slice effects, not on the mix */
+#if FELUCCA_SHARD
+static void perf_pre_fill(uint32_t a, uint32_t t0, uint32_t n);
+#endif
 
 static volatile uint32_t perf_mask;   /* main: the FX button's bit while its layer may own keys, 0 = none */
 static volatile uint32_t kb_mask;     /* main: the button bits whose hold makes keys a layer's (ui_layer.c), 0 = none */
@@ -166,6 +170,7 @@ static struct {
     uint32_t rph;                      /* RING: the carrier's phase */
     int32_t rgw, nw;                   /* RING, NOISE: their shares (Q15) */
     int32_t ncol;                      /* NOISE: COLOR's one-pole */
+    uint8_t pre;                       /* this block: RING and NOISE PRE (perf_pre_fill), not here */
     uint8_t rsel, nsel;                /* .. the one playing (PF_*): the last pressed of those held */
     uint32_t swq;                      /* FEEDBACK SWELL: shd_swell, Q8 */
 } pf = {.src = PF_N, .next = PF_N, .lc = PF_TOP, .mg = {32768, 32768, 32768, 32768}};
@@ -346,6 +351,9 @@ static __attribute__((noinline)) int perf_begin(uint32_t n)
     uint32_t q, k, ph0, bnd;
     int32_t m;
     if (!held && !pf.busy && !(perf_k[0] | perf_k[1] | perf_k[2])) {   /* idle: the clock only */
+#if FELUCCA_SHARD
+        shd_pre_on = 0;
+#endif
         pf.ph += n;
         pf.sync = 0;
         perf_act = 0;
@@ -426,6 +434,14 @@ static __attribute__((noinline)) int perf_begin(uint32_t n)
     for (k = 0; k < NTRK; k++)
         if (((held >> (PF_M1 + k)) & 1u) || pf.mg[k] != 32768)
             pf.mute |= (uint8_t)(1u << k);
+#if FELUCCA_SHARD
+    pf.pre = arp_pre && n <= SHD_PRE_N;            /* PRE: RING and NOISE into SHARD's voices this block */
+    shd_pre_on = pf.pre && ((pf.act0 & (PF_RING | PF_NOISE)) || pf.rgw || pf.nw);
+    if (shd_pre_on)
+        perf_pre_fill(pf.act0, pf.ph - n, n);
+#else
+    pf.pre = 0;
+#endif
     pf.busy = 1;
     return 1;
 }
@@ -838,52 +854,83 @@ static __attribute__((noinline)) void perf_phaser(int32_t *bl, int32_t *br, uint
     }
 }
 
-/* RING: the mix times a sine: LO 60 Hz (a growl), MID 420 Hz, HI 1.7 kHz (bells, clang), SWEEP 40 Hz .. 2.4 kHz and
- * back over a bar (exponential, in time with the transport). NOISE: white noise into the mix, each 1/8 (1/16, 1/32)
+/* RING: the mix times a sine: LO 60 Hz (a growl), MID 420 Hz, HI 1.7 kHz (bells, clang), SWEEP 40 Hz .. 2.4 kHz
+ * (exponential) as the selected track's LFO goes: its RATE or SYNC, WAVE, PHASE, TRIG and POL (BI: the whole range,
+ * low to high; UNI: its 0 .. 1 over it). NOISE: white noise into the mix, each 1/8 (1/16, 1/32)
  * a burst from full falling away (squared) over it, on the transport's clock; HOLD: steady. Both at KNOB 4 DEPTH, gliding
  * in and out (SL_SLOPE); the last pressed of each plays. t: the sample on the 1/16 clock (pf.ph). noinline: out of
  * perf_block's loop code */
 static const uint16_t RG_HZ[3] = {60, 420, 1700};
-static __attribute__((noinline)) void perf_noise(uint32_t a, uint32_t t, int32_t *l, int32_t *r)
+/* one sample of RING and NOISE: *c the carrier (Q15; pf.rgw its share), *x the noise (its share in) */
+static inline void perf_rn(uint32_t a, uint32_t t, int32_t *c, int32_t *x)
 {
-    int32_t d = perf_arp ? 32768 : (100 - perf_k[3]) * 32768 / 100, rt   /* (the ARP layer: full; FX's: DEPTH) */ = (a & PF_RING) ? d : 0, nt = (a & PF_NOISE) ? d : 0;
+    int32_t d = perf_arp ? 32768 : (100 - perf_k[3]) * 32768 / 100;   /* (the ARP layer: full; FX's: DEPTH) */
+    int32_t rt = (a & PF_RING) ? d : 0, nt = (a & PF_NOISE) ? d : 0;
     pf.rgw += clamp(rt - pf.rgw, -SL_SLOPE, SL_SLOPE);
     pf.nw += clamp(nt - pf.nw, -SL_SLOPE, SL_SLOPE);
+    *c = 0;
+    *x = 0;
     if (pf.rgw) {
         uint32_t hz;
-        int32_t c;
-        if (pf.rsel == PF_RGS) {                    /* SWEEP: 40 .. 2400 Hz, a triangle over the bar, log */
-            uint32_t bar = 16u * (pf.P ? pf.P : 1u), q = t % bar, tri = q < bar / 2u ? q * 2u : (bar - q) * 2u;
-            hz = (uint32_t)((40ull * pow2_q16((int32_t)((uint64_t)tri * 1134u / bar))) >> 16);   /* (5.9 oct: x 60) */
+        if (pf.rsel == PF_RGS) {                    /* SWEEP: 40 .. 2400 Hz (log) as the selected track's LFO moves */
+            const track_t *lt = &trk[song.sel % NTRK];
+            int32_t v = lt->lfo_val;
+            uint32_t u = lt->p[P_LPOL] ? (uint32_t)clamp(v, 0, 32767) * 2u : (uint32_t)(clamp(v, -32768, 32767) + 32768);
+            hz = (uint32_t)((40ull * pow2_q16((int32_t)((uint64_t)u * 1134u >> 16))) >> 16);   /* (5.9 oct: x 60) */
         } else
             hz = RG_HZ[(pf.rsel - PF_RGL) % 3u];
         if (arp_k[0])                               /* RING: +-2 octaves */
             hz = (uint32_t)(((uint64_t)hz * pow2_q16(arp_k[0] * 384 / 100)) >> 16);
         hz = hz < 8u ? 8u : hz > 9000u ? 9000u : hz;
-        c = osc_sine(pf.rph);
+        *c = osc_sine(pf.rph);
         pf.rph += hz * 97391u;                      /* (2^32 / 44100) */
-        *l = pf_mix(*l, mulq15(*l, c), pf.rgw);
-        *r = pf_mix(*r, mulq15(*r, c), pf.rgw);
     }
     if (pf.nw) {
         uint32_t dv = pf.nsel == PF_NZ8 ? 2u * pf.P : pf.nsel == PF_NZ16 ? pf.P : pf.P / 2u;
-        int32_t env = 32768, x;
+        int32_t env = 32768, y;
         if (pf.nsel != PF_NZH && dv) {
             uint32_t q = t % dv;
             env = (int32_t)(32768u - (uint32_t)((uint64_t)q * 32768u / dv));
             env = (int32_t)(((int64_t)env * env) >> 15);
         }
-        x = mulq15((int32_t)rng() >> 17, env);      /* (-12 dB peaks: under the loop's) */
+        y = mulq15((int32_t)rng() >> 17, env);      /* (-12 dB peaks: under the loop's) */
         if (arp_k[1]) {                             /* COLOR: a one-pole, - its low pass, + what it leaves */
-            int32_t c = arp_k[1] < 0 ? -arp_k[1] : arp_k[1], g = 32768 - c * 320;   /* (100: ~0.02, near 300 Hz) */
-            pf.ncol += mulq15(x - pf.ncol, g);
-            x = arp_k[1] < 0 ? pf.ncol : x - pf.ncol;
+            int32_t k = arp_k[1] < 0 ? -arp_k[1] : arp_k[1], g = 32768 - k * 320;   /* (100: ~0.02, near 300 Hz) */
+            pf.ncol += mulq15(y - pf.ncol, g);
+            y = arp_k[1] < 0 ? pf.ncol : y - pf.ncol;
         }
-        x = mulq15(x, pf.nw);
+        *x = mulq15(y, pf.nw);
+    }
+}
+/* POST (the mix, after the master level) */
+static __attribute__((noinline)) void perf_noise(uint32_t a, uint32_t t, int32_t *l, int32_t *r)
+{
+    int32_t c, x;
+    perf_rn(a, t, &c, &x);
+    if (pf.rgw) {
+        *l = pf_mix(*l, mulq15(*l, c), pf.rgw);
+        *r = pf_mix(*r, mulq15(*r, c), pf.rgw);
+    }
+    if (x) {
         *l += x;
         *r += (int32_t)(((int64_t)x * 29491) >> 15) - (x >> 4);   /* (a hair apart: not quite mono) */
     }
 }
+#if FELUCCA_SHARD
+/* PRE (ARP's OCT+): this block's RING and NOISE made before the parts, for SHARD's voices to take each slice
+ * through before its own effects (eng_shard.c shd_pre_*); the mix untouched by them */
+static __attribute__((noinline)) void perf_pre_fill(uint32_t a, uint32_t t0, uint32_t n)
+{
+    uint32_t i;
+    for (i = 0; i < n && i < SHD_PRE_N; i++) {
+        int32_t c, x;
+        perf_rn(a, t0 + i, &c, &x);
+        shd_pre_c[i] = (int16_t)clamp(c, -32767, 32767);
+        shd_pre_w[i] = (int16_t)(pf.rgw > 32767 ? 32767 : pf.rgw);
+        shd_pre_nz[i] = (int16_t)clamp(x, -32767, 32767);
+    }
+}
+#endif
 
 /* after the master level: the buffer effect, LPF, HPF, CRUSH on l / r (stereo, Q15) */
 static __attribute__((noinline)) void perf_block(int32_t *bl, int32_t *br, uint32_t n)
@@ -906,7 +953,7 @@ static __attribute__((noinline)) void perf_block(int32_t *bl, int32_t *br, uint3
         }
         if (pf.mode != BM_NONE)
             perf_buf(&l, &r);
-        if ((a & (PF_RING | PF_NOISE)) || pf.rgw || pf.nw)
+        if (!pf.pre && ((a & (PF_RING | PF_NOISE)) || pf.rgw || pf.nw))
             perf_noise(a, ph0 + i, &l, &r);
         lt = (a & PF_BIT(PF_LPF)) || perf_k[0] < 0 || pf.lc < PF_TOP ? 32768 : 0;
         pf.la += clamp(lt - pf.la, -SL_SLOPE, SL_SLOPE);

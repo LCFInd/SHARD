@@ -69,7 +69,7 @@ static const layer_t LAYERS[LAYER_N] = {
     {B_EDIT, LK_SET, FAM_HOME, "[EDIT] SET", {{KC_KEYS, "ENGINE"}, {KC_OCTDN, "UNDO"}, {KC_EDIT, "DONE"}}},
     {B_SEQ, LK_SET, FAM_SEQ, "[SEQ] TOOLS", {{KC_KEYS, "TOOLS"}, {KC_OCTDN, "UNDO"}, {KC_SEQ, "DONE"}}},
     {B_REC, LK_SET, FAM_HOME, "[REC] SET", {{KC_KEYS, "RECORDING"}, {KC_OCTDN, "UNDO"}, {KC_REC, "DONE"}}},
-    {B_ARP, LK_HOLD, FAM_HOME, "[ARP] NOISE", {{KC_KEYS, "EFFECTS"}, {KC_K14, "KNOBS"}, {KC_OCTDN, "PANIC"}}},   /* (mangler) */
+    {B_ARP, LK_HOLD, FAM_HOME, "[ARP] POST", {{KC_OCTUP, "PRE / POST"}, {KC_OCTDN, "PANIC"}, {0, 0}}},   /* (mangler) */
 };
 static const uint8_t LY_KC[LAYER_N] = {0, KC_FX, KC_GLO, KC_SCL, KC_EDIT, KC_SEQ, KC_REC, KC_ARP};
 /* SCL's knobs: the key and its chord (cur_page() while the layer edits or draws them: page_over) */
@@ -141,8 +141,9 @@ static uint32_t layer_bits(void)
 static uint32_t layer_btn(void) { return LAYERS[ui.layer % LAYER_N].btn; }
 static const char *layer_head(void)
 {
-    return ui.layer == LAYER_FX && perf_latch_on ? "[FX] LATCH" : ui.layer == LAYER_ARP && perf_latch_on ? "[ARP] LATCH"
-         : LAYERS[ui.layer % LAYER_N].head;
+    if (ui.layer == LAYER_ARP)                          /* (ARP: where RING and NOISE go, LATCH beside) */
+        return perf_latch_on ? (arp_pre ? "[ARP] PRE LATCH" : "[ARP] POST LATCH") : arp_pre ? "[ARP] PRE" : "[ARP] POST";
+    return ui.layer == LAYER_FX && perf_latch_on ? "[FX] LATCH" : LAYERS[ui.layer % LAYER_N].head;
 }
 static uint32_t layer_open(void) { return ui.ly && (ui.ly_t0 & LY_OPEN) && ly_down(ui.ly) && layer_allowed() ? ui.ly : 0u; }
 static int layer_set_open(void)                 /* (FX LATCH: FX is one too, OCT- turns all off) */
@@ -785,7 +786,7 @@ static int layer_play(void)
 /* OCT- / OCT+ pressed with a SET layer's button down (FX LATCH: FX's) before it opened: a combo, so it opens now,
  * before oct_taps and layer_oct read it (else the press was nobody's: no put back / ALL OFF, no octave) */
 /* the ARP layer's OCT-: PANIC. Every ARP effect (latched too) and knob off, every SHARD loop stopped and FDBK held
- * off ~0.5 s (eng_shard.c shd_kill); OCT+ nothing (the keys are effects: no octave to move) */
+ * off ~0.5 s (eng_shard.c shd_kill). OCT+: RING and NOISE PRE / POST (perform.c arp_pre) */
 static void arp_panic(void)
 {
     perf_latched = 0;
@@ -800,6 +801,11 @@ static void layer_oct_open(uint32_t pressed)
     if (FELUCCA_MANGLER && layer_open() == LAYER_ARP) {
         if ((pressed >> panel.btn[B_OCTDN]) & 1u)
             arp_panic();
+        if ((pressed >> panel.btn[B_OCTUP]) & 1u) { /* OCT+: RING and NOISE PRE (into SHARD's slices) or POST (the mix) */
+            arp_pre = (uint8_t)!arp_pre;
+            ui_message(arp_pre ? "RING NOISE: PRE SLICE FX" : "RING NOISE: POST, ON THE MIX");
+            ui.force = 1;
+        }
         return;
     }
     if ((pressed & oct) && l && !(ui.ly_t0 & (LY_OPEN | LY_DEAD)) && layer_held() &&
@@ -1311,7 +1317,8 @@ static void draw_layer(void)
                fx_key_held() * 4099u;
         for (p = 0; p < PF_KEYS; p++)                   /* (the key map) */
             sig = sig * 33u + perf_map[p];
-        sig += l * 104729u;
+        sig += l * 104729u + arp_pre * 7919u + (uint32_t)(uint8_t)arp_k[0] * 3u + (uint32_t)(uint8_t)arp_k[1] * 5u +
+               (uint32_t)(uint8_t)arp_k[2] * 11u + (uint32_t)(uint8_t)arp_k[3] * 13u;
     }
     else if (l == LAYER_GLO)
         sig += perf_solo * 31u + (uint32_t)song.g[G_CLOCK] * 5u + ui.ml.on * 7u + seq_fill * 1009u +

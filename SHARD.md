@@ -191,3 +191,16 @@ AUTO slicing now has a DETECT setting with three options, HITS, NOTES and BOTH. 
   - **Enabling the sensing:** `mangler_trim` sets the track's AFTERTOUCH sensing to 6 while PRESS is on, and keeps AT's own modulation amount at 0.
   - **Where it applies:** played keys F3–C5 only. The host builds and the emulator have no pressure.
 - **Storage:** `press` takes one of the bus's spare bytes; the bus stays 32 bytes.
+
+## RING SWEEP follows the LFO; RING and NOISE PRE or POST (ARP's OCT+)
+
+- **RING SWEEP:** the sweep now follows the selected track's LFO instead of a fixed bar-long triangle, so everything on the LFO pages applies: RATE or SYNC (tempo divisions), WAVE, PHASE, TRIG and POL.
+  - **POL BI:** the LFO's −1…+1 sweeps 40 Hz to 2.4 kHz (logarithmic).
+  - **POL UNI:** its 0…+1 covers that same range.
+  - ARP's RING knob still transposes the whole sweep.
+- **OCT+ on the ARP layer** switches where RING and NOISE go.
+  - **POST (the default):** on the mix, after the master level, as before.
+  - **PRE:** inside SHARD's voices. Each slice goes through RING and NOISE right after its sample is read, and only then through its own FILTER, DRIVE, envelope and route, so the bus shapers and FDBK get it too.
+  - **The screen:** the header reads "[ARP] PRE" or "[ARP] POST", and the footer shows OCT+ PRE / POST and OCT- PANIC.
+- **How PRE works:** `perf_begin` runs before the parts. It fills `shd_pre_c`, `shd_pre_w` and `shd_pre_nz` for the block (up to 64 samples), and SHARD's render loop applies them per sample.
+- **What PRE reaches:** only SHARD tracks take RING and NOISE in PRE; SAMPLE and GRAIN tracks don't. NOISE is added per voice, so it follows each slice's envelope and route, and grows with the number of voices sounding.

@@ -217,6 +217,11 @@ typedef struct {
  * whatever the type and drive, held at the shaper's ceiling */
 static const int32_t SHD_FB_F[SHD_NCH] = {350, 2100, 9226, 1167};
 static volatile uint32_t shd_swell;                 /* perform.c (ARP's FEEDBACK SWELL): every FDBK at least this */
+/* PRE (ARP's OCT+, perform.c perf_pre_fill, before the parts each block): RING's carrier and share, NOISE, sample by
+ * sample; each voice takes its slice through them before the slice's own FILTER, DRIVE, envelope and route */
+#define SHD_PRE_N 64u
+static int16_t shd_pre_c[SHD_PRE_N], shd_pre_w[SHD_PRE_N], shd_pre_nz[SHD_PRE_N];
+static volatile uint8_t shd_pre_on;
 static volatile int32_t shd_fbpitch;                /* perform.c (ARP's PITCH): the loops' band-pass, 1/16 semitones */
 static volatile uint32_t shd_kill;                  /* main (ARP's OCT-, PANIC): each new value stops every loop */
 #define SHD_KILL_BLOCKS 690u                        /* .. and holds FDBK off for ~0.5 s */
@@ -1213,6 +1218,12 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
             if (x->idle)
                 continue;
             y = v->s[2] + (((v->s[3] - v->s[2]) * (int32_t)(frac >> 1)) >> 15);
+        }
+        if (shd_pre_on && i < SHD_PRE_N) {         /* ARP PRE: RING and NOISE here, before the slice's own effects */
+            int32_t w = shd_pre_w[i];
+            if (w)
+                y += (int32_t)(((int64_t)((int32_t)(((int64_t)y * shd_pre_c[i]) >> 15) - y) * w) >> 15);
+            y += shd_pre_nz[i];
         }
         if (sl->filt >= SHD_F_COMBN) {              /* a feedback comb: CUT its pitch, RES its feedback (- odd) */
             uint32_t dq = SHD_COMB_D[sl->cut & 127], di = dq >> 8, df = dq & 255u;

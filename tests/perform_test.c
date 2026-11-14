@@ -83,10 +83,13 @@ typedef struct { uint32_t t; int e; } ev_t;
 static int busy_seen;
 static int8_t run_crush;                           /* KNOB 2 (CRUSH) during run(), 0 = untouched */
 static int8_t run_k4;                              /* KNOB 4 (DEPTH; with OCT UP / DN the shimmer) during run() */
+static int32_t run_lfo = INT32_MIN;               /* (not INT32_MIN: the selected track's LFO held there) */
 static void run(uint32_t bpm, int playing, const ev_t *ev, uint32_t nev, uint32_t t1)
 {
     uint32_t t, k = 0;
     host_tracks_init();
+    if (run_lfo != INT32_MIN)
+        trk[song.sel % NTRK].lfo_val = run_lfo;
     perf_reset();
     perf_k[1] = run_crush;
     perf_k[3] = run_k4;
@@ -1696,6 +1699,20 @@ static int test_arp(void)
         p2 = dft_pow(out_l, 4410, FS, 1840);
         arp_k[0] = 0;
         bad += check("ARP RING +50: the carrier an octave up (160 and 1840 Hz)", p1 > 100 * p0 && p2 > 100 * p0);
+        {   /* RING SWEEP follows the selected track's LFO: BI -1 -> 40 Hz (960 / 1040 Hz), +1 -> 2.4 kHz (1400 / 3400 Hz) */
+            ev_t es2[] = {{0, PF_RGS + 1}};
+            double a1, a2, b1, b2;
+            run_lfo = -32768;
+            run(120, 1, es2, 1, FS);
+            a1 = dft_pow(out_l, 4410, FS, 960);
+            a2 = dft_pow(out_l, 4410, FS, 1400);
+            run_lfo = 32767;
+            run(120, 1, es2, 1, FS);
+            b1 = dft_pow(out_l, 4410, FS, 960);
+            b2 = dft_pow(out_l, 4410, FS, 1400);
+            run_lfo = INT32_MIN;
+            bad += check("RING SWEEP: the selected track's LFO low -> 40 Hz, high -> 2.4 kHz", a1 > 100 * a2 && b2 > 100 * b1);
+        }
         for (t = 0; t < NT; t++)
             in_l[t] = in_r[t] = (int32_t)lrint(20000 * sin(2 * M_PI * 3.0 * t / FS));
         arp_k[2] = -100;

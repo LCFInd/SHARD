@@ -774,6 +774,66 @@ static void fp_tests(void)
     }
 }
 
+
+/* 14: ARP PRE. RING MID held, PRE: a 220 Hz slice comes out at 200 and 640 Hz (the carrier's sidebands) and the slice's
+ * own low-pass (FILTER LP, CUT low) then takes the 640 off: the ring before the slice's effects. POST: the mix
+ * (the filter before the ring, the 640 there) */
+static void pre_tests(void)
+{
+    static int16_t y[22050];
+    uint32_t i, k;
+    double r[2];
+    for (i = 0; i < NELEM(y); i++)
+        y[i] = (int16_t)(sin(2 * M_PI * 220 * i / 22050.0) * 16000);
+    slot_pcm(2, y, NELEM(y));
+    for (k = 0; k < 2u; k++) {
+        int32_t o[2 * CTL];
+        uint32_t f;
+        static int32_t buf[FS / 2];
+        fresh(1, SHD_M_ONE, 0);
+        T->p[P_E0] = 3;
+        T->p[P_DLY] = T->p[P_REV] = 0;
+        for (i = 0; i < SLC_AUTO; i++) {
+            shd_kit[3].sl[i].filt = SHD_F_LP;
+            shd_kit[3].sl[i].cut = 40;
+            shd_kit[3].sl[i].res = 0;
+        }
+        arp_pre = (uint8_t)!k;
+        perf_press(PF_RGM, 1);
+        trk_note_on(T, 60, 110);
+        for (f = 0; f + CTL <= FS / 2u; f += CTL) {
+            mix_block(o, CTL);
+            for (i = 0; i < CTL; i++)
+                buf[f + i] = o[2 * i];
+        }
+        perf_press(PF_RGM, 0);
+        blocks(FS / 10u / CTL);
+        {
+            double p200 = 0, p640 = 0, a, b;
+            uint32_t j;
+            for (j = 0; j < 2u; j++) {
+                double fr = j ? 640 : 200, re = 0, im = 0;
+                for (i = FS / 10u; i < FS / 2u; i++) {
+                    re += buf[i] * cos(2 * M_PI * fr * i / FS);
+                    im += buf[i] * sin(2 * M_PI * fr * i / FS);
+                }
+                a = re * re + im * im;
+                if (j)
+                    p640 = a;
+                else
+                    p200 = a;
+            }
+            b = p640 / (p200 + 1);
+            r[k] = b;
+        }
+    }
+    arp_pre = 0;
+    check("ARP PRE: RING before the slice's FILTER (its 640 Hz cut), POST after it (640 Hz kept)", r[0] * 8 < r[1] && r[1] > 0.3,
+          "640/200: PRE %.3f, POST %.3f", r[0], r[1]);
+    memset((uint8_t *)host_slots + 2u * SMP_USER_SIZE, 0, SMP_USER_SIZE);
+    smp_user_scan(2);
+}
+
 int main(int argc, char **argv)
 {
     const char *loop = argc > 1 ? argv[1] : "build/slice_demo/loop";
@@ -1521,6 +1581,7 @@ int main(int argc, char **argv)
     fb_tests();
     det_tests();
     fp_tests();
+    pre_tests();
 
     /* 7: demos */
     {
