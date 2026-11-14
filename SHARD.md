@@ -176,3 +176,18 @@ AUTO slicing now has a DETECT setting with three options, HITS, NOTES and BOTH. 
 - **Merging (`slc_merge`):** in BOTH, a hit within 50 ms of a note slice replaces the note slice, because a hit's attack position is exact.
 - **Cost:** on the host, BOTH takes about 5 times as long as HITS (the pitch window read every 2nd sample), and this happens only when a sample loads or SENS or DETECT changes. My estimate is about 0.4 s on the device for a full slot; that hasn't been measured on hardware. A note change shorter than about 70 ms (6 frames) is not found.
 - **Storage:** DETECT is 1 byte in the bus, so the bus is now 32 bytes (SHF3). SHF2 kits load with DETECT set to HITS.
+
+## Playing it: ARP's knobs, PANIC, the howl's ceiling, PRESS
+
+- **ARP's knobs:** while ARP is held, KNOB 1–4 are `arp_k` (perform.c), not FX's macros. They reset when ARP is let go, unless LATCH is on.
+  - **RING:** ×2^(±2 octaves) on the carrier, SWEEP included; clamped to 8 Hz–9 kHz.
+  - **COLOR:** NOISE through a one-pole filter: the low-pass output (darker) or what the low-pass removes (thinner).
+  - **CHAOS:** SCATTER's live share goes from 1/3 at the centre to 1 (left) or 0 (right); the backwards share from 1/4 to 5/8 (right).
+  - **PITCH:** `shd_fbpitch`, which moves every FDBK loop's band-pass ±2 octaves. The Chamberlin f is capped at 1.4.
+  - **Full level:** RING and NOISE play at full level on the ARP layer (`perf_arp`); FX's DEPTH only applies to them on FX's keys.
+- **PANIC (OCT- on the ARP layer, held or locked):** turns off every ARP effect, latched ones included, and every `arp_k` knob. It also increments `shd_kill`, which each SHARD part notices once per block: it zeroes its loop states and holds FDBK off for 690 blocks (about 0.5 s). OCT+ does nothing on this layer. The shapers' own tails die away in about 50 ms, at about −44 dB.
+- **The howl's ceiling:** a channel with FDBK on is compressed 4:1 above 12000 (−9 dBFS), and its output is capped at 20000. The master limiter and soft clip still sit after it.
+- **PRESS (BUS, after DETECT; 0 = off):** pressure (`t->at` × PRESS / 127) is added at half strength to every channel's DRV, and to FDBK on channels whose FDBK is already above 0.
+  - **Enabling the sensing:** `mangler_trim` sets the track's AFTERTOUCH sensing to 6 while PRESS is on, and keeps AT's own modulation amount at 0.
+  - **Where it applies:** played keys F3–C5 only. The host builds and the emulator have no pressure.
+- **Storage:** `press` takes one of the bus's spare bytes; the bus stays 32 bytes.

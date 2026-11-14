@@ -1682,6 +1682,38 @@ static int test_arp(void)
             }
         bad += check("NOISE HOLD: steady", e1 < 1.2 * e4 && e4 < 1.2 * e1);
     }
+    {   /* ARP's knobs: RING +50 (an octave up: 840 Hz, the lines at 160 and 1840 Hz); CHAOS -100 (SCATTER all live);
+         * COLOR -100 (NOISE HOLD darker: less above 4 kHz) */
+        ev_t ev[] = {{0, PF_RGM + 1}};
+        ev_t es[] = {{1000, PF_SC32 + 1}};
+        ev_t en[] = {{0, PF_NZH + 1}};
+        double p1, p2, p0, hf0, hf1;
+        test_signal(1000, 16000, 1000, 16000);
+        arp_k[0] = 50;
+        run(120, 1, ev, 1, FS);
+        p0 = dft_pow(out_l, 4410, FS, 1000);
+        p1 = dft_pow(out_l, 4410, FS, 160);
+        p2 = dft_pow(out_l, 4410, FS, 1840);
+        arp_k[0] = 0;
+        bad += check("ARP RING +50: the carrier an octave up (160 and 1840 Hz)", p1 > 100 * p0 && p2 > 100 * p0);
+        for (t = 0; t < NT; t++)
+            in_l[t] = in_r[t] = (int32_t)lrint(20000 * sin(2 * M_PI * 3.0 * t / FS));
+        arp_k[2] = -100;
+        run(120, 1, es, 1, 1000 + 30u * L);
+        arp_k[2] = 0;
+        bad += check("ARP CHAOS -100: SCATTER plays all live", same(0, 1000 + 30u * L));
+        memset(in_l, 0, sizeof in_l);
+        memset(in_r, 0, sizeof in_r);
+        run(120, 1, en, 1, FS / 2u);
+        for (hf0 = 0, t = FS / 10u; t < FS / 2u; t++)
+            hf0 += fabs((double)out_l[t] - out_l[t - 1u]);
+        arp_k[1] = -100;
+        run(120, 1, en, 1, FS / 2u);
+        arp_k[1] = 0;
+        for (hf1 = 0, t = FS / 10u; t < FS / 2u; t++)
+            hf1 += fabs((double)out_l[t] - out_l[t - 1u]);
+        bad += check("ARP COLOR -100: NOISE darker", hf1 < hf0 / 4);
+    }
 #if FELUCCA_SHARD
     {
         ev_t ev[] = {{0, PF_SWL + 1}, {16u * P16, -(PF_SWL + 1)}};

@@ -691,6 +691,89 @@ static void det_tests(void)
     smp_user_scan(2);
 }
 
+
+/* 13: playing the loops. ARP's PITCH moves the howl an octave; the howl's ceiling; PANIC stops it and holds FDBK off
+ * a while; PRESS: the keys' pressure takes FDBK 50 (rings, dies) past the edge */
+static double fp_hz(void)
+{
+    int32_t o[2 * CTL], prev = 0;
+    uint32_t f, i, z = 0;
+    for (f = 0; f < FS / 4u; f += CTL) {
+        mix_block(o, CTL);
+        for (i = 0; i < CTL; i++) {
+            z += prev < 0 && o[2 * i] >= 0;
+            prev = o[2 * i];
+            out_peak = abs(o[2 * i]) > out_peak ? abs(o[2 * i]) : out_peak;
+        }
+    }
+    return z * 4.0;
+}
+static void fp_setup(uint32_t fb)
+{
+    uint32_t i;
+    fresh(1, SHD_M_ONE, 5);
+    T->p[P_E6] = 127;
+    for (i = 0; i < SLC_AUTO; i++)
+        shd_kit[0].sl[i].route = SHD_MID;
+    shd_kit[0].bus.type[1] = SHD_D_HARD;
+    shd_kit[0].bus.drive[1] = 60;
+    shd_kit[0].bus.fb[1] = (uint8_t)fb;
+}
+static void fp_tests(void)
+{
+    double h0, h1;
+    int32_t pk;
+    fp_setup(100);
+    trk_note_on(T, 60, 110);
+    blocks(FS / 4u / CTL);
+    trk_note_off(T, 60);
+    voices_off();
+    blocks(FS / CTL);
+    out_peak = 0;
+    h0 = fp_hz();
+    pk = out_peak;
+    shd_fbpitch = 192;                              /* (an octave up) */
+    blocks(FS / 2u / CTL);
+    h1 = fp_hz();
+    shd_fbpitch = 0;
+    check("ARP PITCH: the howl an octave up", h0 > 300 && h1 > h0 * 1.6 && h1 < h0 * 2.6, "%.0f -> %.0f Hz", h0, h1);
+    check("the howl's ceiling: under -3 dBFS", pk > 4000 && pk < 23000, "peak %d", pk);
+    shd_kill++;                                     /* PANIC */
+    blocks(FS / 20u / CTL);
+    out_peak = 0;
+    blocks(FS / 4u / CTL);
+    check("PANIC: the howl gone within 50 ms, and stays (-44 dB: the shapers' own tails)", out_peak < 200, "peak %d", out_peak);
+    trk_note_on(T, 60, 110);                        /* (a hit while FDBK is held off: no howl after it) */
+    blocks(FS / 8u / CTL);
+    trk_note_off(T, 60);
+    voices_off();
+    blocks(FS / 8u / CTL);
+    out_peak = 0;
+    blocks(FS / 8u / CTL);
+    check("PANIC: FDBK held off ~0.5 s (a hit then does not start it)", out_peak < 50, "peak %d", out_peak);
+    blocks(FS / CTL);
+    {
+        uint32_t k;
+        double e[2];
+        for (k = 0; k < 2u; k++) {
+            fp_setup(50);
+            shd_kit[0].bus.press = 127;
+            T->at = k ? 127 : 0;
+            trk_note_on(T, 60, 110);
+            blocks(FS / 4u / CTL);
+            trk_note_off(T, 60);
+            voices_off();
+            blocks(2u * FS / CTL);
+            out_energy = 0;
+            blocks(FS / 2u / CTL);
+            e[k] = out_energy / (FS / 2u);
+            T->at = 0;
+            shd_kit[0].bus.press = 0;
+        }
+        check("PRESS: FDBK 50 dies away untouched, howls pressed", e[0] < 1.0 && e[1] > 1e5, "%.1f, %.0f", e[0], e[1]);
+    }
+}
+
 int main(int argc, char **argv)
 {
     const char *loop = argc > 1 ? argv[1] : "build/slice_demo/loop";
@@ -1437,6 +1520,7 @@ int main(int argc, char **argv)
     sg_tests();
     fb_tests();
     det_tests();
+    fp_tests();
 
     /* 7: demos */
     {

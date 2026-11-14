@@ -95,6 +95,10 @@ static volatile uint8_t perf_remap;   /* main: perf_map changed (seq.c: a key he
 static const uint8_t PF_ARPMAP[PF_KEYS] = {PF_SC16, PF_SC32, PF_SWL, PF_N, PF_RGL, PF_RGM, PF_RGH, PF_RGS,
                                            PF_NZ8, PF_NZ16, PF_NZ32, PF_NZH, PF_N, PF_N, PF_N, PF_N};
 static volatile uint32_t perf_arp;    /* main: ARP's button bit while its layer may own keys (layer_masks), 0 none */
+/* main: ARP's knobs (its layer's, as perf_k are FX's; 0 untouched, -100 .. 100): RING (the carrier, +-2 octaves),
+ * COLOR (NOISE: - darker, + thinner), CHAOS (SCATTER: - more live, + more jumps and more backwards), PITCH (every
+ * SHARD track's FDBK loop, +-2 octaves: eng_shard.c shd_fbpitch) */
+static volatile int8_t arp_k[4];
 
 static volatile uint32_t perf_mask;   /* main: the FX button's bit while its layer may own keys, 0 = none */
 static volatile uint32_t kb_mask;     /* main: the button bits whose hold makes keys a layer's (ui_layer.c), 0 = none */
@@ -161,6 +165,7 @@ static struct {
     uint8_t sk, srev;                  /* .. its 1/16s back (0: live), backwards */
     uint32_t rph;                      /* RING: the carrier's phase */
     int32_t rgw, nw;                   /* RING, NOISE: their shares (Q15) */
+    int32_t ncol;                      /* NOISE: COLOR's one-pole */
     uint8_t rsel, nsel;                /* .. the one playing (PF_*): the last pressed of those held */
     uint32_t swq;                      /* FEEDBACK SWELL: shd_swell, Q8 */
 } pf = {.src = PF_N, .next = PF_N, .lc = PF_TOP, .mg = {32768, 32768, 32768, 32768}};
@@ -414,6 +419,7 @@ static __attribute__((noinline)) int perf_begin(uint32_t n)
             pf.swq = pf.swq > st + 1u ? pf.swq - st - 1u : 0u;
 #if FELUCCA_SHARD
         shd_swell = pf.swq >> 8;
+        shd_fbpitch = arp_k[3] * 384 / 100;     /* (ARP's PITCH: the loops, 1/16 semitones) */
 #endif
     }
     pf.mute = 0;
@@ -604,10 +610,12 @@ static __attribute__((noinline)) void perf_harm(int32_t l, int32_t r, int32_t *y
 static __attribute__((noinline)) void perf_scat_pick(void)
 {
     uint32_t r = rng(), lf = pf.len >> 1, kmax = lf ? PB_FRAMES / lf - 1u : 0u, have = lf ? pf.wr / lf : 0u;
+    int32_t ch = arp_k[2], live = ch < 0 ? 85 - ch * 170 / 100 : 85 - ch * 85 / 100;   /* CHAOS: live 1/3 .. 1 .. 0 */
+    int32_t back = 64 + (ch > 0 ? ch * 96 / 100 : 0);                                 /* .. backwards 1/4 .. 5/8 */
     kmax = kmax < have ? kmax : have;
     pf.sseg++;
-    pf.sk = !kmax || (r >> 24) < 85u ? 0u : (uint8_t)(1u + (r >> 8) % kmax);
-    pf.srev = pf.sk && ((r >> 4) & 3u) == 0u;
+    pf.sk = !kmax || (int32_t)(r >> 24) < live ? 0u : (uint8_t)(1u + (r >> 8) % kmax);
+    pf.srev = pf.sk && (int32_t)((r >> 2) & 255u) < back;
     pf.sbase = pf.wr - pf.sk * lf;
 }
 static inline void perf_scat(int32_t l, int32_t r, int32_t *yl, int32_t *yr)
@@ -838,7 +846,7 @@ static __attribute__((noinline)) void perf_phaser(int32_t *bl, int32_t *br, uint
 static const uint16_t RG_HZ[3] = {60, 420, 1700};
 static __attribute__((noinline)) void perf_noise(uint32_t a, uint32_t t, int32_t *l, int32_t *r)
 {
-    int32_t d = (100 - perf_k[3]) * 32768 / 100, rt = (a & PF_RING) ? d : 0, nt = (a & PF_NOISE) ? d : 0;
+    int32_t d = perf_arp ? 32768 : (100 - perf_k[3]) * 32768 / 100, rt   /* (the ARP layer: full; FX's: DEPTH) */ = (a & PF_RING) ? d : 0, nt = (a & PF_NOISE) ? d : 0;
     pf.rgw += clamp(rt - pf.rgw, -SL_SLOPE, SL_SLOPE);
     pf.nw += clamp(nt - pf.nw, -SL_SLOPE, SL_SLOPE);
     if (pf.rgw) {
@@ -849,6 +857,9 @@ static __attribute__((noinline)) void perf_noise(uint32_t a, uint32_t t, int32_t
             hz = (uint32_t)((40ull * pow2_q16((int32_t)((uint64_t)tri * 1134u / bar))) >> 16);   /* (5.9 oct: x 60) */
         } else
             hz = RG_HZ[(pf.rsel - PF_RGL) % 3u];
+        if (arp_k[0])                               /* RING: +-2 octaves */
+            hz = (uint32_t)(((uint64_t)hz * pow2_q16(arp_k[0] * 384 / 100)) >> 16);
+        hz = hz < 8u ? 8u : hz > 9000u ? 9000u : hz;
         c = osc_sine(pf.rph);
         pf.rph += hz * 97391u;                      /* (2^32 / 44100) */
         *l = pf_mix(*l, mulq15(*l, c), pf.rgw);
@@ -863,6 +874,11 @@ static __attribute__((noinline)) void perf_noise(uint32_t a, uint32_t t, int32_t
             env = (int32_t)(((int64_t)env * env) >> 15);
         }
         x = mulq15((int32_t)rng() >> 17, env);      /* (-12 dB peaks: under the loop's) */
+        if (arp_k[1]) {                             /* COLOR: a one-pole, - its low pass, + what it leaves */
+            int32_t c = arp_k[1] < 0 ? -arp_k[1] : arp_k[1], g = 32768 - c * 320;   /* (100: ~0.02, near 300 Hz) */
+            pf.ncol += mulq15(x - pf.ncol, g);
+            x = arp_k[1] < 0 ? pf.ncol : x - pf.ncol;
+        }
         x = mulq15(x, pf.nw);
         *l += x;
         *r += (int32_t)(((int64_t)x * 29491) >> 15) - (x >> 4);   /* (a hair apart: not quite mono) */

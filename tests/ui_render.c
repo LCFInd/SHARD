@@ -805,9 +805,9 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
        S_MENU_SELECT, S_PROJECT_ERASE, S_CONFIRM_ERASE_PROJ, S_TOOLS_CLEAN, S_CONFIRM_CLEAN,
        S_MENU_MIDI_TRACK, S_MENU_MIDI_TCH_UNUSED, S_MENU_MIDI_AUTO, S_HOME_TRACKS_MIDI, S_MIXER_MIDI, S_EDIT_PHASE_FOLD,
        S_SHFX_SLICE, S_SHFX_BUS, S_SHFX_ENUM, S_SHFX_NOFILE, S_SHARD_EDIT1, S_SHARD_EDIT2, S_SHARD_PRESETS,
-       S_SHARD_SLICES, S_SHARD_HOME, S_LOOP, S_LOOP_PLAY, S_LOOP_REL, S_ENV_SHARD, S_SHFX_GRAIN, S_SHFX_GSIZE, S_SHFX_BGRAIN, S_ARP_PEEK, S_ARP_HELD, S_SHFX_FDBK,
+       S_SHARD_SLICES, S_SHARD_HOME, S_LOOP, S_LOOP_PLAY, S_LOOP_REL, S_ENV_SHARD, S_SHFX_GRAIN, S_SHFX_GSIZE, S_SHFX_BGRAIN, S_SHFX_FDBK, S_SHFX_PRESS,
 #if FELUCCA_MANGLER
-       S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY, S_LIVE_OFF, S_LIVE_PLAY, S_LIVE_LAYER,
+       S_ARP_PEEK, S_ARP_HELD, S_ARP_KNOBS, S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY, S_LIVE_OFF, S_LIVE_PLAY, S_LIVE_LAYER,
 #endif
        S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
@@ -842,9 +842,9 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "menu_select", "project_erase", "confirm_erase_project", "tools_clean", "confirm_clean",
     "menu_midi_track", "menu_midi_channels_unused", "menu_midi_auto_select", "home_tracks_midi", "mixer_midi", "edit_phase_fold",
     "shard_slice_fx", "shard_slice_fx_bus", "shard_slice_fx_route", "shard_slice_fx_nofile", "shard_edit1", "shard_edit2",
-    "shard_presets", "shard_slices", "shard_home", "loop", "loop_playing", "loop_release", "env_family_shard", "shfx_grain", "shfx_grain_size", "shfx_bus_grain", "arp_layer", "arp_layer_held", "shfx_bus_fdbk",
+    "shard_presets", "shard_slices", "shard_home", "loop", "loop_playing", "loop_release", "env_family_shard", "shfx_grain", "shfx_grain_size", "shfx_bus_grain", "shfx_bus_fdbk", "shfx_bus_press",
 #if FELUCCA_MANGLER
-    "bounce", "bounce_used", "bounce_busy", "live_off", "live_playing", "live_layer",
+    "arp_layer", "arp_layer_held", "arp_layer_knobs", "bounce", "bounce_used", "bounce_busy", "live_off", "live_playing", "live_layer",
 #endif
 };
 
@@ -1720,11 +1720,9 @@ static void setup(int s)
     case S_SHFX_GSIZE:                               /* its SIZE, in ms */
         eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 2; shfx_sl_param = SHFX_GSIZE; shfx_knob(2, -20); ui.msg_t = 0;
         break;
-    case S_ARP_PEEK: go_home(); ui.layer = LAYER_ARP; break;   /* the mangler's ARP bank: its map */
-    case S_ARP_HELD:                                 /* SCATTER 1/32, RING SWEEP, NOISE 1/16 held; a mute; DEPTH 80 % */
-        song.playing = 1; ui.layer = LAYER_ARP;
-        perf_held = perf_act = PF_BIT(PF_SC32) | PF_BIT(PF_RGS) | PF_BIT(PF_NZ16) | PF_BIT(PF_M1 + 2);
-        perf_k[3] = 20; ui.hot_col = 3; ui.hot_t = 30;
+    case S_SHFX_PRESS:                               /* PRESS on the BUS */
+        eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 0; shfx_knob(0, 40); shfx_bus_param = SHFX_PRESS; shfx_knob(2, 80);
+        ui.msg_t = 0;
         break;
     case S_SHFX_FDBK:                                /* MID FDBK on the BUS */
         eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 0; shfx_knob(0, 40); shfx_bus_param = SHFX_CH0 + SHFX_PER + 2u;
@@ -1736,6 +1734,16 @@ static void setup(int s)
         break;
 #endif
 #if FELUCCA_MANGLER
+    case S_ARP_PEEK: go_home(); ui.layer = LAYER_ARP; break;   /* the mangler's ARP bank: its map */
+    case S_ARP_HELD:                                 /* SCATTER 1/32, RING SWEEP, NOISE 1/16 held; a mute; DEPTH 80 % */
+        song.playing = 1; ui.layer = LAYER_ARP;
+        perf_held = perf_act = PF_BIT(PF_SC32) | PF_BIT(PF_RGS) | PF_BIT(PF_NZ16) | PF_BIT(PF_M1 + 2);
+        perf_k[3] = 20; ui.hot_col = 3; ui.hot_t = 30;
+        break;
+    case S_ARP_KNOBS:                                /* ARP's knobs turned: RING up, COLOR dark, CHAOS wild, PITCH down */
+        go_home(); ui.layer = LAYER_ARP;
+        arp_k[0] = 50; arp_k[1] = -80; arp_k[2] = 100; arp_k[3] = -25; ui.hot_col = 2; ui.hot_t = 30;
+        break;
     case S_BOUNCE: go_page(GR_BOUNCE); bnc.bars = 3; bnc.from = 0; bnc.to = 1; ui.hot_col = 0; ui.hot_t = 30; break;
     case S_BOUNCE_USED:                                /* a track it renders plays the slot: why not, no OCT+ */
         eng(ENGI_SHARD); TSEL->p[P_E0] = 2; go_page(GR_BOUNCE); bnc.bars = 1; bnc.from = 1; bnc.to = 1; break;

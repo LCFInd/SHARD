@@ -69,7 +69,7 @@ static const layer_t LAYERS[LAYER_N] = {
     {B_EDIT, LK_SET, FAM_HOME, "[EDIT] SET", {{KC_KEYS, "ENGINE"}, {KC_OCTDN, "UNDO"}, {KC_EDIT, "DONE"}}},
     {B_SEQ, LK_SET, FAM_SEQ, "[SEQ] TOOLS", {{KC_KEYS, "TOOLS"}, {KC_OCTDN, "UNDO"}, {KC_SEQ, "DONE"}}},
     {B_REC, LK_SET, FAM_HOME, "[REC] SET", {{KC_KEYS, "RECORDING"}, {KC_OCTDN, "UNDO"}, {KC_REC, "DONE"}}},
-    {B_ARP, LK_HOLD, FAM_HOME, "[ARP] NOISE", {{KC_KEYS, "EFFECTS"}, {KC_K14, "MACROS"}, {0, 0}}},   /* (the mangler) */
+    {B_ARP, LK_HOLD, FAM_HOME, "[ARP] NOISE", {{KC_KEYS, "EFFECTS"}, {KC_K14, "KNOBS"}, {KC_OCTDN, "PANIC"}}},   /* (mangler) */
 };
 static const uint8_t LY_KC[LAYER_N] = {0, KC_FX, KC_GLO, KC_SCL, KC_EDIT, KC_SEQ, KC_REC, KC_ARP};
 /* SCL's knobs: the key and its chord (cur_page() while the layer edits or draws them: page_over) */
@@ -187,8 +187,10 @@ static void layer_let_go(uint32_t quiet)
 {
     if (eu.on)                                          /* (SEQ TOOLS: an open EUCLID is applied) */
         eu_close(&trk[lys.trk % NTRK], 1);
-    if (ly_fx(ui.ly) && !perf_latch_on)
+    if (ly_fx(ui.ly) && !perf_latch_on) {
         perf_k[0] = perf_k[1] = perf_k[2] = perf_k[3] = 0;
+        arp_k[0] = arp_k[1] = arp_k[2] = arp_k[3] = 0;
+    }
     if (lys.rp_dirty) {                                 /* REC: its settings kept, as MENU does when it closes (FX: the map) */
         lys.rp_dirty = 0;
         settings_save();                                /* (deferred while playing) */
@@ -730,7 +732,9 @@ static void layer_keys(uint32_t keys)
 static void layer_knob(uint32_t k, int32_t s)
 {
     uint32_t l = layer_open();
-    if (ly_fx(l)) {                                     /* perform.c perf_k, not recorded */
+    if (l == LAYER_ARP) {                               /* RING COLOR CHAOS PITCH: perform.c arp_k, not recorded */
+        arp_k[k] = (int8_t)clamp(arp_k[k] + accel(EN_K1 + k, s, 200), -100, 100);
+    } else if (ly_fx(l)) {                              /* perform.c perf_k, not recorded */
         if (k == 3u && !perf_harm_on())
             s = -s;                                     /* DEPTH (100 - perf_k[3]) rises to the right (#40: it fell) */
         perf_k[k] = (int8_t)clamp(perf_k[k] + accel(EN_K1 + k, s, k ? 100 : 200), k ? 0 : -100, 100);   /* (#126) */
@@ -780,9 +784,24 @@ static int layer_play(void)
 
 /* OCT- / OCT+ pressed with a SET layer's button down (FX LATCH: FX's) before it opened: a combo, so it opens now,
  * before oct_taps and layer_oct read it (else the press was nobody's: no put back / ALL OFF, no octave) */
+/* the ARP layer's OCT-: PANIC. Every ARP effect (latched too) and knob off, every SHARD loop stopped and FDBK held
+ * off ~0.5 s (eng_shard.c shd_kill); OCT+ nothing (the keys are effects: no octave to move) */
+static void arp_panic(void)
+{
+    perf_latched = 0;
+    arp_k[0] = arp_k[1] = arp_k[2] = arp_k[3] = 0;
+    shd_kill++;
+    ui_message("PANIC: ALL OFF");
+    ui.force = 1;
+}
 static void layer_oct_open(uint32_t pressed)
 {
     uint32_t l = ui.ly, oct = 1u << panel.btn[B_OCTDN] | 1u << panel.btn[B_OCTUP];
+    if (FELUCCA_MANGLER && layer_open() == LAYER_ARP) {
+        if ((pressed >> panel.btn[B_OCTDN]) & 1u)
+            arp_panic();
+        return;
+    }
     if ((pressed & oct) && l && !(ui.ly_t0 & (LY_OPEN | LY_DEAD)) && layer_held() &&
         (LAYERS[l].kind == LK_SET || (ly_fx(l) && perf_latch_on))) {
         ui.ly_t0 |= LY_OPEN | LY_COMBO;
@@ -807,7 +826,10 @@ static uint32_t layer_oct(uint32_t pressed, uint32_t oct)
         if (ly_fx(lys.l)) {                             /* (FX LATCH) every effect and macro off */
             perf_latched = 0;
             perf_k[0] = perf_k[1] = perf_k[2] = perf_k[3] = 0;
-            ui_message("FX ALL OFF");
+            arp_k[0] = arp_k[1] = arp_k[2] = arp_k[3] = 0;
+            if (lys.l == LAYER_ARP)
+                shd_kill++;                             /* (ARP: the PANIC too) */
+            ui_message(lys.l == LAYER_ARP ? "PANIC: ALL OFF" : "FX ALL OFF");
         } else if (lys.l == LAYER_EDIT) {
             uint32_t ld = lys.loaded;
             if (ld)
@@ -1208,7 +1230,15 @@ static void layer_cards(uint32_t l)
             draw_column(c, "", "", "", T_THEME, -1, ICON_NONE);
         return;
     }
-    if (ly_fx(l)) {                                     /* FILTER CRUSH THROW DEPTH */
+    if (l == LAYER_ARP) {                               /* RING COLOR CHAOS PITCH (- .. +) */
+        static const char *const N[4] = {"RING", "COLOR", "CHAOS", "PITCH"};
+        static const char *const U[4][2] = {{"DN", "UP"}, {"DARK", "THIN"}, {"CALM", "WILD"}, {"DN", "UP"}};
+        for (c = 0; c < 4u; c++) {
+            int32_t m = arp_k[c];
+            fmt_int(val, m < 0 ? -m : m);
+            draw_column(c, N[c], m ? val : "OFF", m ? U[c][m > 0] : "", m ? VAL(c) : T_DIM, (m + 100) * 5, ICON_AUTO);
+        }
+    } else if (ly_fx(l)) {                              /* FILTER CRUSH THROW DEPTH */
         int32_t m = perf_k[0];
         fmt_int(val, m < 0 ? -m : m);
         draw_column(0, "FILTER", m ? val : "OFF", m < 0 ? "LP" : m > 0 ? "HP" : "", m ? VAL(0u) : T_DIM, (m + 100) * 5,

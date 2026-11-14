@@ -52,6 +52,7 @@ static void at_turn_on(track_t *t)
 }
 
 static int layer_set_open(void);                       /* (ui_layer.c) */
+static uint32_t layer_open(void);
 /* the OCT LEDs, bit 0 OCT- lit, bit 1 OCT+ lit, OCT_BREATH OCT+ breathing (can be pressed: dark .. ~60 %,
  * bsp/boards/fm1/fm1_input.h fm1_led_breath, #119). In the dialogs and on action pages OCT- (back) is lit and OCT+ breathes
  * while it would do something; the menu: on a value row OCT- and OCT+ both breathe while that way has a value to go to,
@@ -1551,6 +1552,13 @@ static void mangler_trim(void)
         for (m = 0; m < 4u; m++)
             if (t->p[P_M1AMT + 3u * m])
                 t->p[P_M1AMT + 3u * m] = 0;
+        if (t->eng_req % NENGINES == ENGI_SHARD) {      /* PRESS (SLICE FX's BUS): the keys' pressure read for it */
+            int16_t want = shd_kit[slc_src_of(t->p)].bus.press ? 6 : 0;
+            if (t->p[P_ATSNS] != want)
+                t->p[P_ATSNS] = want;
+            if (t->p[P_ATAMT])
+                t->p[P_ATAMT] = 0;                      /* (AT itself modulates nothing) */
+        }
     }
 }
 #endif
@@ -1604,7 +1612,8 @@ static void ui_input(void)
     if (((pressed >> panel.btn[B_REC]) & 1u) && ui.ly == LAYER_REC)
         ui.rec_t0 |= 2u;                                /* (REC is its layer's button now: its tap is layer_tap's) */
     layer_oct_open(pressed);                            /* (OCT± with a SET layer's button down: it opens now) */
-    oct = oct_taps(pressed, ui.menu || ui.confirm || act_cols() || name_on() || layer_set_open() || ui.ml.on);
+    oct = oct_taps(pressed, ui.menu || ui.confirm || act_cols() || name_on() || layer_set_open() || ui.ml.on ||
+                            (FELUCCA_MANGLER && layer_open() == LAYER_ARP));   /* (ARP: OCT- is its PANIC) */
     oct = layer_oct(pressed, oct);                      /* (a SET layer's OCT-: put back) */
     layer_masks();                                      /* seq.c: keys pressed with a layer's button are its own */
     lay = layer_held();

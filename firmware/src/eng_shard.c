@@ -86,7 +86,9 @@ typedef struct {
     uint8_t sens;                                   /* AUTO's hits: 0 fewest .. 127 most (SHD_SENS_DEF: SLICE's) */
     uint8_t gmode, gsize, gdens, gjit;              /* the track's GRAIN (SHD_GM_*), SIZE, DENS, JITTER */
     uint8_t fb[SHD_NCH];                            /* FDBK: each channel's shaper fed back into itself (0 none) */
-    uint8_t detect, pad[3];                         /* DETECT: AUTO's slices at hits, notes or both (SLC_DET_*) */
+    uint8_t detect;                                 /* DETECT: AUTO's slices at hits, notes or both (SLC_DET_*) */
+    uint8_t press;                                  /* PRESS: key pressure into every channel's DRV and FDBK (0 none) */
+    uint8_t pad[2];
 } shd_bus_t;
 typedef struct {
     shd_sl_t sl[SLC_AUTO];
@@ -98,7 +100,7 @@ _Static_assert(sizeof(shd_sl_t) == 20u && sizeof(shd_bus_t) == 32u, "SHARD kit l
                     SHD_GT_TRACK, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0}
 #define SHD_BUS_DEF {51, 96, {SHD_D_TUBE, SHD_D_FOLD, SHD_D_CRUSH, SHD_D_OFF}, {40, 30, 60, 40}, {0, 0, 0, 0}, \
                      {100, 100, 90, 127}, 0, SHD_SENS_DEF, SHD_GM_OFF, SHD_GSIZE_DEF, SHD_GDENS_DEF, 0, {0, 0, 0, 0}, \
-                     SLC_DET_DEF, {0, 0, 0}}
+                     SLC_DET_DEF, 0, {0, 0}}
 #define SHD_KIT_DEF {{[0 ... SLC_AUTO - 1] = SHD_SL_DEF}, SHD_BUS_DEF}
 static shd_kit_t shd_kit[SHD_NSRC] = {[0 ... SHD_NSRC - 1] = SHD_KIT_DEF};
 static uint8_t shd_kit_save;                        /* bit k: user slot k's kit changed, to flash (slice_store.c) */
@@ -171,6 +173,7 @@ static void shd_kit_sane(shd_kit_t *k)
     if (k->bus.gdens > 127) k->bus.gdens = SHD_GDENS_DEF;
     if (k->bus.gjit > 127) k->bus.gjit = 0;
     if (k->bus.detect >= SLC_NDET) k->bus.detect = SLC_DET_DEF;
+    if (k->bus.press > 127) k->bus.press = 0;
 }
 
 /* ---- a shaper's state (shd_shape): DECIM's held sample, and the analog models' filters and bias */
@@ -214,6 +217,10 @@ typedef struct {
  * whatever the type and drive, held at the shaper's ceiling */
 static const int32_t SHD_FB_F[SHD_NCH] = {350, 2100, 9226, 1167};
 static volatile uint32_t shd_swell;                 /* perform.c (ARP's FEEDBACK SWELL): every FDBK at least this */
+static volatile int32_t shd_fbpitch;                /* perform.c (ARP's PITCH): the loops' band-pass, 1/16 semitones */
+static volatile uint32_t shd_kill;                  /* main (ARP's OCT-, PANIC): each new value stops every loop */
+#define SHD_KILL_BLOCKS 690u                        /* .. and holds FDBK off for ~0.5 s */
+#define SHD_CEIL 12000                              /* FDBK on: a channel's out bent over above this (-9 dBFS) */
 
 /* ---- the part's engine memory */
 typedef struct {
@@ -238,6 +245,7 @@ typedef struct {
     shd_ds_t ds[SHD_NCH];                           /* the channels' shapers */
     int32_t fbl[SHD_NCH], fbb[SHD_NCH], fby[SHD_NCH];   /* FDBK: the loop's band-pass (low, band), the last out, */
     int32_t fai[SHD_NCH], fao[SHD_NCH];             /* .. the shaper's mean in and out (its gain: their ratio) */
+    uint32_t kseen, kleft;                          /* PANIC: the shd_kill seen, blocks of FDBK off left */
     shd_gv_t gv[NVOICE];                            /* GRAIN: each voice's grains */
     uint32_t gload, gbud;                           /* GRAIN: grains sounding (counted each block), seek budget */
     int32_t grng;
@@ -1338,8 +1346,15 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
     const shd_bus_t *bs = &shd_kit[slc_src_of(t->p)].bus;
     int32_t al = SHD_ONEPOLE[bs->lo & 127], ah = SHD_ONEPOLE[bs->hi & 127], mix = clamp(t->p[P_E6], 0, 127);
     int32_t bias = clamp(t->p[P_E7], -64, 63);
-    uint32_t i, b, dr[SHD_NCH], hot = 0;
-    int32_t fg[SHD_NCH];
+    uint32_t i, b, dr[SHD_NCH], hot = 0, pr = (uint32_t)t->at * bs->press / 127u;   /* (PRESS: the keys' pressure) */
+    int32_t fg[SHD_NCH], ff[SHD_NCH];
+    if (mem->kseen != shd_kill) {                   /* PANIC: every loop stopped, FDBK off a while */
+        mem->kseen = shd_kill;
+        mem->kleft = SHD_KILL_BLOCKS;
+        memset(mem->fbl, 0, sizeof mem->fbl);
+        memset(mem->fbb, 0, sizeof mem->fbb);
+        memset(mem->fby, 0, sizeof mem->fby);
+    }
     for (b = 0; b < SHD_NCH; b++)                   /* (FDBK: a loop still ringing keeps the bus on) */
         hot |= (bs->fb[b] || shd_swell) && (mem->fbb[b] > 512 || mem->fbb[b] < -512);   /* (the band: no DC) */
     if (mem->used || hot)
@@ -1355,9 +1370,20 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
     }
     for (b = 0; b < SHD_NCH; b++) {
         uint32_t a = bs->fb[b] > shd_swell ? bs->fb[b] : shd_swell;   /* (ARP's FEEDBACK SWELL: at least this) */
-        dr[b] = (uint32_t)clamp((int32_t)bs->drive[b] + bias, 0, 127);
+        if (a && pr)
+            a = a + pr / 2u > 127u ? 127u : a + pr / 2u;   /* PRESS: a channel feeding back, pushed further */
+        if (mem->kleft)
+            a = 0;
+        dr[b] = (uint32_t)clamp((int32_t)bs->drive[b] + bias + (int32_t)(pr / 2u), 0, 127);
         fg[b] = (int32_t)(a * a * 4u);
+        ff[b] = SHD_FB_F[b];
+        if (shd_fbpitch) {                          /* ARP's PITCH: the loops' band-pass moved (f to 1.4 at most) */
+            int32_t f = (int32_t)(((int64_t)SHD_FB_F[b] * pow2_q16(shd_fbpitch)) >> 16);
+            ff[b] = f < 40 ? 40 : f > 22937 ? 22937 : f;
+        }
     }
+    if (mem->kleft)
+        mem->kleft--;
     for (i = 0; i < n; i++) {
         int32_t xx = shd_sat(mem->bus[0][i], 1 << 17), split[3], wet = 0, dc;
         mem->lpl += (int32_t)(((int64_t)(xx - mem->lpl) * al) >> 15);
@@ -1369,9 +1395,9 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
             int32_t in = (b < 3u ? split[b] : 0) + mem->bus[b + 1u][i], a, tg, y;
             if (fg[b]) {                            /* FDBK: the last out, band-passed at the channel's own */
                 int32_t hi;                         /* pitch (Q 2), back in (the shaper limits the howl) */
-                mem->fbl[b] = shd_sat(mem->fbl[b] + ((SHD_FB_F[b] * mem->fbb[b]) >> 14), 1 << 17);
+                mem->fbl[b] = shd_sat(mem->fbl[b] + ((ff[b] * mem->fbb[b]) >> 14), 1 << 17);
                 hi = shd_sat(mem->fby[b] - mem->fbl[b] - (mem->fbb[b] >> 1), 1 << 17);
-                mem->fbb[b] = shd_sat(mem->fbb[b] + ((SHD_FB_F[b] * hi) >> 14), 1 << 17);
+                mem->fbb[b] = shd_sat(mem->fbb[b] + ((ff[b] * hi) >> 14), 1 << 17);
                 {
                     int32_t o = mem->fao[b] > 512 ? mem->fao[b] : 512, cq = (int32_t)(((int64_t)mem->fai[b] << 13) / o);
                     cq = cq > 32768 ? 32768 : cq;   /* (Q13: the shaper's gain undone, up to 4; below -36 dB out less: the loop dies away in the quiet) */
@@ -1384,6 +1410,12 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
             tg = !bs->gate[b] || mem->fol[b] > SHD_GATE_Q15[bs->gate[b] & 127] ? 32768 : 0;
             mem->gain[b] += (tg - mem->gain[b]) >> 7;
             y = shd_shape(bs->type[b], in, dr[b], &mem->ds[b]);
+            if (fg[b] && (y > SHD_CEIL || y < -SHD_CEIL)) {   /* the howl's ceiling: bent over, 4:1, to 20000 */
+                int32_t m = y < 0 ? -y : y;
+                m = SHD_CEIL + ((m - SHD_CEIL) >> 2);
+                m = m > 20000 ? 20000 : m;
+                y = y < 0 ? -m : m;
+            }
             mem->fby[b] = fg[b] ? shd_sat(y, 1 << 16) : 0;   /* (before the gate: the loop howls on through it) */
             if (fg[b]) {                            /* (means over ~3 ms) */
                 mem->fai[b] += (a - mem->fai[b]) >> 7;

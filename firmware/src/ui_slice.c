@@ -335,12 +335,13 @@ static const shfx_desc_t SHFX_SL[SHFX_NSL] = {
     {"DRIVE", 0, SHD_NDRIVE - 1, N_SHD_DRIVE, ""}, {"AMT", 0, 127, 0, ""}, {"DELAY", 0, 127, 0, ""},
     {"ROUTE", 0, SHD_NROUTE - 1, N_SHD_ROUTE, ""}, {"CHOKE", 0, 4, N_SHD_CHOKE, ""},
 };
-enum { SHFX_BPM, SHFX_SENS, SHFX_DETECT, SHFX_BGRAIN, SHFX_BGSIZE, SHFX_BGDENS, SHFX_BGJIT, SHFX_XLOW, SHFX_XHIGH, SHFX_CH0 };   /* then TYPE DRV FDBK GATE LVL per channel */
+enum { SHFX_BPM, SHFX_SENS, SHFX_DETECT, SHFX_PRESS, SHFX_BGRAIN, SHFX_BGSIZE, SHFX_BGDENS, SHFX_BGJIT, SHFX_XLOW, SHFX_XHIGH, SHFX_CH0 };   /* then TYPE DRV FDBK GATE LVL per channel */
 #define SHFX_PER 5u
 static const shfx_desc_t SHFX_BUS[SHFX_CH0 + SHFX_PER * SHD_NCH + 1u] = {   /* (6 letters at most: the cards) */
     {"LOOP", 0, SHD_BPM_MAX, 0, ""},                 /* the source's tempo (BPM), 0 AUTO (shfx_knob); the song's: TEMPO */
     {"SENS", 0, 127, 0, ""},                         /* AUTO's hits (a user slot's: slc_rescan) */
     {"DETECT", 0, SLC_NDET - 1, N_SLC_DET, ""},      /* .. at hits, notes, both */
+    {"PRESS", 0, 127, 0, ""},                        /* the keys' pressure into DRV and FDBK */
     {"GRAIN", 0, SHD_NGM - 1, N_SHD_GRAIN, ""},       /* the track's GRAIN: the slices set to TRACK */
     {"SIZE", 0, 127, 0, "MS"}, {"DENS", 0, 127, 0, "X"}, {"JITTER", 0, 127, 0, ""},
     {"XLOW", 0, 127, 0, ""}, {"XHIGH", 0, 127, 0, ""},
@@ -391,6 +392,7 @@ static uint8_t *shfx_field(shd_kit_t *kit, uint32_t j, int bus, uint32_t k)
         case SHFX_BPM: return &b->bpm;
         case SHFX_SENS: return &b->sens;
         case SHFX_DETECT: return &b->detect;
+        case SHFX_PRESS: return &b->press;
         case SHFX_XLOW: return &b->lo;
         case SHFX_XHIGH: return &b->hi;
         case SHFX_BGRAIN: return &b->gmode;
