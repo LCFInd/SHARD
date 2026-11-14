@@ -8,6 +8,9 @@ on:
     branches: [shard]
   workflow_dispatch:
 
+permissions:
+  contents: write                     # (the shard-latest release)
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -66,3 +69,15 @@ jobs:
             build/felucca.fwsc
             build/felucca.bin
           if-no-files-found: error
+
+      - name: The shard-latest release (the newest build, one link to download)
+        if: github.ref == 'refs/heads/shard'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          cp build/felucca.fwsc "felucca-shard-${GITHUB_SHA::7}.fwsc"
+          gh release delete shard-latest --yes --cleanup-tag || true
+          gh release create shard-latest "felucca-shard-${GITHUB_SHA::7}.fwsc" --prerelease --target "$GITHUB_SHA" \
+            --title "SHARD latest (${GITHUB_SHA::7})" \
+            --notes "The newest SHARD build from the shard branch (${GITHUB_SHA::7}). Install the .fwsc with the web installer or tools/fm1_install.py. Untested on hardware until you test it."
