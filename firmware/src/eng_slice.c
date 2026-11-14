@@ -276,7 +276,7 @@ static struct {
 static int32_t sn_pitch(uint32_t n, uint32_t lo, uint32_t hi, uint32_t fd16)
 {
     uint32_t b = n - SN_WIN - hi, t, j;
-    uint64_t sum = 0;
+    uint32_t sum = 0;                       /* (32-bit: the device has no 64 / 64 division; each lag's dd <= 96 x 2^16) */
     uint32_t best = 0;
     uint32_t dn[SN_LMAX + 2];               /* the normalised difference, Q10 */
     dn[0] = 1024u;
@@ -284,7 +284,7 @@ static int32_t sn_pitch(uint32_t n, uint32_t lo, uint32_t hi, uint32_t fd16)
         uint32_t dd = 0;
         for (j = 0; j < SN_WIN; j += 2u) {   /* (every 2nd: the dips as deep, half the work) */
             int32_t e = sn.x[(b + j) & (SN_RING - 1u)] - sn.x[(b + j + t) & (SN_RING - 1u)];
-            dd += (uint32_t)(e * e) >> 4;
+            dd += (uint32_t)(e * e) >> 8;
         }
         sum += dd;
         dn[t] = sum ? (uint32_t)(((uint64_t)dd * t << 10) / sum) : 1024u;
