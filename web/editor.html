@@ -2894,19 +2894,41 @@ async function connect() {
       }
       access.onstatechange = onState;
     }
-    const isF = (p) => /felucca/i.test(p.name || "") && p.state !== "disconnected";
-    const input = [...access.inputs.values()].find(isF);
-    const output = [...access.outputs.values()].find(isF);
-    if (!input || !output) { sayK("nodevice"); return; }
-    const link = new Link((d) => output.send(d), {
-      timeout: 300,
-      onUnknown: (f) => console.debug("ignored reply", f),
-      onTimeout: () => sayK("noreply"),
-      onPush: (f) => onPush(f),
-      onGap: () => { rewatch = true; },
-    });
-    input.onmidimessage = (e) => link.receive(e.data);
-    if (input.open) await input.open().catch(() => {});
+    /* (SHARD) the port by its name: "Felucca" first; then names an FM-1 shows under on a computer that met it with
+     * other firmware (macOS keeps a device's first name: "FM-1", DUO's, "USB-MIDI"...), each tried with the INFO
+     * request and kept only if it answers. Other gear is never sent anything */
+    const live = (p) => p.state !== "disconnected";
+    const rank = (n) => /felucca|shard/i.test(n) ? 0 : /fm-?1|fmini|duo|sinco|usb-midi|composite/i.test(n) ? 1 : -1;
+    const ins = [...access.inputs.values()].filter((p) => live(p) && rank(p.name || "") >= 0)
+      .sort((a, b) => rank(a.name || "") - rank(b.name || ""));
+    const outs = [...access.outputs.values()].filter((p) => live(p) && rank(p.name || "") >= 0);
+    let found = null;
+    for (const input of ins) {
+      const output = outs.find((o) => o.name === input.name) || (outs.length === 1 ? outs[0] : null);
+      if (!output) continue;
+      const link = new Link((d) => output.send(d), {
+        timeout: 300,
+        onUnknown: (f) => console.debug("ignored reply", f),
+        onTimeout: () => { if (dev) sayK("noreply"); },
+        onPush: (f) => onPush(f),
+        onGap: () => { rewatch = true; },
+      });
+      input.onmidimessage = (e) => link.receive(e.data);
+      if (input.open) await input.open().catch(() => {});
+      if (rank(input.name || "") > 0) {                 /* (not named Felucca: does it answer as one) */
+        let ok = false;
+        try { await link.request(req.info(), { timeout: 500, retries: 2, quiet: true }); ok = true; } catch (e) {}
+        if (!ok) { input.onmidimessage = null; link.close(); continue; }
+      }
+      found = { link, input, output };
+      break;
+    }
+    if (!found) {
+      const names = [...access.inputs.values()].filter(live).map((p) => p.name || "?");
+      sayK("nodevice", names.length ? ` (MIDI: ${names.join(", ")})` : " (MIDI: none)");
+      return;
+    }
+    const { link, input, output } = found;
     dev = { link, input, output, info: null, pdesc: [], gdesc: [], names: [], dump: null, steps: [], slotUsed: [null, null, null, null],
       keys: null, watch: false, bank: null };
     connectedDevice = dev;
@@ -2948,7 +2970,7 @@ function disconnect(reasonKey = "disconnected") {
 
 function onState(e) {
   const p = e.port;
-  if (!p || !/felucca/i.test(p.name || "")) return;
+  if (!p || !(/felucca|shard/i.test(p.name || "") || (dev && (p.id === dev.input.id || p.id === dev.output.id)))) return;
   if (dev && p.state === "disconnected" && (p.id === dev.input.id || p.id === dev.output.id)) {
     disconnect("lost");
   } else if (!dev && wantConnected && p.state === "connected" && p.type === "output") {
