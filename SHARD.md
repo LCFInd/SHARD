@@ -118,6 +118,28 @@ SHARD's look is black and white, whatever COLOR says. A **CUSTOM** theme (Felucc
 
 The greys (labels, inactive things, rules, wells) are the background mixed toward the text, in the same steps as the black-and-white greys. In the editor's Settings tab, the **Theme editor** has colour pickers, starting themes, a preview of the LOOP screen, readability warnings and a live preview on the FM-1 (PALETTE_SET op 0). Save stores the theme (op 1), Discard drops the preview (op 3), and Remove deletes CUSTOM (op 2). Export and Import use a small JSON file. MENU > DISPLAY > COLOR on the FM-1 switches between CUSTOM and the black and white.
 
+## The SAMPLE engine: START, LEN and PLAY
+
+SAMPLE's second EDIT page is **TRIM** (it was TONE): CUT, **START**, DRV, **LEN**. Its first page's LOOP is now **PLAY**. Between them, a sample can be trimmed to any part and played in either direction, down to a single-cycle loop that plays like a wavetable oscillator for bass and melodies.
+
+- **START** (0–100 %) is where the region begins in the zone. Moving it while a LOOP plays moves the loop (a wavetable scan).
+- **LEN** is the region's length from START, on the ENV time scale. Its steps are fine at the short end (1.1 ms upward, for single cycles) and coarse toward the top; 10 s (the top) is the rest of the sample.
+- **PLAY**:
+  - ONE: a one-shot through the region.
+  - SMPL: the sample's own loop, as LOOP ON was. It starts at START, and LEN ends only a sample without a loop.
+  - LOOP: loops the region.
+  - PONG: plays the region forward, then back, and so on.
+  - REV: a reverse one-shot.
+  - RLOOP: loops the region in reverse.
+
+The old LOOP OFF / ON are PLAY ONE / SMPL, so saved sounds play as before, bit for bit (the regression goldens are unchanged). That includes the old loop's join, where the last sample before a wrap is the one before the loop start.
+
+How it works (`eng_sample.c` `sx_*`): the samples are IMA ADPCM, which decodes only forward from a known state. Each voice reads its zone through two cached 256-sample segments, decoded from a seek index (the decoder state before every 256th sample of each zone of the SET), as GRAIN does. Any position in either direction is then plain arithmetic, at about one decode per source sample, as before. The index and the caches (11.5 KB) live in the track's engine memory (`engines.c` `eng_mem`), not in RAM's budget. `sample_block` builds the index one entry per block (four while a voice waits for one), and the voices extend it as they decode forward. A START far into a SET loaded a moment ago therefore waits for its entry: about 30 ms at most for a built-in set, longer for a full user slot.
+
+Saves of before had 0 in the unused E5 and E7. START 0 is the start, and LEN's minimum is 1, so a stored 0 is the whole sample: projects (`project.c` `proj_smp_len`) and user presets (`upreset.c` `up_migrate`) are corrected on load, and the engine reads 0 as the whole sample too.
+
+The EDIT pages show START..END tinted, with its waveform bright and the rest dim. Its edges are drawn (with PLAY SMPL, the zone's loop points instead), and a red line marks each sounding voice's read position.
+
 ## The GRAIN engine's view (its EDIT pages)
 
 Both GRAIN EDIT pages (GRAN and SPRY) show the waveform of the zone the last note picked, the same view SAMPLE uses (`sample_wave`). On top of it:

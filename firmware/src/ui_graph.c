@@ -616,20 +616,55 @@ static void sample_wave_tick(const track_t *t)
     sample_wave.ready = sample_wave.pos == z->n;
 }
 
+/* SAMPLE's EDIT pages: the zone the last note picked; (SHARD, 2026-11-15) START..END tinted and its waveform in the
+ * theme colour, the rest DIM, the edges in MID (PLAY SMPL: the zone's own loop points instead, as LOOP ON showed), and
+ * each voice of the track playing that zone a red line where it reads (ux.env, as LOOP and GRAIN) */
+#define SX_GX(q, n) (12 + (int32_t)muldiv32((q) < (n) ? (q) : (n) - 1u, 216u, (n)))
 static void graph_sample(uint16_t c)
 {
-    uint32_t i;
+    uint32_t i, lo = 0, hi = 0, n;
+    const track_t *t = TSEL;
     const smp_zone_t *z = sample_wave.zone;
+    int32_t x0 = 12, x1 = 227, smpl = t->p[P_E3] == SX_SMPL;
+    n = z->n;
+    if (n) {
+        sx_region(t->p, z, &lo, &hi);
+        x0 = SX_GX(lo, n);
+        x1 = SX_GX(hi ? hi - 1u : 0u, n);
+    }
+    if (n && !smpl && x1 > x0)
+        cv_rect(x0, 6, x1 - x0 + 1, 85, T_TINT);
     cv_rect(PANEL_X0, 48, PANEL_W, 1, T_RAISE);
-    for (i = 0; i < SAMPLE_WAVE_COLS; i++) {
-        int32_t x = 12 + (int32_t)i * 216 / (SAMPLE_WAVE_COLS - 1u);
-        cv_line(x, 48 - sample_wave.hi[i] * 38 / sample_wave.peak,
-                x, 48 - sample_wave.lo[i] * 38 / sample_wave.peak, c);
+    for (i = 0; i < 216u; i++) {                     /* 96 columns over the 216 */
+        uint32_t k = i * SAMPLE_WAVE_COLS / 216u;
+        int32_t x = 12 + (int32_t)i;
+        cv_line(x, 48 - sample_wave.hi[k] * 38 / sample_wave.peak, x, 48 - sample_wave.lo[k] * 38 / sample_wave.peak,
+                smpl || (x >= x0 && x <= x1) ? c : T_DIM);
     }
-    if (z->looped && TSEL->p[P_E3]) {
-        int32_t left = 12 + (int32_t)(z->ls * 216u / z->n), right = 12 + (int32_t)(z->le * 216u / z->n);
+    if (smpl && z->looped) {
+        int32_t left = SX_GX(z->ls, n), right = SX_GX(z->le, n);
         cv_line(left, 4, left, 90, T_MID); cv_line(right, 4, right, 90, T_MID);
+    } else if (n) {
+        cv_line(x0, 4, x0, 90, T_MID); cv_line(x1, 4, x1, 90, T_MID);
     }
+    for (i = 0; i < NVOICE && n; i++) {              /* the voices reading this zone */
+        const voice_t *v = &t->v[i];
+        if (v->active && !v->s[6] && smp_zone((uint32_t)v->s[4]) == z && v->ph[0] < n) {
+            int32_t x = SX_GX(v->ph[0], n);
+            cv_rect(x > 226 ? 226 : x, 2, 2, 89, ux.env);
+        }
+    }
+}
+/* graph_signature: the region and the voices' columns, so the playheads move */
+static uint32_t sample_sig(const track_t *t)
+{
+    const smp_zone_t *z = sample_wave.zone;
+    uint32_t i, h = 2166136261u, n = z && z->n ? z->n : 1u;
+    h = (h ^ (uint32_t)t->p[P_E3] ^ (uint32_t)t->p[P_E5] << 8 ^ (uint32_t)t->p[P_E7] << 16) * 16777619u;
+    for (i = 0; i < NVOICE; i++)
+        if (t->v[i].active && !t->v[i].s[6])
+            h = (h ^ (t->v[i].ph[0] < n ? t->v[i].ph[0] * 216u / n : 999u) ^ i << 12) * 16777619u;
+    return h;
 }
 
 /* GRAIN's EDIT pages (SHARD, 2026-11-14): the zone the last note picked (sample_wave, as SAMPLE's), POS's spread
@@ -1460,7 +1495,8 @@ static uint32_t graph_signature(void)
     if ((pg->scope == SC_ENGINE || fop_page(pg->graph)) && t->eng_req % NENGINES == ENGI_FM6)   /* the patch (PAT's algorithm,
                                                      * levels, FB; the operator pages: the operator, the stage) */
         h ^= (fm6_pgen[(t - trk) % NTRK] + 1u) * 2246822519u + (fop_op + 1u) * 40503u + (fop_stg + 1u) * 7919u;
-    if (pg->scope == SC_ENGINE && ENGINES[t->eng_req % NENGINES] == &ENG_SAMPLE) h ^= sample_wave.pos * 13u + sample_wave.key;
+    if (pg->scope == SC_ENGINE && ENGINES[t->eng_req % NENGINES] == &ENG_SAMPLE)
+        h = (h ^ (sample_wave.pos * 13u + sample_wave.key) ^ sample_sig(t)) * 16777619u;   /* (SHARD: + the playheads) */
 #if FELUCCA_MANGLER
     if (pg->scope == SC_ENGINE && ENGINES[t->eng_req % NENGINES] == &ENG_GRAIN)   /* (SHARD) the scrub, the grains */
         h = (h ^ sample_wave.pos * 13u ^ sample_wave.key ^ grain_sig(t)) * 16777619u;

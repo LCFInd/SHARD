@@ -131,6 +131,8 @@ static void up_migrate(up_rec_t *r)
         r->engine = ENGI_DRUM;
         for (k = 0; k < 8u; k++) up_set_value(r, r->np - 8u + k, e[k]);
     }
+    if (r->engine == ENGI_SAMPLE && e[7] <= 0)    /* (SHARD) SAMPLE's LEN, unused before: the whole sample */
+        up_set_value(r, r->np - 1u, 127);
 }
 
 static void up_pat_norm(uint8_t *note, uint8_t *flags);

@@ -685,6 +685,17 @@ int main(void)
         bad += check("FUN4 with a SAMPLE PERC track: DRUM's kit, the same", ok);
 #undef PERC_OK
     }
+    {   /* (SHARD) SAMPLE's E7, unused before, is LEN: a project of before (0) loads with 127 (the whole sample), on
+         * every import; a stored LEN and other engines' E7 stay */
+        static project_t s7;
+        memset(&s7, 0, sizeof s7);
+        s7.t[0].engine = ENGI_SAMPLE; s7.t[0].p[P_E7] = 0;
+        s7.t[1].engine = ENGI_SAMPLE; s7.t[1].p[P_E7] = 30;
+        s7.t[2].engine = ENGI_GRAIN; s7.t[2].p[P_E7] = 0;
+        proj_smp_len(&s7);
+        bad += check("SAMPLE: a project of before gets LEN 127 (E7 0); a stored LEN and other engines stay",
+                     s7.t[0].p[P_E7] == 127 && s7.t[1].p[P_E7] == 30 && s7.t[2].p[P_E7] == 0);
+    }
     printf("%s\n", bad ? "PROJECT FORMAT TEST FAILED" : "project format test passed");
     return bad != 0;
 }

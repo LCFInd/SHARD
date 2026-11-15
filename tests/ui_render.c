@@ -808,7 +808,7 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
        S_SHARD_SLICES, S_SHARD_HOME, S_LOOP, S_LOOP_PLAY, S_LOOP_REL, S_ENV_SHARD, S_SHFX_GRAIN, S_SHFX_GSIZE, S_SHFX_BGRAIN, S_SHFX_FDBK, S_SHFX_PRESS,
 #if FELUCCA_MANGLER
        S_ARP_PEEK, S_ARP_HELD, S_ARP_KNOBS, S_ARP_PRE, S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY, S_LIVE_OFF, S_LIVE_PLAY, S_LIVE_LAYER,
-       S_EDIT_GRAIN_PLAY, S_THEME_LOOP, S_THEME_SLICES,
+       S_EDIT_GRAIN_PLAY, S_THEME_LOOP, S_THEME_SLICES, S_SAMPLE_TRIM,
 #endif
        S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
@@ -846,7 +846,7 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "shard_presets", "shard_slices", "shard_home", "loop", "loop_playing", "loop_release", "edit_family_shard", "shfx_grain", "shfx_grain_size", "shfx_bus_grain", "shfx_bus_fdbk", "shfx_bus_press",
 #if FELUCCA_MANGLER
     "arp_layer", "arp_layer_held", "arp_layer_knobs", "arp_layer_pre", "bounce", "bounce_used", "bounce_busy", "live_off", "live_playing", "live_layer",
-    "edit_grain_playing", "theme_custom_loop", "theme_custom_slices",
+    "edit_grain_playing", "theme_custom_loop", "theme_custom_slices", "sample_trim_playing",
 #endif
 };
 
@@ -1742,6 +1742,21 @@ static void setup(int s)
     /* ENV > LOOP (SHARD; was EDIT's first page): BREAK whole, slice 5 picked, the envelope from it (DEC hot); two notes
      * playing (their slices inverted, the playheads); a long release; EDIT on a SHARD track (its first page: EDIT 1) */
 #if FELUCCA_MANGLER
+    case S_SAMPLE_TRIM: {                        /* SAMPLE TRIM: START 40 %, LEN ~0.2 s, PLAY PONG, a note playing */
+        int32_t o[2u * CTL];
+        uint32_t i, b;
+        eng(ENGI_SAMPLE); go_title("EDIT 2"); last_note = 60;
+        TSEL->p[P_E0] = 2; TSEL->p[P_E3] = SX_PONG; TSEL->p[P_E5] = 51; TSEL->p[P_E7] = 90;
+        for (b = 0; b < 256u && (b < 1u || TSEL->xf_on || TSEL->eng_req != TSEL->engine); b++)
+            mix_block(o, CTL);
+        trk_note_on(TSEL, 60, 110);
+        for (b = 0; b < 500u; b++)
+            mix_block(o, CTL);
+        sample_wave_tick(TSEL);
+        for (i = 0; i < 4000u && !sample_wave.ready; i++) sample_wave_tick(TSEL);
+        ui.msg_t = 0;
+        break;
+    }
     case S_THEME_LOOP:                           /* (SHARD) CUSTOM over SWISS: a dark blue, amber main, a coral red */
     case S_THEME_SLICES:
         ux_cust.c1 = RGB(16, 22, 40); ux_cust.c2 = RGB(255, 176, 48); ux_cust.c3 = RGB(232, 236, 245);

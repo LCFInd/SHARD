@@ -835,6 +835,133 @@ static void pre_tests(void)
 }
 
 
+/* 16: SAMPLE's START, LEN and PLAY (eng_sample.c sx_*): the order of positions each mode reads, every value as a plain
+ * decode of the zone gives, START moved while a loop plays, LEN 0 (a save of before) the whole zone, a tiny held loop
+ * that sounds on past the zone's length, a far START waiting for the index (the projects' LEN 0 -> 127: proj_test) */
+static int16_t smp_ref[65536];
+static uint32_t smp_seq(track_t *t, voice_t *v, uint32_t *pos, int32_t *val, uint32_t want)
+{
+    const smp_zone_t *z = smp_zone((uint32_t)v->s[4]);
+    uint32_t k = 0, guard = 0, zl = sx_zl((uint32_t)t->p[P_E0] % SMP_NALL, (uint32_t)v->s[4]);
+    while (k < want && guard++ < 200000u) {
+        int32_t x;
+        if (v->ph[0] >= z->n) {
+            pos[k] = 0xFFFFFFFFu;                       /* (the end of a one-shot) */
+            return k + 1u;
+        }
+        pos[k] = v->ph[0];
+        x = sx_next(sx_of(t), v, z, zl, t->p);
+        if (x == SX_WAIT) {
+            sample_block(t);
+            continue;
+        }
+        val[k++] = x;
+    }
+    return k;
+}
+static void smp_tests(void)
+{
+    static uint32_t pos[4096];
+    static int32_t val[4096];
+    track_t *t = &trk[1];
+    voice_t *v = &t->v[0];
+    const smp_zone_t *z;
+    uint32_t i, n, lo, hi, k, ok, bad = 0, m;
+    int32_t pr = 0, ix = 0;
+    voices_off();
+    host_tracks_init();
+    host_preset(t, ENGI_SAMPLE, 2);                     /* FLUTE: a built-in set, its zones looped */
+    eng_mem_claim(t);
+    t->p[P_E5] = 32;                                    /* START 25 % */
+    t->p[P_E7] = 40;                                    /* LEN ~ 9 ms */
+    v->note = 72;
+    sample_note_on(t, v);
+    z = smp_zone((uint32_t)v->s[4]);
+    n = z->n;
+    for (i = 0; i < n && i < 65536u; i++)
+        smp_ref[i] = (int16_t)sx_dec(z, i, &pr, &ix);
+    sx_region(t->p, z, &lo, &hi);
+    check("SAMPLE: START 25 %, LEN 40: a region inside the zone", lo == n * 32u / 128u && hi > lo + 50u && hi < n,
+          "%u..%u of %u", lo, hi, n);
+    for (m = SX_ONE; m <= SX_RLOOP; m++) {
+        uint32_t len = hi - lo, cnt;
+        t->p[P_E3] = (int16_t)m;
+        memset(v, 0, sizeof *v);
+        v->note = 72;
+        sample_note_on(t, v);
+        cnt = smp_seq(t, v, pos, val, 3u * len + 3u);
+        ok = 1;
+        for (k = 0; k < cnt; k++) {
+            uint32_t want;
+            if (m == SX_ONE) want = k < len ? lo + k : 0xFFFFFFFFu;
+            else if (m == SX_SMPL) want = lo + k;   /* (looped zones: on past LEN toward their own loop) */
+            else if (m == SX_LOOP) want = lo + k % len;
+            else if (m == SX_PONG) { uint32_t per = 2u * (len - 1u), q = k % per; want = q < len ? lo + q : hi - 1u - (q - len + 1u); }
+            else if (m == SX_REV) want = k < len ? hi - 1u - k : 0xFFFFFFFFu;
+            else want = hi - 1u - k % len;
+            if (pos[k] != want || (want != 0xFFFFFFFFu && val[k] != smp_ref[want]))
+                ok = 0;
+            if (want == 0xFFFFFFFFu)
+                break;
+        }
+        bad += !ok;
+        printf("shard: SAMPLE PLAY %-5s: %u reads, %s\n", SX_PLAY_NAMES[m], cnt, ok ? "positions and values as a plain decode" : "WRONG");
+    }
+    check("SAMPLE PLAY: ONE SMPL LOOP PONG REV RLOOP read in their order, every value a plain decode's", bad == 0u, "%u modes wrong", bad);
+    /* START moved while LOOP plays: the next pass starts at the new START (a wavetable scan) */
+    t->p[P_E3] = SX_LOOP;
+    memset(v, 0, sizeof *v);
+    v->note = 72;
+    sample_note_on(t, v);
+    smp_seq(t, v, pos, val, (hi - lo) / 2u);
+    t->p[P_E5] = 64;
+    sx_region(t->p, z, &lo, &hi);
+    k = smp_seq(t, v, pos, val, 3u * (hi - lo));
+    for (i = 0, ok = 0; i < k; i++)
+        ok |= pos[i] == lo;
+    check("SAMPLE LOOP: START moved while it plays: the loop moves with it", ok && lo == n / 2u, "new START %u", lo);
+    t->p[P_E7] = 0;                                     /* a save of before: the slot was unused */
+    sx_region(t->p, z, &lo, &hi);
+    check("SAMPLE LEN 0 (a project or preset of before): the rest of the zone", hi == n, "%u..%u of %u", lo, hi, n);
+    {   /* a tiny held loop (LEN 5 ~ 1.4 ms, a wavetable) through the whole engine: it sounds on past the zone's length */
+        double e0, e1;
+        uint32_t b, zone_blocks = n / CTL + 1u;
+        voices_off();
+        host_tracks_init();
+        host_preset(T, ENGI_SAMPLE, 2);
+        T->p[P_E3] = SX_LOOP; T->p[P_E5] = 40; T->p[P_E7] = 5; T->p[P_SUS] = 127;
+        blocks(8);
+        trk_note_on(T, 60, 110);
+        out_energy = 0; blocks(zone_blocks); e0 = out_energy;
+        out_energy = 0; blocks(zone_blocks); e1 = out_energy;
+        for (b = 0, k = 0; b < NVOICE; b++) k += T->v[b].active;
+        check("SAMPLE LOOP LEN 5 (a single cycle, held): sounds on past the zone's length, as loud", k >= 1u && e1 > e0 * 0.7 && e0 > 0,
+              "energy %.3g then %.3g, %u voice", e0, e1, k);
+        trk_note_off(T, 60);
+    }
+    {   /* a far START right after the SET changed: the voice waits for its index entry, then sounds (within ~0.1 s) */
+        uint32_t b, first = 0;
+        voices_off();
+        host_tracks_init();
+        host_preset(T, ENGI_SAMPLE, 3);                 /* SAX: a fresh index */
+        T->p[P_E3] = SX_ONE; T->p[P_E5] = 120; T->p[P_E7] = 127;
+        blocks(1);
+        trk_note_on(T, 60, 110);
+        for (b = 1; b <= 400u && !first; b++) {   /* (the voice's first read: s[5] bit 1; the FX tails of the tests
+                                                 * before would fool a level) */
+            uint32_t q;
+            blocks(1);
+            for (q = 0; q < NVOICE; q++)
+                if (T->v[q].active && T->v[q].note == 60 && (T->v[q].s[5] & 2))
+                    first = b;
+        }
+        check("SAMPLE START 94 % on a fresh SET: waits for its index, then plays (within ~0.1 s)", first > 2u && first < 140u,
+              "plays after %u blocks", first);
+        trk_note_off(T, 60);
+    }
+    voices_off();
+}
+
 /* 15: udiv64 (core.h: the device has no 64-bit division) against the compiler's, on random and edge values */
 static void udiv_tests(void)
 {
@@ -1636,6 +1763,7 @@ int main(int argc, char **argv)
     fp_tests();
     pre_tests();
     udiv_tests();
+    smp_tests();
 
     /* 7: demos */
     {

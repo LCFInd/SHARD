@@ -356,6 +356,20 @@ static void proj_fm4(project_t *q)
 #endif
 }
 
+/* (SHARD, 2026-11-15) SAMPLE's E7, unused before, is LEN (eng_sample.c; its minimum 1): a stored 0 is a project of
+ * before, and plays the whole sample (127). On every load, idempotent */
+static void proj_smp_len(project_t *q)
+{
+    uint32_t k, hit = 0;
+    for (k = 0; k < NTRK; k++)
+        if (q->t[k].engine == ENGI_SAMPLE && q->t[k].p[P_E7] <= 0) {
+            q->t[k].p[P_E7] = 127;
+            hit = 1;
+        }
+    if (hit)
+        q->sum = proj_sum(q);
+}
+
 /* SAMPLE tracks of the retired PERC set (SET 4) -> DRUM with its default kit (see the top; core.h drum_from_perc,
  * whatever format the project is: on every load, the stored record keeps what it holds until it is saved again).
  * Their motion events on the EDIT values go. Idempotent */
@@ -503,6 +517,7 @@ static int proj_import(project_t *q, const void *b, int n)
         return 0;
     proj_fm4(q);
     proj_perc(q);
+    proj_smp_len(q);
     return 1;
 }
 static int proj_import_any(project_t *q, const void *b, int n)
@@ -1065,6 +1080,7 @@ static int project_restore_runtime(const project_t *input)
     proj_phys(p);                                       /* .. before PHYS lost DUST and DRUM */
     proj_fm4(p);                                        /* .. that had DIGITAL tracks */
     proj_perc(p);                                       /* .. or SAMPLE PERC tracks */
+    proj_smp_len(p);                                    /* .. or SAMPLE without LEN (SHARD) */
     transport_req = 2;
     panic_req = (1u << NTRK) - 1u;
     fm1_irq_off();                                      /* the audio ISR must not see half a project */

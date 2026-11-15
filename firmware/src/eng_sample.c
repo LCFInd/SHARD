@@ -200,6 +200,225 @@ static inline int32_t sample_next(const smp_zone_t *z, voice_t *v, int loop)
     return v->s[0];
 }
 
+/* ---- SHARD (2026-11-15): START, LEN and PLAY. A voice reads its zone through a two-segment cache (256 samples each,
+ * per voice, in the part's engine memory: engines.c eng_mem) decoded from a seek index (the ADPCM state before every
+ * 256th sample of each zone of the SET, as GRAIN's: built a few entries a block by sample_block, and by the voices
+ * themselves as they decode forward). Any position in either direction is then plain arithmetic: a loop of START..END,
+ * a ping-pong, a reverse, START moved while a loop plays (a wavetable scan), at one decode per source sample as before.
+ * PLAY (P_E3, was LOOP OFF / ON): ONE one-shot, SMPL the zone's own loop (as LOOP ON), LOOP START..END, PONG back and
+ * forth, REV a reverse one-shot, RLOOP a reverse loop. START (P_E5) 0..127 of the zone; LEN (P_E7) the length from
+ * START on the ENV time scale, 127 (10 s) the rest of the zone; a stored 0 (a project or preset of before: the slot
+ * was unused) is the rest of the zone too (LEN's minimum is 1). */
+enum { SX_ONE, SX_SMPL, SX_LOOP, SX_PONG, SX_REV, SX_RLOOP };
+static const char *const SX_PLAY_NAMES[] = {"ONE", "SMPL", "LOOP", "PONG", "REV", "RLOOP"};
+#define SX_SEG_LOG2 8
+#define SX_SEG (1u << SX_SEG_LOG2)
+#define SX_NIDX 1024                /* index entries per part: a full user slot (80 KB, 160k samples) is 640 */
+#define SX_MAXZ 32
+typedef struct {
+    int16_t buf[NVOICE][2][SX_SEG];   /* each voice's two cached segments */
+    int16_t ipred[SX_NIDX];         /* the index: the decoder state before sample k * SX_SEG of a zone */
+    uint8_t iidx[SX_NIDX];
+    uint16_t zbase[SX_MAXZ], zcnt[SX_MAXZ], zdone[SX_MAXZ];   /* a zone's entries: first, all, built */
+    uint32_t stamp;                 /* the user slots' generation it was built for */
+    uint16_t gen;                   /* bumped on each rebuild: the voices' caches of before are stale */
+    uint8_t src;                    /* SET + 1 the index holds, 0 = none */
+    uint8_t nz;
+    uint8_t want;                   /* a voice waits for an entry: build faster */
+} sx_part_t;
+ENG_MEM_FITS("SAMPLE", sizeof(sx_part_t));
+static sx_part_t *sx_of(const track_t *t) { return (sx_part_t *)ENG_MEM((uint32_t)(t - trk) % NPART); }
+static uint32_t sx_nz(uint32_t si) { return si < SMP_NSETS ? SMP_SETS[si].nz : usr_nz[(si - SMP_NSETS) % SMP_USER_SLOTS]; }
+static const smp_zone_t *sx_zone(uint32_t si, uint32_t zl)
+{
+    return si < SMP_NSETS ? &SMP_ZONES[SMP_SETS[si].z0 + zl] : &usr_zone[(si - SMP_NSETS) % SMP_USER_SLOTS][zl & 15u];
+}
+/* a voice's zone (s[4]) as the set's zone number, SX_MAXZ = none */
+static uint32_t sx_zl(uint32_t si, uint32_t zi)
+{
+    if (zi & 0x8000u)
+        return si >= SMP_NSETS ? zi & 31u : SX_MAXZ;
+    return si < SMP_NSETS && zi >= SMP_SETS[si].z0 && zi - SMP_SETS[si].z0 < SMP_SETS[si].nz ? zi - SMP_SETS[si].z0 : SX_MAXZ;
+}
+static inline int32_t sx_dec(const smp_zone_t *z, uint32_t pos, int32_t *pred, int32_t *idx)
+{
+    uint32_t b = SMP_DATA[z->off + (pos >> 1)], code = (pos & 1u) ? (b >> 4) : (b & 15u);
+    int32_t step = IMA_STEP[*idx], vd = step >> 3;
+    if (code & 4u)
+        vd += step;
+    if (code & 2u)
+        vd += step >> 1;
+    if (code & 1u)
+        vd += step >> 2;
+    *pred = clamp(*pred + ((code & 8u) ? -vd : vd), -32768, 32767);
+    *idx = clamp(*idx + IMA_IDX[code & 7u], 0, 88);
+    return *pred;
+}
+/* the index for SET si (its stamp: built-in 0, a user slot its generation) */
+static void sx_check(sx_part_t *P, uint32_t si)
+{
+    uint32_t i, tot = 0, nz, stamp = si < SMP_NSETS ? 0u : smp_user_gen;
+    if (P->src == si + 1u && P->stamp == stamp)
+        return;
+    nz = sx_nz(si);
+    P->src = (uint8_t)(si + 1u);
+    P->stamp = stamp;
+    P->gen++;
+    P->nz = (uint8_t)(nz < SX_MAXZ ? nz : SX_MAXZ);
+    for (i = 0; i < P->nz; i++) {
+        uint32_t c = (sx_zone(si, i)->n + SX_SEG - 1u) >> SX_SEG_LOG2;
+        if (tot + c > SX_NIDX)
+            c = 0;                                  /* past the capacity: that zone stays silent */
+        P->zbase[i] = (uint16_t)tot;
+        P->zcnt[i] = (uint16_t)c;
+        P->zdone[i] = c ? 1u : 0u;
+        if (c) {
+            P->ipred[tot] = 0;                      /* a zone starts at the state (0, 0) */
+            P->iidx[tot] = 0;
+        }
+        tot += c;
+    }
+}
+/* one more entry: zone zl's (SX_MAXZ: the first not done) */
+static void sx_build(sx_part_t *P, uint32_t zl)
+{
+    uint32_t i, k, e, pos;
+    int32_t pred, idx;
+    const smp_zone_t *z;
+    if (zl >= P->nz || P->zdone[zl] >= P->zcnt[zl])
+        for (zl = 0; zl < P->nz && P->zdone[zl] >= P->zcnt[zl]; zl++)
+            ;
+    if (zl >= P->nz)
+        return;
+    z = sx_zone(P->src - 1u, zl);
+    k = P->zdone[zl];
+    e = P->zbase[zl] + k - 1u;
+    pred = P->ipred[e];
+    idx = P->iidx[e];
+    pos = (k - 1u) << SX_SEG_LOG2;
+    for (i = 0; i < SX_SEG && pos + i < z->n; i++)
+        sx_dec(z, pos + i, &pred, &idx);
+    P->ipred[e + 1u] = (int16_t)pred;
+    P->iidx[e + 1u] = (uint8_t)idx;
+    P->zdone[zl] = (uint16_t)(k + 1u);
+}
+/* sample p of the voice's zone through its cache (ph[2]: two segment tags + 1 in bits 0..10 and 11..21, the way used
+ * last in bit 22, the index generation in 23..31); -32769 = its segment is not indexed yet (the voice waits) */
+#define SX_WAIT (-32769)
+static int32_t sx_at(sx_part_t *P, voice_t *v, const smp_zone_t *z, uint32_t zl, uint32_t p)
+{
+    uint32_t seg = p >> SX_SEG_LOG2, tag = seg + 1u, c = v->ph[2], w, i, e;
+    int16_t *b;
+    int32_t pred, idx;
+    if ((c >> 23) != (P->gen & 511u))
+        c = (uint32_t)(P->gen & 511u) << 23;        /* (a rebuilt index: nothing cached is valid) */
+    if ((c & 2047u) == tag)
+        w = 0;
+    else if (((c >> 11) & 2047u) == tag)
+        w = 1;
+    else {
+        if (zl >= P->nz || seg >= P->zdone[zl]) {
+            v->ph[2] = c;
+            P->want = 1;
+            return SX_WAIT;
+        }
+        w = (c >> 22) & 1u ? 0u : 1u;               /* the way not used last */
+        b = P->buf[v->s[5] >> 8 & 7u][w];
+        e = P->zbase[zl] + seg;
+        pred = P->ipred[e];
+        idx = P->iidx[e];
+        for (i = 0; i < SX_SEG && (seg << SX_SEG_LOG2) + i < z->n; i++)
+            b[i] = (int16_t)sx_dec(z, (seg << SX_SEG_LOG2) + i, &pred, &idx);
+        if (seg + 1u == P->zdone[zl] && seg + 1u < P->zcnt[zl]) {   /* (it builds the index as it goes) */
+            P->ipred[e + 1u] = (int16_t)pred;
+            P->iidx[e + 1u] = (uint8_t)idx;
+            P->zdone[zl] = (uint16_t)(seg + 2u);
+        }
+        c = w ? (c & ~(2047u << 11)) | tag << 11 : (c & ~2047u) | tag;
+    }
+    v->ph[2] = (c & ~(1u << 22)) | w << 22;
+    return P->buf[v->s[5] >> 8 & 7u][w][p & (SX_SEG - 1u)];
+}
+/* START..END of zone z for the track's values (END exclusive, >= START + 2) */
+static void sx_region(const int16_t *p, const smp_zone_t *z, uint32_t *lo, uint32_t *hi)
+{
+    uint32_t n = z->n, a = muldiv32((uint32_t)clamp(p[P_E5], 0, 127), n, 128u), len, hz;
+    int32_t lv = p[P_E7];
+    if (n < 2u) {
+        *lo = 0;
+        *hi = n;
+        return;
+    }
+    if (a > n - 2u)
+        a = n - 2u;
+    if (lv <= 0 || lv >= 127)
+        len = n;                                    /* the rest of the zone */
+    else {
+        hz = (uint32_t)(((uint64_t)z->rate * 44100u) >> 16);   /* the zone's rate, Hz */
+        len = muldiv32(TIME_MS_X10[lv], hz, 10000u);
+    }
+    if (len < 2u)
+        len = 2u;
+    *lo = a;
+    *hi = len >= n - a ? n : a + len;
+}
+/* the next source sample in PLAY's order; the position ph[0] (the index to read), s[5] bit 0 the direction (1 back),
+ * bits 8..10 the voice's buffers; SX_WAIT, or s[6] = 1 when a one-shot is past its end */
+static int32_t sx_next(sx_part_t *P, voice_t *v, const smp_zone_t *z, uint32_t zl, const int16_t *p)
+{
+    uint32_t lo, hi, pos = v->ph[0], mode = (uint32_t)clamp(p[P_E3], 0, SX_RLOOP);
+    int32_t back = v->s[5] & 1, x;
+    sx_region(p, z, &lo, &hi);
+    if (mode == SX_SMPL && z->looped)
+        hi = z->n;                                  /* (the zone's loop: LEN does not end it) */
+    if (pos >= z->n)
+        pos = z->n - 1u;
+    x = sx_at(P, v, z, zl, pos);
+    if (x == SX_WAIT)
+        return x;
+    switch (mode) {
+    case SX_ONE: case SX_SMPL: default:
+        pos++;
+        if (mode == SX_SMPL && z->looped && pos > z->le) {
+            pos = z->ls;
+            x = z->pred;                            /* (as LOOP ON did: the last sample before a wrap is the one
+                                                     * before the loop start, its stored state: bit for bit) */
+        }
+        else if (pos >= hi)
+            pos = z->n;                             /* (past the end: the one-shot ends, sample_render) */
+        break;
+    case SX_LOOP:
+        pos = pos + 1u >= hi || pos + 1u < lo ? lo : pos + 1u;
+        break;
+    case SX_PONG:
+        if (!back) {
+            if (pos + 1u >= hi) { back = 1; pos = hi >= 2u ? hi - 2u : 0u; } else pos++;
+        } else {
+            if (pos <= lo || pos > hi) { back = 0; pos = lo + 1u < hi ? lo + 1u : lo; } else pos--;
+        }
+        break;
+    case SX_REV:
+        if (pos <= lo || pos >= hi) pos = z->n; else pos--;
+        break;
+    case SX_RLOOP:
+        pos = pos <= lo || pos >= hi ? hi - 1u : pos - 1u;
+        break;
+    }
+    v->s[5] = (v->s[5] & ~1) | back;
+    v->ph[0] = pos;
+    return x;
+}
+/* the first position for PLAY (the note's start): REV and RLOOP from the end, the rest from START */
+static void sx_start(const track_t *t, voice_t *v)
+{
+    const smp_zone_t *z = smp_zone((uint32_t)v->s[4]);
+    uint32_t lo, hi, mode = (uint32_t)clamp(t->p[P_E3], 0, SX_RLOOP);
+    if (!z->n)
+        return;
+    sx_region(t->p, z, &lo, &hi);
+    v->ph[0] = mode == SX_REV || mode == SX_RLOOP ? hi - 1u : lo;
+}
+
 static void sample_note_on(track_t *t, voice_t *v)
 {
     uint32_t si = (uint32_t)t->p[P_E0] % SMP_NALL, i, zi = 0xFFFFu, width = 128u;
@@ -224,24 +443,43 @@ static void sample_note_on(track_t *t, voice_t *v)
     }
     v->ph[0] = 0;
     v->ph[1] = 0;
+    v->ph[2] = 0;                /* the segment cache: empty */
     v->s[0] = 0;
     v->s[1] = 0;
     v->s[2] = v->s[3] = 0;
+    v->s[5] = (int32_t)((uint32_t)(v - t->v) % NVOICE) << 8;   /* forward; its buffers */
     v->s[6] = zi == 0xFFFFu;     /* 1 = sample ended (one-shot); a kit key with no sound stays silent */
     v->s[7] = 0;                 /* lo-pass state */
     if (smp_set_missing(si))
         v->s[6] = 2;             /* 2 = no sample data: the sine (smp_sine; ph[0] its phase) */
+    else if (!v->s[6])
+        sx_start(t, v);
+}
+
+/* each block: the index for the SET, built on (faster while a voice waits) */
+static void sample_block(track_t *t)
+{
+    sx_part_t *P = sx_of(t);
+    uint32_t si = (uint32_t)t->p[P_E0] % SMP_NALL, k, nb;
+    if (smp_set_missing(si))
+        return;
+    sx_check(P, si);
+    nb = P->want ? 4u : 1u;
+    P->want = 0;
+    for (k = 0; k < nb; k++)
+        sx_build(P, SX_MAXZ);
 }
 
 static void sample_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const vmod_t *m)
 {
     const int16_t *p = t->p;
     const smp_zone_t *z = smp_zone((uint32_t)v->s[4]);
-    uint32_t i, frac = v->ph[1];
+    uint32_t i, frac = v->ph[1], si = (uint32_t)p[P_E0] % SMP_NALL, zl;
     int32_t d16 = clamp(m->pitch16 + p[P_E1] * 16 - z->root16, -1536, 576);   /* <= 3 octaves up: bounded decode load */
     uint32_t r = pow2_q16(d16), stepq = (r >> 8) * (z->rate >> 8);   /* Q16 samples per output */
     int32_t bits = p[P_E2], lp = 4000 + ((clamp((p[P_E4] << 8) + m->cutoff, 0, 127 << 8) * 28767) >> 15);
     int32_t drv = p[P_E6], sh = bits / 10;
+    sx_part_t *P = sx_of(t);
     if (v->s[6] == 2) {                               /* no sample data: the sine at the note's pitch + TUNE */
         smp_sine(out, n, m, p[P_E1] * 16, lp, &v->ph[0], &v->s[7]);
         return;
@@ -250,24 +488,39 @@ static void sample_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, cons
         v->active = 0;
         return;
     }
-    if (v->ph[0] == 0 && v->ph[1] == 0 && v->s[3] == 0)
-        v->s[3] = sample_next(z, v, p[P_E3]);         /* prime the interpolator */
+    sx_check(P, si);
+    zl = sx_zl(si, (uint32_t)v->s[4]);
+    if (v->ph[0] < z->n && v->ph[1] == 0 && v->s[3] == 0 && v->s[2] == 0 && !(v->s[5] & 2)) {
+        int32_t x = sx_next(P, v, z, zl, p);          /* prime the interpolator */
+        if (x == SX_WAIT)
+            return;                                   /* (its segment not indexed yet: a block later) */
+        v->s[3] = x;
+        v->s[5] |= 2;
+    }
     for (i = 0; i < n; i++) {
         int32_t s;
         frac += stepq;
         while (frac >= 65536u) {
-            frac -= 65536u;
-            v->s[2] = v->s[3];
+            int32_t x;
             if (v->ph[0] >= z->n) {                   /* one-shot reached its end */
+                v->s[2] = v->s[3];
                 v->s[6] = 1;
                 v->s[3] = 0;
+                frac -= 65536u;
                 if (frac >= 65536u) {                /* past the last sample-to-zero interval */
                     v->s[2] = 0;
                     frac &= 65535u;
                 }
                 break;
             }
-            v->s[3] = sample_next(z, v, p[P_E3]);
+            x = sx_next(P, v, z, zl, p);
+            if (x == SX_WAIT) {                       /* (a segment not indexed yet: hold this sample) */
+                frac = 65535u;
+                break;
+            }
+            frac -= 65536u;
+            v->s[2] = v->s[3];
+            v->s[3] = x;
         }
         s = v->s[2] + (((v->s[3] - v->s[2]) * (int32_t)(frac >> 1)) >> 15);
         if (sh)                                       /* BITS: 0 = clean, up to 12 bits removed */
@@ -284,16 +537,16 @@ static void sample_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, cons
 
 static const engine_t ENG_SAMPLE = {
     .name = "SAMPLE",
-    .page_title = {"SET", "TONE"},
+    .page_title = {"SET", "TRIM"},
     .edit = {
         {"SET", F_ENUM, 0, SMP_NALL - 1, 0, SMP_ALL_NAMES, 0},
         {"TUNE", F_SEMI, -24, 24, 0, 0, 0},
         {"BITS", F_INT, 0, 127, 0, 0, 0},
-        {"LOOP", F_ENUM, 0, 1, 1, N_ONOFF_E, 0},
+        {"PLAY", F_ENUM, 0, SX_RLOOP, SX_SMPL, SX_PLAY_NAMES, 0},   /* (SHARD; was LOOP OFF / ON = ONE / SMPL) */
         {"CUT", F_INT, 0, 127, 127, 0, 0},
-        {"-", F_INT, 0, 0, 0, 0, 0},
+        {"START", F_PCT, 0, 127, 0, 0, 0},                          /* (SHARD) */
         {"DRV", F_PCT, 0, 127, 0, 0, 0},
-        {"-", F_INT, 0, 0, 0, 0, 0},
+        {"LEN", F_TIME, 1, 127, 127, 0, 0},                         /* (SHARD) 127: the rest of the zone */
     },
     .presets = SMP_PRESET_TABLE,
     .npresets = SMP_NPRESETS,
@@ -301,4 +554,6 @@ static const engine_t ENG_SAMPLE = {
     .render = sample_render,
     .knob = {P_E0, P_E4, P_ATK, P_REL},
     .sampled = 1,
+    .block = sample_block,
+    .mem = sizeof(sx_part_t),
 };

@@ -364,7 +364,8 @@ class Builder:
             loop = 0 if k == "kit" else 1
             pat = ", PAT(12)" if k == "kit" else ""     # a kit: engines.c PATTERNS[11] BEAT
             si = self.alias.get(i, i)                   # an alias: the original's preset (hidden by its name)
-            L.append(f'    {{"{name}", {{{si}, 0, 0, {loop}, 127, 0, 0, 0}}, {{{a}, {d}, {s_}, {r}}}, 0, 0{pat}}},')
+            # (SHARD) E3 PLAY (0 ONE, 1 SMPL: as LOOP OFF / ON), E5 START 0, E7 LEN 127: the whole sample
+            L.append(f'    {{"{name}", {{{si}, 0, 0, {loop}, 127, 0, 0, 127}}, {{{a}, {d}, {s_}, {r}}}, 0, 0{pat}}},')
         L.append("};")
         orig = [self.alias.get(i, i) for i in range(len(named))]
         L.append("/* SET i plays SMP_SET_ORIG[i]: != i for a retired set kept as an alias (its preset i too) */")
