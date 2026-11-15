@@ -1776,6 +1776,46 @@ static void draw(int s)
     }
     if (s == S_SPLASH) {                          /* the power-on splash (main.c, before the UI): its lines, the version
                                                    * shown FELUCCA_VERSION (run_tests.sh: src/felucca.c's) */
+#if FELUCCA_MANGLER
+        /* SHARD: the owner's picture (shard_splash.h), the same in every palette: every pixel the picture's own, decoded
+         * here from the runs (the build line excepted: its box), and the build line once, right-aligned in its place */
+        static const char WANT[] = "BUILD " SHARD_BUILD;
+        splash_seen[0] = 0;
+        in_splash = 1;
+        draw_splash();
+        in_splash = 0;
+        {
+            int32_t bw = text_w(&AF_S, WANT), bx = SPL_BUILD_R - bw, by = SPL_BUILD_FOOT + 1 - AF_S_CAP_H - AF_S_CAP_Y;
+            uint32_t r = 0, left = 0, p, off = 0, red = 0;
+            uint16_t c = 0;
+            for (p = 0; p < 240u * 240u; p++) {
+                int32_t x = (int32_t)(p % 240u), y = (int32_t)(p / 240u);
+                if (!left) {
+                    c = SHARD_SPLASH_PAL[SHARD_SPLASH[r] & 15u];
+                    left = (uint32_t)(SHARD_SPLASH[r++] >> 4) + 1u;
+                }
+                left--;
+                red += c == SHARD_SPLASH_PAL[15];
+                if (!(x >= bx && x < SPL_BUILD_R && y >= by && y < by + AF_S.h) && (uint16_t)(host_screen[p] >> 8 | host_screen[p] << 8) != c)   /* (the screen holds it byte-swapped, as sent) */
+                    off++;
+            }
+            if (off || r != sizeof SHARD_SPLASH || red < 200u || bx < 120) {
+                if (rep) fprintf(rep, "FIND %-26s the splash: %u pixels not the picture's, %u of %u runs, %u red, build at x %d\n",
+                                 cur_name, off, r, (unsigned)sizeof SHARD_SPLASH, red, (int)bx);
+                nfind++;
+            }
+        }
+        {   /* (drawn once a band: the hook sees it twice, the top band's copy outside its canvas) */
+            static const char TWICE[] = "BUILD " SHARD_BUILD "|BUILD " SHARD_BUILD;
+            if (strcmp(splash_seen, TWICE)) {
+                if (rep) fprintf(rep, "FIND %-26s the splash shows '%s', not '%s'\n", cur_name, splash_seen, TWICE);
+                nfind++;
+            } else {
+                static uint8_t said;
+                if (!said++) printf("ui_render: the splash is SHARD's picture, every pixel, with '%s'\n", WANT);
+            }
+        }
+#else
         static const char WANT[] = "Felucca|" FELUCCA_VERSION "|H\xFCgelton Instruments|with community";
         splash_seen[0] = 0;
         in_splash = 1;
@@ -1813,6 +1853,7 @@ static void draw(int s)
             static uint8_t said;
             if (!said++) printf("ui_render: the splash shows the version " FELUCCA_VERSION " (FELUCCA_VERSION) and its lines\n");
         }
+#endif
         return;
     }
     ui.force = 1;

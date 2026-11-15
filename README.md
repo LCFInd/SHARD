@@ -61,7 +61,8 @@ offer a way back: Felucca's [installer](https://hugelton.github.io/Felucca/) put
 - **LIVE.** The SCL button launches each track's pattern from four saved slots.
 - **BOUNCE.** Records the mangled result into a sample slot, ready to slice again.
 - **USR4.** A fourth sample slot, up to 7.4 s.
-- **The look.** Black and white, square corners and a condensed grotesk.
+- **The look.** Black and white, square corners and a condensed grotesk, opened by SHARD's own splash art
+  (with the build code in its corner).
 
 The full reference, with every page, setting and how each part works, is in **[SHARD.md](SHARD.md)**.
 

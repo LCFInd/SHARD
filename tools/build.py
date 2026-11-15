@@ -57,6 +57,17 @@ VERSION = None                      # FELUCCA_VERSION for release builds (defaul
 CPU2 = os.environ.get("FELUCCA_CPU2") != "0"
 
 
+
+def shard_build():
+    """SHARD: the commit's short code (GITHUB_SHA on CI, else git), shown on the splash; "dev" outside a checkout"""
+    sha = os.environ.get("GITHUB_SHA", "")
+    if not sha:
+        try:
+            sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=SRC, capture_output=True, text=True).stdout.strip()
+        except OSError:
+            sha = ""
+    return sha[:7] if re.fullmatch(r"[0-9a-f]{7,40}", sha) else "dev"
+
 def toolchain():
     tc = os.environ.get("JIELI_TOOLCHAIN")
     if not tc or not (Path(tc) / "pi32v2" / "bin" / "clang").exists():
@@ -216,6 +227,7 @@ def build_app():
     if v in ("0", "1", "2", "3"):
         flags.append(f"-DFELUCCA_USB_LAYOUT={v}")
     flags.append(f'-DFELUCCA_ID="{PRODUCT}"')
+    flags.append(f'-DSHARD_BUILD="{shard_build()}"')   # (SHARD) the splash's build code: the commit
     if VERSION:
         flags.append(f'-DFELUCCA_VERSION="{VERSION}"')
     # felucca.c goes to LLVM IR without the optimizer, the main-loop functions (UI, stores, editor) are

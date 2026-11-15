@@ -1407,6 +1407,42 @@ static void splash_band(uint32_t y, uint32_t h, int32_t ly, const char *const *l
     cv_text_on(SPL_PAD, ly + SPL_PITCH, &AF_M, l[1], T_TEXT, T_RAISE);
     cv_blit(SPL_X0, y);
 }
+#if FELUCCA_MANGLER
+/* SHARD (2026-11-14): the owner's artwork (assets/shard-splash-art.png -> tools/gen_shard_splash.py -> shard_splash.h,
+ * run-length coded as DUO's), drawn in two 240 x 120 bands; the build's code (SHARD_BUILD, build.py: the commit) small in
+ * the art's own text grey, its right edge on SAMPLE MANGLER's (x 229) and its capitals' foot on CUSTOM FIRMWARE's (y 226) */
+#include "shard_splash.h"
+#ifndef SHARD_BUILD
+#define SHARD_BUILD "dev"
+#endif
+#define SPL_BUILD_R 230                             /* right edge (exclusive) */
+#define SPL_BUILD_FOOT 226                          /* the capitals' last row */
+static void draw_splash(void)
+{
+    uint32_t band, x, y, r = 0, left = 0;
+    uint16_t c = 0;
+    const char *b = "BUILD " SHARD_BUILD;
+    for (band = 0; band < 2u; band++) {
+        cv_begin(240, 120, 0);
+        cv_oy = -(int32_t)band * 120;
+        for (y = band * 120u; y < band * 120u + 120u; y++)
+            for (x = 0; x < 240u; x++) {
+                if (!left && r < sizeof SHARD_SPLASH) {   /* (the runs go on across the bands) */
+                    c = SHARD_SPLASH_PAL[SHARD_SPLASH[r] & 15u];
+                    left = (uint32_t)(SHARD_SPLASH[r++] >> 4) + 1u;
+                }
+                if (left)
+                    left--;
+                cv_pset((int32_t)x, (int32_t)y, c);
+            }
+        cv_text_on(SPL_BUILD_R - text_w(&AF_S, b), SPL_BUILD_FOOT + 1 - AF_S_CAP_H - AF_S_CAP_Y, &AF_S, b,
+                   SHARD_SPLASH_PAL[6], SHARD_SPLASH_PAL[0]);
+        cv_oy = 0;
+        cv_blit(0, band * 120u);
+    }
+    lcd_sync();
+}
+#else
 static void draw_splash(void)
 {
     int32_t h = SPL_PAD - AF_M_CAP_Y + SPL_PITCH + AF_M.h;     /* a band: its two lines, the descenders in */
@@ -1419,6 +1455,7 @@ static void draw_splash(void)
                 "splash maker's baseline SPL_PAD from the bottom");
     lcd_sync();
 }
+#endif
 
 /* UPDATE MODE countdown (main.c: OCT- + OCT+ held): over everything, the menu and the dialogs too */
 static void draw_uboot(void)
