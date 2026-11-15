@@ -808,6 +808,7 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
        S_SHARD_SLICES, S_SHARD_HOME, S_LOOP, S_LOOP_PLAY, S_LOOP_REL, S_ENV_SHARD, S_SHFX_GRAIN, S_SHFX_GSIZE, S_SHFX_BGRAIN, S_SHFX_FDBK, S_SHFX_PRESS,
 #if FELUCCA_MANGLER
        S_ARP_PEEK, S_ARP_HELD, S_ARP_KNOBS, S_ARP_PRE, S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY, S_LIVE_OFF, S_LIVE_PLAY, S_LIVE_LAYER,
+       S_EDIT_GRAIN_PLAY,
 #endif
        S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
@@ -845,6 +846,7 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "shard_presets", "shard_slices", "shard_home", "loop", "loop_playing", "loop_release", "env_family_shard", "shfx_grain", "shfx_grain_size", "shfx_bus_grain", "shfx_bus_fdbk", "shfx_bus_press",
 #if FELUCCA_MANGLER
     "arp_layer", "arp_layer_held", "arp_layer_knobs", "arp_layer_pre", "bounce", "bounce_used", "bounce_busy", "live_off", "live_playing", "live_layer",
+    "edit_grain_playing",
 #endif
 };
 
@@ -1269,7 +1271,51 @@ static void setup(int s)
         for (i = 0; i < 4000u && !sample_wave.ready; i++) sample_wave_tick(TSEL);
         break;
     }
-    case S_EDIT_GRAIN: eng(8); go_title("EDIT 2"); break;
+    case S_EDIT_GRAIN: {                         /* (SHARD) the zone's waveform, POS's line, SPRD's tint */
+        int32_t o[2u * CTL];
+        uint32_t i, b;
+        eng(8); go_title("EDIT 2"); last_note = 60;
+        for (b = 0; b < 256u && (b < 1u || TSEL->xf_on || TSEL->eng_req != TSEL->engine); b++)
+            mix_block(o, CTL);                       /* (the switch done: its preset's SRC) */
+        sample_wave_tick(TSEL);                      /* (first: the cache may hold the last screen's zone, ready) */
+        for (i = 0; i < 4000u && !sample_wave.ready; i++) sample_wave_tick(TSEL);
+        break;
+    }
+#if FELUCCA_MANGLER
+    case S_EDIT_GRAIN_PLAY: {                    /* a note held: the grains reading round the scrub line */
+        int32_t o[2u * CTL];
+        uint32_t i, b;
+        eng(8); go_title("EDIT 1"); last_note = 60;
+        TSEL->p[P_E1] = 70; TSEL->p[P_E5] = 60; TSEL->p[P_E2] = 90; TSEL->p[P_E3] = 110;
+        for (b = 0; b < 256u && (b < 1u || TSEL->xf_on || TSEL->eng_req != TSEL->engine); b++)
+            mix_block(o, CTL);
+        for (b = 0; b < 400u; b++)                   /* (the seek index built) */
+            mix_block(o, CTL);
+        trk_note_on(TSEL, 60, 110);
+        for (b = 0; b < 300u; b++)
+            mix_block(o, CTL);
+        {   /* the scrub line is POS while nothing modulates SHP; grains sound in the zone, round it within SPRD */
+            const gr_part_t *P = gr_of(TSEL);
+            uint32_t g, ng = 0, far = 0, n = 0, posq;
+            grain_live(TSEL, &posq);
+            for (g = 0; g < GR_NG; g++)
+                if (P->g[g].owner) {
+                    int32_t c = (int32_t)(P->g[g].z->n * 70u / 127u), d = (int32_t)P->g[g].pos - c;
+                    n = P->g[g].z->n;
+                    ng++;
+                    far += (uint32_t)(d < 0 ? -d : d) > n * 60u / 127u / 2u + n / 8u;   /* (+ a grain's travel) */
+                }
+            if (posq != 70u << 8 || ng < 2u || far) {
+                if (rep) fprintf(rep, "FIND %-26s GRAIN: scrub %u (want %u), %u grains, %u far from it\n", cur_name,
+                                 posq, 70u << 8, ng, far);
+                nfind++;
+            }
+        }
+        sample_wave_tick(TSEL);
+        for (i = 0; i < 4000u && !sample_wave.ready; i++) sample_wave_tick(TSEL);
+        break;
+    }
+#endif
     case S_EDIT_PHYS: eng(9); go_title("EDIT 1"); break;
     case S_EDIT_PHASE_FOLD: eng(2); TSEL->p[P_E7] = 80; go_title("EDIT 2"); ui.hot_col = 3; ui.hot_t = 30; break;   /* 1.5.5 FOLD (#104) */
     case S_ALG1: case S_ALG2: case S_ALG3: case S_ALG4: case S_ALG5: case S_ALG6: case S_ALG7: case S_ALG8:

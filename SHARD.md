@@ -102,7 +102,17 @@ The mangler build has its own black-and-white look:
 
 LOOP shows the whole sample with every slice marker. A slice a voice is playing is drawn inverted (white, with its waveform cut out in black) and has its playhead (`shd_heads`). Keys pick the slice, as they do on SLICES.
 
-The track's ENV (ATK, DEC, SUS, REL on KNOB 1–4) is drawn in red over the loop, in the loop's time, starting at the slice the last note began on. It assumes the note is held for one slice; ONE has no release. Red (`ux.env`) is used for nothing else. On SHARD tracks the ENV page is hidden (ENV opens on ENV DEST), and `page_first` returns a family's first visible page.
+The track's ENV (ATK, DEC, SUS, REL on KNOB 1–4) is drawn in red over the loop, in the loop's time, starting at the slice the last note began on. It assumes the note is held for one slice; ONE has no release. Red (`ux.env`) is used only for this and for the GRAIN engine's scrub line (below). On SHARD tracks the ENV page is hidden (ENV opens on ENV DEST), and `page_first` returns a family's first visible page.
+
+## The GRAIN engine's view (its EDIT pages)
+
+Both GRAIN EDIT pages (GRAN and SPRY) show the waveform of the zone the last note picked, the same view SAMPLE uses (`sample_wave`). On top of it:
+
+- **The scrub line** (red, `ux.env`) marks where the grains centre. That is POS plus the track's SHP modulation, as the engine last used it while a note sounds (`gr_ui_pos`). An LFO or the ENV routed to SHP visibly moves the line. With no note sounding, the line sits at POS.
+- **The SPRD range** is tinted round the line, and the waveform is brighter inside it: that is where grains can start.
+- **Every grain sounding** in that zone is a white tick at its read position. Its height is the grain's window at that moment, so ticks swell and fade as the grains play.
+
+The waveform loads at 4096 samples a frame (it was 512), so a full user slot fills in within about 40 frames. A built-in set is no longer redecoded after an upload into a user slot.
 
 ## LIVE (the SCL button)
 

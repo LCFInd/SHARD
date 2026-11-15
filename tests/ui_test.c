@@ -3102,7 +3102,7 @@ static int test_product_ux(void)
     ok = 1;
     for (i = 0; i < 2000u && !sample_wave.ready; i++) {
         uint32_t old = sample_wave.pos; sample_wave_tick(TSEL);
-        ok &= sample_wave.pos - old <= 512u;
+        ok &= sample_wave.pos - old <= SAMPLE_WAVE_STEP;
     }
     ok &= sample_wave.ready && !memcmp(voices, TSEL->v, sizeof voices);
     int16_t lo[SAMPLE_WAVE_COLS] = {0}, hi[SAMPLE_WAVE_COLS] = {0};

@@ -554,9 +554,10 @@ static uint32_t str_hash(uint32_t h, const char *s)
 }
 
 /* One shared, reduced sample display. Decode only in the UI/main loop with a
- * private IMA state, 512 samples per frame; no audio voice state is touched.
+ * private IMA state, 4096 samples per frame (SHARD; Felucca: 512); no audio voice state is touched.
  * Cache follows the sample zone, selected note and user-slot generation. */
 #define SAMPLE_WAVE_COLS 96u
+#define SAMPLE_WAVE_STEP 4096u           /* decodes a frame (SHARD; Felucca: 512): a full user slot in ~40 frames */
 static struct {
     int16_t lo[SAMPLE_WAVE_COLS], hi[SAMPLE_WAVE_COLS];
     const smp_zone_t *zone;
@@ -585,7 +586,9 @@ static uint32_t sample_wave_zone(const track_t *t)
 static void sample_wave_tick(const track_t *t)
 {
     uint32_t zi = sample_wave_zone(t), key = zi + ((uint32_t)last_note << 16), i;
-    if (key != sample_wave.key || sample_wave.gen != smp_user_gen || !sample_wave.zone) {
+    if (key != sample_wave.key || ((zi & 0x8000u) && sample_wave.gen != smp_user_gen) || !sample_wave.zone) {
+                                                     /* (SHARD: a built-in set's zone never changes: an upload into
+                                                      * a user slot leaves it) */
         sample_wave.key = key; sample_wave.gen = smp_user_gen;
         sample_wave.zone = zi == 0xFFFFu ? 0 : smp_zone(zi);
         sample_wave.pos = 0; sample_wave.pred = sample_wave.index = 0;
@@ -594,7 +597,7 @@ static void sample_wave_tick(const track_t *t)
     }
     const smp_zone_t *z = sample_wave.zone;
     if (!z || !z->n || sample_wave.ready) return;
-    for (i = 0; i < 512u && sample_wave.pos < z->n; i++) {
+    for (i = 0; i < SAMPLE_WAVE_STEP && sample_wave.pos < z->n; i++) {
         uint32_t pos = sample_wave.pos, b = SMP_DATA[z->off + (pos >> 1)];
         uint32_t code = (pos & 1u) ? b >> 4 : b & 15u;
         int32_t step = IMA_STEP[sample_wave.index], d = step >> 3;
@@ -627,6 +630,71 @@ static void graph_sample(uint16_t c)
         int32_t left = 12 + (int32_t)(z->ls * 216u / z->n), right = 12 + (int32_t)(z->le * 216u / z->n);
         cv_line(left, 4, left, 90, T_MID); cv_line(right, 4, right, 90, T_MID);
     }
+}
+
+/* GRAIN's EDIT pages (SHARD, 2026-11-14): the zone the last note picked (sample_wave, as SAMPLE's), POS's spread
+ * (SPRD) tinted round the scrub line (its waveform MID, the rest DIM), the line itself in the red of SHARD's LOOP (ux.env): POS + the track's SHP
+ * modulation as the engine last used it while a note sounds (eng_grain.c gr_ui_pos: an LFO on SHP scans it), else
+ * POS; every grain sounding in the zone a white tick at its read position, its height the grain's window now (they
+ * swell and fade as they play). (No caption: the EDIT pages' panel is the knob cards' height shorter than LOOP's) */
+static uint32_t grain_live(const track_t *t, uint32_t *posq)
+{
+    uint32_t i, on = 0;
+    for (i = 0; i < GR_POLY; i++)
+        on |= t->v[i].active;
+    *posq = on ? gr_ui_pos[gr_part(t)] : (uint32_t)clamp(t->p[P_E1], 0, 127) << 8;
+    return on;
+}
+static void graph_grain(const track_t *t)
+{
+    const smp_zone_t *z = sample_wave.zone;
+    const gr_part_t *P = gr_of(t);
+    uint32_t n, i, posq, sp, src = (uint32_t)t->p[P_E0] % SMP_NALL;
+    int32_t cx, x0, x1;
+    if (!z || !z->n || smp_set_missing(src)) {      /* (an empty user slot: GRAIN plays its sine) */
+        panel_alert(ICON_X_NOFILE, "SAMPLE NOT FOUND");
+        return;
+    }
+    n = z->n;
+#define GX(q) (12 + (int32_t)muldiv32((q) < n ? (q) : n - 1u, 216u, n))
+    grain_live(t, &posq);
+    cx = GX(muldiv32(posq, n - 1u, 127u << 8));
+    sp = muldiv32(n, (uint32_t)clamp(t->p[P_E5], 0, 127), 127u);   /* SPRD: the spread, of the zone (gr_spawn) */
+    x0 = cx - (int32_t)muldiv32(sp / 2u, 216u, n);
+    x1 = cx + (int32_t)muldiv32(sp / 2u, 216u, n);
+    x0 = x0 < 12 ? 12 : x0;
+    x1 = x1 > 227 ? 227 : x1;
+    if (x1 > x0)
+        cv_rect(x0, 6, x1 - x0 + 1, 81, T_TINT);
+    for (i = 0; i < 216u; i++) {                     /* the waveform, its 96 columns over the 216: MID where the grains
+                                                      * may read (SPRD), DIM outside, so the grains' white shows on it */
+        uint32_t k = i * SAMPLE_WAVE_COLS / 216u;
+        int32_t x = 12 + (int32_t)i;
+        cv_line(x, 46 - sample_wave.hi[k] * 38 / sample_wave.peak, x, 46 - sample_wave.lo[k] * 38 / sample_wave.peak,
+                x >= x0 && x <= x1 ? T_MID : T_DIM);
+    }
+    for (i = 0; i < GR_NG; i++) {                    /* the grains: where each reads, its window now */
+        const gr_grain_t *g = &P->g[i];
+        if (g->owner && g->z == z) {
+            int32_t h = 3 + gr_win(g->wph) * 35 / 32767;
+            cv_rect(GX(g->pos), 46 - h, 1, 2 * h + 1, T_TEXT);
+        }
+    }
+    cv_rect(cx > 226 ? 226 : cx, 2, 2, 89, ux.env);   /* the scrub line */
+#undef GX
+}
+/* graph_signature: the scrub line's and the grains' columns and heights, so they move */
+static uint32_t grain_sig(const track_t *t)
+{
+    const gr_part_t *P = gr_of(t);
+    const smp_zone_t *z = sample_wave.zone;
+    uint32_t i, posq, n = z && z->n ? z->n : 1u, h = 2166136261u;
+    grain_live(t, &posq);
+    h = (h ^ posq * 216u / (127u << 8)) * 16777619u;
+    for (i = 0; i < GR_NG; i++)
+        if (P->g[i].owner && P->g[i].z == z)
+            h = (h ^ (P->g[i].pos * 216u / n) ^ (uint32_t)(gr_win(P->g[i].wph) >> 10) << 16) * 16777619u;
+    return h;
 }
 
 #if FELUCCA_SLICE
@@ -1393,6 +1461,10 @@ static uint32_t graph_signature(void)
                                                      * levels, FB; the operator pages: the operator, the stage) */
         h ^= (fm6_pgen[(t - trk) % NTRK] + 1u) * 2246822519u + (fop_op + 1u) * 40503u + (fop_stg + 1u) * 7919u;
     if (pg->scope == SC_ENGINE && ENGINES[t->eng_req % NENGINES] == &ENG_SAMPLE) h ^= sample_wave.pos * 13u + sample_wave.key;
+#if FELUCCA_MANGLER
+    if (pg->scope == SC_ENGINE && ENGINES[t->eng_req % NENGINES] == &ENG_GRAIN)   /* (SHARD) the scrub, the grains */
+        h = (h ^ sample_wave.pos * 13u ^ sample_wave.key ^ grain_sig(t)) * 16777619u;
+#endif
     if (pg->graph == GR_ROLL) {
         uint32_t ph = song.playing ? t->seq_idx : 0xFFFFu;
         if (ph / 16u != ui.bank)
@@ -2445,7 +2517,9 @@ static void draw_graph(void)
         draw_home_tracks();
         return;
     }
-    if (!ui.home && pg->scope == SC_ENGINE && ENGINES[t->eng_req % NENGINES] == &ENG_SAMPLE) sample_wave_tick(t);
+    if (!ui.home && pg->scope == SC_ENGINE && (ENGINES[t->eng_req % NENGINES] == &ENG_SAMPLE ||
+                                               (FELUCCA_MANGLER && ENGINES[t->eng_req % NENGINES] == &ENG_GRAIN)))
+        sample_wave_tick(t);                         /* (SHARD: GRAIN's waveform too) */
     sig = graph_signature();
     if (!ui.force && sig == ui.graph_sig)
         return;
@@ -2564,6 +2638,9 @@ static void draw_graph(void)
         default:
             if (pg->scope == SC_ENGINE && ENG_REF_IS(ENGINES[t->eng_req % NENGINES], ENG_WHEEL)) graph_wheel(t, c);
             else if (pg->scope == SC_ENGINE && ENGINES[t->eng_req % NENGINES] == &ENG_SAMPLE && sample_wave.ready) graph_sample(c);
+#if FELUCCA_MANGLER
+            else if (pg->scope == SC_ENGINE && ENGINES[t->eng_req % NENGINES] == &ENG_GRAIN) graph_grain(t);   /* (SHARD) */
+#endif
             else if (pg->scope == SC_ENGINE && t->eng_req % NENGINES == ENGI_FM6) graph_fm6(t, c, 6u);   /* EDIT 1 and 2 */
 #if FELUCCA_FM4
             else if ((pg->scope == SC_ENGINE || pg->id[0] == P_FM1_LEVEL) && t->eng_req % NENGINES == ENGI_DIGITAL)

@@ -100,6 +100,8 @@ typedef struct {
 } gr_part_t;
 ENG_MEM_FITS("GRAIN", sizeof(gr_part_t));
 static int32_t gr_rng[NPART];
+static uint16_t gr_ui_pos[NPART];   /* (SHARD) the EDIT pages' scrub line: the newest voice's centre, POS + SHP, Q8 of
+                                     * 0..127 (grain_render, each block; ui_graph.c graph_grain reads it) */
 
 static uint32_t gr_part(const track_t *t) { return (uint32_t)(t - trk) % NPART; }
 static gr_part_t *gr_of(const track_t *t) { return (gr_part_t *)ENG_MEM(gr_part(t)); }
@@ -407,6 +409,7 @@ static void grain_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
     }
     for (i = 0; i < n; i++)
         acc[i] = 0;
+    gr_ui_pos[gr_part(t)] = (uint16_t)clamp((p[P_E1] << 8) + m->shape - (64 << 8), 0, 127 << 8);   /* (as gr_spawn) */
     for (i = 0; i < GR_POLY; i++)
         nact += t->v[i].active;
     for (i = 0; i < GR_NG; i++)
