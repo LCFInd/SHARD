@@ -3613,7 +3613,7 @@ $("clearseq").addEventListener("click", async () => {
 });
 
 /* ---------------------------------------------------------- samples --- */
-const smpDraft = [0, 1, 2].map(() => ({ name: "", files: [] }));
+const smpDraft = [0, 1, 2, 3].map(() => ({ name: "", files: [] }));   /* (SHARD: four slots, USR4; Felucca has three) */
 let smpBusy = false;
 const SMP_RC = { 1: "size", 2: "header", 3: "data CRC", 4: "flash", 5: "zones" };
 const kib = (n) => (n / 1024).toFixed(1);
