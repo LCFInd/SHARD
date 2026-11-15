@@ -104,6 +104,20 @@ LOOP shows the whole sample with every slice marker. A slice a voice is playing 
 
 The track's ENV (ATK, DEC, SUS, REL on KNOB 1–4) is drawn in red over the loop, in the loop's time, starting at the slice the last note began on. It assumes the note is held for one slice; ONE has no release. Red (`ux.env`) is used only for this and for the GRAIN engine's scrub line (below). LOOP is in the ENV family, in place of ENV's own page, which is hidden on SHARD tracks: ENV opens on LOOP, then ENV DEST. EDIT opens on EDIT 1. (Until 2026-11-14 LOOP was EDIT's first page.) `page_first` returns a family's first visible page.
 
+## Themes (the editor's Theme editor)
+
+SHARD's look is black and white, whatever COLOR says. A **CUSTOM** theme (Felucca 1.6's user palette, set from the editor) keeps that look's structure but uses its own five colours (`gfx.c` `palette_set`, the mangler branch):
+
+| Editor role | Palette slot | Used for |
+|---|---|---|
+| Background | color1 | the background, and the ink of a selection |
+| Main | color2 | waveforms, values, the active thing, a selection |
+| Text | color3 | names, slice lines, key caps |
+| Red line, REC | primary | LOOP's envelope, GRAIN's scrub line, REC |
+| Accent | secondary | the track number, markers |
+
+The greys (labels, inactive things, rules, wells) are the background mixed toward the text, in the same steps as the black-and-white greys. In the editor's Settings tab, the **Theme editor** has colour pickers, starting themes, a preview of the LOOP screen, readability warnings and a live preview on the FM-1 (PALETTE_SET op 0). Save stores the theme (op 1), Discard drops the preview (op 3), and Remove deletes CUSTOM (op 2). Export and Import use a small JSON file. MENU > DISPLAY > COLOR on the FM-1 switches between CUSTOM and the black and white.
+
 ## The GRAIN engine's view (its EDIT pages)
 
 Both GRAIN EDIT pages (GRAN and SPRY) show the waveform of the zone the last note picked, the same view SAMPLE uses (`sample_wave`). On top of it:

@@ -196,17 +196,37 @@ static void palette_set(uint32_t i)
 #if FELUCCA_MANGLER
     /* SWISS, the mangler's one look, whatever COLOR says: black and white and four greys, no colour at all. White:
      * text, values, the active thing, a selection (its INK black: inverted). The greys: labels (MID), the inactive (DIM),
-     * tracks and rules (LINE), wells (RAISE). No cards: SURF is the background, corners square (cv_rrect) */
-    ux.mono = 1;
-    ux.light = 0;
-    ux.bg = ux.surf = ux.tint = ux.ink = 0;
-    ux.text = ux.theme = ux.accent = ux.rec = ux.sel = ux.key = ux.ok = 0xFFFFu;
-    ux.mid = ux_gray(19);                        /* ~ 155 */
-    ux.dim = ux_gray(11);                        /* ~ 90 */
-    ux.line = ux_gray(6);                        /* ~ 50 */
-    ux.raise = ux_gray(5);
-    ux.lane = ux_gray(3);
-    ux.grid = ux_gray(2);
+     * tracks and rules (LINE), wells (RAISE). No cards: SURF is the background, corners square (cv_rrect).
+     * (SHARD, 2026-11-15) CUSTOM, the editor's Theme editor, keeps that structure in the user's five colours: color1 the
+     * background (and INK), color3 the text (a key cap, OK), color2 the main colour (waveforms, the active thing, a
+     * selection), primary the red (LOOP's envelope, the GRAIN scrub line, REC), secondary the accent; the greys are
+     * the background mixed toward the text in SWISS's steps */
+    if (cust) {
+        ux.mono = 0;                             /* (ux_mix blends the channels) */
+        ux.bg = ux.surf = ux.tint = ux.ink = p->c1;
+        ux.text = ux.key = ux.ok = p->c3;
+        ux.theme = ux.sel = p->c2;
+        ux.accent = p->secondary;
+        ux.rec = ux.env = p->primary;
+        ux.light = ux_luma(ux.bg) > 128u;
+        ux.mid = ux_mix(ux.bg, ux.text, 61);    /* (SWISS: 155, 90, 50, 41, 25, 16 of 255) */
+        ux.dim = ux_mix(ux.bg, ux.text, 35);
+        ux.line = ux_mix(ux.bg, ux.text, 20);
+        ux.raise = ux_mix(ux.bg, ux.text, 16);
+        ux.lane = ux_mix(ux.bg, ux.text, 10);
+        ux.grid = ux_mix(ux.bg, ux.text, 6);
+    } else {
+        ux.mono = 1;
+        ux.light = 0;
+        ux.bg = ux.surf = ux.tint = ux.ink = 0;
+        ux.text = ux.theme = ux.accent = ux.rec = ux.sel = ux.key = ux.ok = 0xFFFFu;
+        ux.mid = ux_gray(19);                    /* ~ 155 */
+        ux.dim = ux_gray(11);                    /* ~ 90 */
+        ux.line = ux_gray(6);                    /* ~ 50 */
+        ux.raise = ux_gray(5);
+        ux.lane = ux_gray(3);
+        ux.grid = ux_gray(2);
+    }
 #endif
     ux.gen++;                                    /* the text ramps change with the coverage curve */
 }

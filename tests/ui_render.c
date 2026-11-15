@@ -808,7 +808,7 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
        S_SHARD_SLICES, S_SHARD_HOME, S_LOOP, S_LOOP_PLAY, S_LOOP_REL, S_ENV_SHARD, S_SHFX_GRAIN, S_SHFX_GSIZE, S_SHFX_BGRAIN, S_SHFX_FDBK, S_SHFX_PRESS,
 #if FELUCCA_MANGLER
        S_ARP_PEEK, S_ARP_HELD, S_ARP_KNOBS, S_ARP_PRE, S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY, S_LIVE_OFF, S_LIVE_PLAY, S_LIVE_LAYER,
-       S_EDIT_GRAIN_PLAY,
+       S_EDIT_GRAIN_PLAY, S_THEME_LOOP, S_THEME_SLICES,
 #endif
        S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
@@ -846,7 +846,7 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "shard_presets", "shard_slices", "shard_home", "loop", "loop_playing", "loop_release", "edit_family_shard", "shfx_grain", "shfx_grain_size", "shfx_bus_grain", "shfx_bus_fdbk", "shfx_bus_press",
 #if FELUCCA_MANGLER
     "arp_layer", "arp_layer_held", "arp_layer_knobs", "arp_layer_pre", "bounce", "bounce_used", "bounce_busy", "live_off", "live_playing", "live_layer",
-    "edit_grain_playing",
+    "edit_grain_playing", "theme_custom_loop", "theme_custom_slices",
 #endif
 };
 
@@ -1741,6 +1741,18 @@ static void setup(int s)
     case S_SHARD_HOME: eng(ENGI_SHARD); song.playing = 1; break;
     /* ENV > LOOP (SHARD; was EDIT's first page): BREAK whole, slice 5 picked, the envelope from it (DEC hot); two notes
      * playing (their slices inverted, the playheads); a long release; EDIT on a SHARD track (its first page: EDIT 1) */
+#if FELUCCA_MANGLER
+    case S_THEME_LOOP:                           /* (SHARD) CUSTOM over SWISS: a dark blue, amber main, a coral red */
+    case S_THEME_SLICES:
+        ux_cust.c1 = RGB(16, 22, 40); ux_cust.c2 = RGB(255, 176, 48); ux_cust.c3 = RGB(232, 236, 245);
+        ux_cust.primary = RGB(255, 80, 96); ux_cust.secondary = RGB(96, 200, 255);
+        palette_set(NPALETTES);
+        eng(ENGI_SHARD);
+        if (s == S_THEME_LOOP) { open_family(FAM_ENV); sp.sel = 4; TSEL->p[P_ATK] = 10; TSEL->p[P_DEC] = 70; TSEL->p[P_SUS] = 40; }
+        else go_title("SLICES");
+        ui.msg_t = 0;
+        break;
+#endif
     case S_LOOP:
         eng(ENGI_SHARD); open_family(FAM_ENV); sp.sel = 4; TSEL->p[P_ATK] = 10; TSEL->p[P_DEC] = 70;
         TSEL->p[P_SUS] = 40; ui.hot_col = 1; ui.hot_t = 30; ui.msg_t = 0;
@@ -2560,10 +2572,16 @@ int main(int argc, char **argv)
             cur_name = name;
             setup((int)s);
             pal(p);
+#if FELUCCA_MANGLER
+            if (s == S_THEME_LOOP || s == S_THEME_SLICES) palette_set(NPALETTES);   /* (the CUSTOM set in setup) */
+#endif
             if (p == UI_GREY_INDEX) aud = audf;
             draw((int)s);
             lint();
             if (p == UI_GREY_INDEX) { audit_scene(S_NAME[s]); font_scene("FLAT", S_NAME[s]); aud = 0; }
+#if FELUCCA_MANGLER
+            if (s != S_THEME_LOOP && s != S_THEME_SLICES)   /* (CUSTOM is coloured on purpose) */
+#endif
             mono_check();
             for (k = 0; k < sizeof SHOW / sizeof SHOW[0]; k++)
                 if (!strcmp(UI_PALETTES[p].name, SHOW[k])) write_ppm(out, SHOW[k], S_NAME[s]);

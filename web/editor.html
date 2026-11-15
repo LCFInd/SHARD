@@ -18,6 +18,13 @@
     :root:not([data-theme="light"]) { --bg: #000; --fg: #fff; --dim: #888; --line: #444; }
   }
   :root[data-theme="dark"] { --bg: #000; --fg: #fff; --dim: #888; --line: #444; }
+  .theme-wrap { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .theme-controls { min-width: 300px; flex: 1; max-width: 460px; }
+  .theme-row { display: grid; grid-template-columns: 110px 44px 86px 1fr; gap: 8px; align-items: center; margin: 6px 0; }
+  .theme-row input[type=color] { width: 44px; height: 28px; padding: 0; border: 1px solid var(--line); background: none; }
+  .theme-row input[type=text] { width: 80px; font-family: ui-monospace, monospace; }
+  #theme-preview { width: 360px; height: 360px; image-rendering: pixelated; border: 1px solid var(--line); }
+  #theme-warn p { margin: 4px 0; }
   html { color-scheme: light dark; }
   body { margin: 0; background: var(--bg); color: var(--fg);
          font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
@@ -337,6 +344,20 @@
       <p class="dim" data-t="deviceDisplayHelp"></p>
       <div id="device-display-controls"></div>
     </div>
+    <div class="group" id="theme-editor" hidden style="margin-top:12px">
+      <h2 data-t="themeEditor"></h2>
+      <p class="dim" data-t="themeHelp"></p>
+      <div class="theme-wrap">
+        <div class="theme-controls">
+          <label class="bar"><span data-t="themeStart"></span><select id="theme-start"></select></label>
+          <div id="theme-rows"></div>
+          <label class="bar"><input type="checkbox" id="theme-live" checked> <span data-t="themeLive"></span></label>
+          <div id="theme-warn"></div>
+          <p class="bar" id="theme-buttons"></p>
+        </div>
+        <canvas id="theme-preview" width="240" height="240" aria-label="preview"></canvas>
+      </div>
+    </div>
     <div class="group" style="margin-top:12px">
       <h2 data-t="system" data-ic="symbol_cog"></h2>
       <table id="sysinfo"></table>
@@ -360,7 +381,8 @@ const CMD = { INFO: 1, GET: 2, SET: 3, DUMP: 4, DESC: 5, STEP_GET: 6, STEP_SET: 
   TRACK_PARAM: 31, TRACK_CHANGED: 32, SONG: 33,
   UI_STATE: 34, UI_SET: 35, UI_PALETTES: 36, FAV_GET: 37, FAV_SET: 38,
   MOTION: 64, BACKUP_LIST: 65, BACKUP_GET: 66, BACKUP_PUT: 67,
-  FM6_GET: 68, FM6_PUT: 69, FM6_LIST: 70, FM6_ERASE: 71 };
+  FM6_GET: 68, FM6_PUT: 69, FM6_LIST: 70, FM6_ERASE: 71,
+  PALETTE_GET: 80, PALETTE_SET: 81 };                /* CUSTOM, the user's palette (firmware/src/editor_palette.c) */
 /* frames the device sends on its own (while WATCH is on); never replies */
 const PUSH = new Set([CMD.CHANGED, CMD.RELOAD, CMD.STEP_CHANGED, CMD.TRACK_CHANGED]);
 /* user preset bank: name 1..12 printable ASCII, a 16-step pattern of (note, flags 1 acc 2 slide 4 tie) */
@@ -463,6 +485,17 @@ const parse = {
   },
   [CMD.UI_SET](a) { const r = new Reader(a); return { rc: r.b(), id: r.b(), value: r.b(), ...parse[CMD.UI_STATE](a.slice(3)) }; },
   [CMD.UI_PALETTES](a) { const r = new Reader(a), n = r.b(); return Array.from({ length: n }, () => r.s()); },
+  /* flags (1 stored, 2 in use), the count, then the colours as RGB565 parts (red 0..31, green 0..63, blue 0..31): the
+   * stored ones, or with none stored the palette in use. PALETTE_SET's reply: rc (0 ok, 1 refused, 3 RAM only, 4 saved at
+   * STOP), then the same */
+  [CMD.PALETTE_GET](a) {
+    const r = new Reader(a), flags = r.b(), n = r.b();
+    return { flags, colors: Array.from({ length: n }, () => [r.b(), r.b(), r.b()]) };
+  },
+  [CMD.PALETTE_SET](a) {
+    const r = new Reader(a), rc = r.b();
+    return a.length > 2 ? { rc, ...parse[CMD.PALETTE_GET](a.slice(1)) } : { rc };
+  },
   [CMD.FAV_GET](a) {
     const r = new Reader(a), rc = r.b(); if (rc) return { rc };
     const o = { rc, engine: r.b(), start: r.v(), count: r.b() };
@@ -595,6 +628,9 @@ const req = {
   uiState: () => [CMD.UI_STATE, []],
   uiSet: (id, value) => [CMD.UI_SET, [id, value]],
   uiPalettes: () => [CMD.UI_PALETTES, []],
+  paletteGet: () => [CMD.PALETTE_GET, []],
+  /* op 0 preview (RAM only), 1 store and use, 2 remove, 3 drop the preview; ops 0 and 1 take five [r5, g6, b5] */
+  paletteSet: (op, cols = []) => [CMD.PALETTE_SET, [op & 3, ...(op <= 1 ? cols.flatMap(([r, g, b]) => [r & 31, g & 63, b & 31]) : [])]],
   favGet: (engine, start, count) => [CMD.FAV_GET, [engine, ...v14enc(start), count]],
   favSet: (engine, preset, on) => [CMD.FAV_SET, [engine, ...v14enc(preset), on ? 1 : 0]],
   info: () => [CMD.INFO, []],
@@ -2533,6 +2569,19 @@ const TEXT = {
     backupTitle: "全体バックアップ", backupExport: "バックアップ保存", backupImport: "バックアップ復元", backupHelp: "現在の曲・A〜D・音色バンク・ユーザーサンプル・設定を、このパソコンへ保存。", backupOld: "全体バックアップには対応版への更新が必要です。", backupConfirm: "全体バックアップを復元しますか？ 現在の曲、保存データとサンプルを置き換えます。USBを抜かないでください。", backupWorking: "バックアップ処理中 ", backupDone: "バックアップを保存しました", backupRestored: "全体バックアップを復元しました",
     deviceDisplay: "本体の画面",
     deviceDisplayHelp: "FM-1 の画面に反映し、保存します。再生中の変更は停止後に保存されます。",
+    themeEditor: "テーマエディター", themeHelp: "SHARD の画面を自分の色で。レイアウトはそのまま、色だけを変えます。ライブプレビューがオンの間は変更がすぐ FM-1 に表示され、保存すると CUSTOM テーマになります。上の「テーマ」で他を選ぶと SHARD の白黒に戻ります。",
+    themeStart: "もとにする", themeStartPick: "(テーマを選ぶ)", themeLive: "FM-1 でライブプレビュー",
+    themeBg: "背景", themeMain: "メイン", themeText: "テキスト", themeRed: "赤い線・REC", themeAccent: "アクセント",
+    themeBgHelp: "すべての後ろ", themeMainHelp: "波形・値・アクティブなもの", themeTextHelp: "名前・スライス線",
+    themeRedHelp: "LOOP のエンベロープ、GRAIN のスクラブ線", themeAccentHelp: "トラック番号・マーカー",
+    themeSave: "FM-1 に保存", themeDiscard: "変更を破棄", themeRemove: "CUSTOM を削除", themeExport: "書き出し", themeImport: "読み込み",
+    themeFromDevice: "FM-1 から読む", themeSaved: "CUSTOM として保存しました。", themeSavedLater: "使用中です。停止後に保存されます。",
+    themeSavedRam: "使用中ですが保存されていません (フラッシュなし)。", themeRemoved: "CUSTOM を削除しました。SHARD の白黒に戻りました。",
+    themeDiscarded: "FM-1 のもとのテーマに戻しました。", themeRefused: "FM-1 がテーマを受け付けませんでした。", themeBadFile: "SHARD のテーマファイルではありません。",
+    themeWarnText: "この背景ではテキストが読みにくいです (コントラスト {r}:1、4.5 以上が目安)。",
+    themeWarnMain: "この背景ではメインが薄いです (コントラスト {r}:1、3 以上が目安)。",
+    themeWarnRed: "この背景では赤い線が薄いです (コントラスト {r}:1、3 以上が目安)。",
+    themeWarnLabels: "ラベル (テキストと背景の中間色) が薄いです (コントラスト {r}:1)。",
     devicePresets: "本体のプリセット",
     deviceFavHelp: "お気に入りと表示フィルターは FM-1 と同期します。パソコンのライブラリの音色は、本体のユーザースロットに保存してから登録してください。",
     deviceList: "表示",
@@ -2636,6 +2685,19 @@ const TEXT = {
     backupTitle: "Complete backup", backupExport: "Save backup", backupImport: "Restore backup", backupHelp: "Save the current music, A–D, sound banks, user samples and settings to this computer.", backupOld: "Complete backups need firmware with archive support.", backupConfirm: "Restore this complete backup? Current music, saved data and samples will be replaced. Keep USB connected.", backupWorking: "Backing up / restoring ", backupDone: "Backup saved", backupRestored: "Complete backup restored",
     deviceDisplay: "Device display",
     deviceDisplayHelp: "Changes apply to the FM-1 screen and save. Changes made while playing save after STOP.",
+    themeEditor: "Theme editor", themeHelp: "SHARD's screen in your own colours: its layout stays, the colours are yours. While Live preview is on, the FM-1 shows each change at once; Save keeps them as the CUSTOM theme. Any other Theme above is SHARD's black and white.",
+    themeStart: "Start from", themeStartPick: "(a starting theme)", themeLive: "Live preview on the FM-1",
+    themeBg: "Background", themeMain: "Main", themeText: "Text", themeRed: "Red line, REC", themeAccent: "Accent",
+    themeBgHelp: "behind everything", themeMainHelp: "waveforms, values, the active thing", themeTextHelp: "names, slice lines",
+    themeRedHelp: "LOOP's envelope, GRAIN's scrub line", themeAccentHelp: "the track number, markers",
+    themeSave: "Save to FM-1", themeDiscard: "Discard changes", themeRemove: "Remove CUSTOM", themeExport: "Export", themeImport: "Import",
+    themeFromDevice: "Read from FM-1", themeSaved: "Theme saved as CUSTOM.", themeSavedLater: "Theme in use; it saves after STOP.",
+    themeSavedRam: "Theme in use, not saved (no flash).", themeRemoved: "CUSTOM removed: SHARD's black and white again.",
+    themeDiscarded: "Back to the theme the FM-1 had.", themeRefused: "The FM-1 refused the theme.", themeBadFile: "Not a SHARD theme file.",
+    themeWarnText: "Text is hard to read on this background (contrast {r}:1, aim for 4.5).",
+    themeWarnMain: "Main is faint on this background (contrast {r}:1, aim for 3).",
+    themeWarnRed: "The red line is faint on this background (contrast {r}:1, aim for 3).",
+    themeWarnLabels: "Labels (Text mixed into the background) are faint (contrast {r}:1).",
     devicePresets: "Device presets",
     deviceFavHelp: "Stars and the favorites filter sync with the FM-1. Save computer-library sounds to a device user slot before starring them.",
     deviceList: "Show",
@@ -2963,6 +3025,7 @@ function disconnect(reasonKey = "disconnected") {
   renderLib();
   renderBank();
   renderPreferences(true);
+  renderTheme();
   $("version").textContent = "";
   setLabel($("connect"), t("connect"));
   sayK(reasonKey);
@@ -3033,6 +3096,7 @@ async function load(d) {
       catch (e) { if (e.message === "closed") throw e; d.bank = null; }
     }
     await syncPreferences(d);
+    await themeRead(false, d);                      /* (SHARD) the Theme editor, if the firmware takes a palette */
     renderLive();
     renderLib();
     renderBank();
@@ -4456,6 +4520,179 @@ function renderPreferences(force = false) {
   $("device-preset-list").replaceChildren(rows.length ? table : el("p", { class: "dim", text: t("deviceEmpty") }));
 }
 $("device-filter").addEventListener("change", () => changePreference(3, +$("device-filter").value));
+/* ---------------------------------------------------------- theme editor --- */
+/* (SHARD) CUSTOM, the user's palette, over SWISS's layout (firmware/src/gfx.c palette_set): five colours in the
+ * protocol's order (color1 color2 color3 primary secondary) = background, main, text, the red, the accent. The FM-1
+ * shows a change at once (PALETTE_SET op 0, RAM only) while Live preview is on; Save stores it (op 1) */
+const THEME_ROLES = [["themeBg", "themeBgHelp"], ["themeMain", "themeMainHelp"], ["themeText", "themeTextHelp"],
+  ["themeRed", "themeRedHelp"], ["themeAccent", "themeAccentHelp"]];
+const THEME_STARTS = [
+  ["SWISS", ["#000000", "#ffffff", "#ffffff", "#ff3028", "#ffffff"]],
+  ["SHARD", ["#0b0b0b", "#b8b0aa", "#e6e2de", "#d0141a", "#8a8580"]],
+  ["AMBER CRT", ["#120a00", "#ffb030", "#ffe2b8", "#ff4a30", "#ffd070"]],
+  ["PHOSPHOR", ["#00120a", "#40ff88", "#c8ffd8", "#ff4466", "#a8ffc8"]],
+  ["BLUEPRINT", ["#0a1a3a", "#9cc8ff", "#e8f0ff", "#ff6070", "#ffd040"]],
+  ["RUST", ["#140c0a", "#e07040", "#f0dccc", "#ff3030", "#c0a080"]],
+  ["PAPER", ["#f2efe6", "#1a1a1a", "#111111", "#d02020", "#2050c0"]],
+];
+const theme = { cols: THEME_STARTS[0][1].slice(), flags: 0, previewing: false, tm: 0 };
+const hexTo565 = (h) => { const n = parseInt(h.slice(1), 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  return [Math.round(r * 31 / 255), Math.round(g * 63 / 255), Math.round(b * 31 / 255)]; };
+const from565 = ([r, g, b]) => "#" + [Math.round(r * 255 / 31), Math.round(g * 255 / 63), Math.round(b * 255 / 31)]
+  .map((v) => v.toString(16).padStart(2, "0")).join("");
+const snap = (h) => from565(hexTo565(h));            /* the colour the FM-1 can show (RGB565) */
+const rgbOf = (h) => { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
+const mixHex = (a, b, pct) => { const x = rgbOf(a), y = rgbOf(b);    /* gfx.c ux_mix, in 8 bits */
+  return "#" + x.map((v, i) => Math.round(v + (y[i] - v) * pct / 100).toString(16).padStart(2, "0")).join(""); };
+const lum = (h) => rgbOf(h).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
+  .reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i], 0);
+const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+/* the tokens as the firmware derives them for CUSTOM on SHARD */
+function themeTokens(c) {
+  const [bg, main, text, red, accent] = c.map(snap);
+  return { bg, main, text, red, accent, mid: mixHex(bg, text, 61), dim: mixHex(bg, text, 35), line: mixHex(bg, text, 20) };
+}
+function drawThemePreview() {
+  const cv = $("theme-preview"), g = cv.getContext("2d"), k = themeTokens(theme.cols);
+  const font = (px, w = 700) => `${w} ${px}px "Arial Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif`;
+  const txt = (x, y, str, c, px = 15, w = 700, align = "left") => { g.fillStyle = c; g.font = font(px, w); g.textAlign = align; g.fillText(str, x, y); };
+  g.fillStyle = k.bg; g.fillRect(0, 0, 240, 240);
+  g.fillStyle = k.accent; g.fillRect(4, 3, 16, 16); txt(12, 16, "1", k.bg, 13, 700, "center");
+  g.fillStyle = k.main; g.beginPath(); g.moveTo(96, 5); g.lineTo(104, 11); g.lineTo(96, 17); g.fill();
+  txt(124, 17, "124", k.main, 15);
+  g.strokeStyle = k.text; g.lineWidth = 1; g.strokeRect(217.5, 6.5, 16, 9); g.fillStyle = k.text; g.fillRect(234, 9, 2, 4);
+  [["ATK", "2.1", "ms"], ["DEC", "160", "ms"], ["SUS", "31", "%"], ["REL", "4.3", "ms"]].forEach(([l, v, u], i) => {
+    const x = 8 + i * 58;
+    txt(x, 44, l, k.mid, 11, 600); txt(x, 62, v, k.main, 15); txt(x + g.measureText(v).width + 3, 62, u, k.mid, 11, 600);
+    g.fillStyle = i === 1 ? k.text : k.dim; g.fillRect(x, 68, i === 1 ? 26 : 4, 3);
+  });
+  for (let x = 12; x < 228; x++) {                 /* a breakbeat: hits that decay */
+    const ph = (x - 12) % 27, a = Math.exp(-ph / 7) * (0.55 + 0.45 * ((x * 7919) % 13) / 13) * 34;
+    g.fillStyle = k.main; g.fillRect(x, 120 - a, 1, Math.max(1, 2 * a));
+  }
+  g.fillStyle = k.text; for (let i = 0; i < 9; i++) g.fillRect(12 + i * 27, 80, 1, 82);
+  g.strokeStyle = k.red; g.lineWidth = 1.5; g.beginPath();
+  g.moveTo(108, 160); g.lineTo(109, 84); for (let x = 109; x < 120; x++) g.lineTo(x, 84 + (x - 109) * 4.5); g.lineTo(120, 160); g.stroke();
+  g.fillStyle = k.text; g.fillRect(107, 80, 2, 82);
+  txt(12, 196, "120.0 BPM  DIV AUTO", k.mid, 13, 700); txt(228, 196, "BREAK", k.dim, 13, 700, "right");
+  for (let i = 0; i < 16; i++) { g.fillStyle = i === 5 ? k.text : k.line; g.fillRect(12 + i * 13.5, 210, 9, 2); }
+  txt(8, 232, "SHARD", k.main, 12, 600); txt(54, 232, "RECYCLE", k.text, 12, 600); txt(232, 232, "LOOP 1/2", k.mid, 12, 600, "right");
+}
+function themeWarnings() {
+  const k = themeTokens(theme.cols), out = [], f = (r) => r.toFixed(1);
+  const ct = contrast(k.text, k.bg), cm = contrast(k.main, k.bg), cr = contrast(k.red, k.bg), cl = contrast(k.mid, k.bg);
+  if (ct < 4.5) out.push(t("themeWarnText").replace("{r}", f(ct)));
+  if (cm < 3) out.push(t("themeWarnMain").replace("{r}", f(cm)));
+  if (cr < 3) out.push(t("themeWarnRed").replace("{r}", f(cr)));
+  if (cl < 3 && ct >= 4.5) out.push(t("themeWarnLabels").replace("{r}", f(cl)));
+  $("theme-warn").replaceChildren(...out.map((w) => el("p", { class: "dim", text: "⚠ " + w })));
+}
+function themePreviewSoon() {                        /* (one in flight, the latest wins: the Link coalesces by key) */
+  if (!dev || !dev.themeOk || !$("theme-live").checked) return;
+  clearTimeout(theme.tm);
+  theme.tm = setTimeout(() => {
+    const d = dev;
+    if (!d) return;
+    theme.previewing = true;
+    sessionRequest(d, req.paletteSet(0, theme.cols.map(hexTo565)), { key: "theme-preview", quiet: true, timeout: 800 })
+      .catch((e) => { if (e.message !== "closed") console.debug("theme preview", e); });
+  }, 60);
+}
+function themeChanged() { drawThemePreview(); themeWarnings(); themePreviewSoon(); }
+function renderTheme() {
+  const box = $("theme-editor");
+  box.hidden = !dev || !dev.themeOk;
+  if (box.hidden) return;
+  const start = $("theme-start");
+  start.replaceChildren(el("option", { value: "", text: t("themeStartPick") }),
+    ...THEME_STARTS.map(([n], i) => el("option", { value: i, text: n })));
+  $("theme-rows").replaceChildren(...THEME_ROLES.map(([name, help], i) => {
+    const pick = el("input", { type: "color", value: snap(theme.cols[i]), "aria-label": t(name) });
+    const hex = el("input", { type: "text", value: snap(theme.cols[i]), maxlength: 7, spellcheck: "false", "aria-label": t(name) });
+    pick.addEventListener("input", () => { theme.cols[i] = pick.value; hex.value = snap(pick.value); themeChanged(); });
+    hex.addEventListener("change", () => {
+      const v = hex.value.trim().replace(/^([0-9a-f]{6})$/i, "#$1");
+      if (/^#[0-9a-f]{6}$/i.test(v)) { theme.cols[i] = v.toLowerCase(); pick.value = snap(v); hex.value = snap(v); themeChanged(); }
+      else hex.value = snap(theme.cols[i]);
+    });
+    return el("div", { class: "theme-row" }, el("span", { text: t(name) }), pick, hex, el("span", { class: "dim", text: t(help) }));
+  }));
+  const B = (key, fn, ic) => el("button", { ic, onclick: fn }, t(key));
+  $("theme-buttons").replaceChildren(B("themeSave", themeSave, "symbol_upload"), B("themeDiscard", themeDiscard),
+    B("themeFromDevice", () => themeRead(true)), B("themeRemove", themeRemove, "symbol_trash"),
+    B("themeExport", themeExport, "symbol_download"), B("themeImport", themeImport, "symbol_folder"));
+  drawThemePreview(); themeWarnings();
+}
+$("theme-start").addEventListener("change", (e) => {
+  const i = e.target.value;
+  if (i === "") return;
+  theme.cols = THEME_STARTS[+i][1].slice();
+  renderTheme(); themePreviewSoon();
+});
+$("theme-live").addEventListener("change", () => { if ($("theme-live").checked) themePreviewSoon(); else themeDiscard(); });
+/* after connecting: does the firmware take a palette (PALETTE_GET answers), and what is in use */
+async function themeRead(say = false, d = dev) {
+  if (!d) return;
+  try {
+    const r = parse[CMD.PALETTE_GET](await sessionRequest(d, req.paletteGet(), { quiet: true, timeout: 600, retries: 1 }));
+    d.themeOk = r.colors.length === 5;
+    if (d.themeOk && (r.flags & 1 || say)) theme.cols = r.colors.map(from565);   /* (none stored: keep the start, SWISS) */
+    theme.flags = r.flags; theme.previewing = false;
+  } catch (e) { if (e.message === "closed") throw e; d.themeOk = false; }
+  if (d === dev) renderTheme();
+}
+function themeRc(rc, okKey) {
+  sayK(rc === 0 ? okKey : rc === 4 ? "themeSavedLater" : rc === 3 ? "themeSavedRam" : "themeRefused");
+}
+async function themeSave() {
+  const d = dev;
+  if (!d) return;
+  await op(async () => {
+    const r = parse[CMD.PALETTE_SET](await sessionRequest(d, req.paletteSet(1, theme.cols.map(hexTo565)), FLASH_OPT));
+    theme.previewing = false; theme.flags = r.flags ?? theme.flags;
+    themeRc(r.rc, "themeSaved");
+    await syncPreferences(d);
+  });
+}
+async function themeDiscard() {
+  const d = dev;
+  if (!d) return;
+  await op(async () => {
+    await sessionRequest(d, req.paletteSet(3));
+    theme.previewing = false;
+    await themeRead(false, d);
+    sayK("themeDiscarded");
+  });
+}
+async function themeRemove() {
+  const d = dev;
+  if (!d) return;
+  await op(async () => {
+    const r = parse[CMD.PALETTE_SET](await sessionRequest(d, req.paletteSet(2), FLASH_OPT));
+    theme.previewing = false; theme.flags = 0;
+    themeRc(r.rc, "themeRemoved");
+    await syncPreferences(d);
+  });
+}
+function themeExport() {
+  const data = { format: "shard-theme", version: 1, colors: theme.cols.map(snap),
+    roles: ["background", "main", "text", "red", "accent"] };
+  downloadBytes("shard-theme.json", new TextEncoder().encode(JSON.stringify(data, null, 2)));
+}
+function themeImport() {
+  const f = el("input", { type: "file", accept: ".json,application/json" });
+  f.addEventListener("change", async () => {
+    try {
+      const o = JSON.parse(await f.files[0].text());
+      if (o.format !== "shard-theme" || !Array.isArray(o.colors) || o.colors.length !== 5 ||
+          !o.colors.every((c) => /^#[0-9a-f]{6}$/i.test(c))) throw new Error("bad");
+      theme.cols = o.colors.map((c) => c.toLowerCase());
+      renderTheme(); themePreviewSoon();
+    } catch (e) { sayK("themeBadFile"); }
+  });
+  f.click();
+}
+
 setInterval(() => {
   if (!dev || !dev.preferences || busy || document.hidden || !["settings", "library"].includes(tab)) return;
   const d = dev;
