@@ -30,20 +30,21 @@ import time
 HS_QUERY = bytes([0xF0, 0x00, 0x32, 0x45, 0x00, 0x00, 0x00, 0x40, 0x7F, 0xF7])
 UPGRADE = bytes([0xF0, 0x22, 0x24, 0x35, 0x7F, 0xF7])
 FINISH_CHECK, FINISH_WRITE = 0xE0000000, 0xF0000000
+REPORT = 0xD0000000      # (from DUO v0.8.6) a failed loader's report: 0xD0kk_vvvv, kk = 2 i / 2 i + 1 (halves of value i), FF end
 MAXDATA = 512
 BLOCKS, BLK, KEEP = 20, 0x30, 0x2F
 LOADER_MARK = b"FELUCCA-LOADER-1"
 # the unmodified official FM-1 V15 (FM-1.fwsc from M-VAVE): returning to it is allowed without --force,
 # as the web installer's "Return to official V15" (web/fm1pkg.js validateStockPackage)
 STOCK_V15_SHA256 = "db1642b2b6fa5c2cccb11ffd13878068bb28601678d3644049f99dc40e7edb8a"
-PORT_RE = re.compile(r"fm-1|felucca|ota|composite|sinco|usb-midi", re.I)   # never probe other gear
+PORT_RE = re.compile(r"fm-1|fmini|felucca|ota|composite|sinco|usb-midi", re.I)   # never probe other gear
 
 # seconds; the tests shorten them
 DELAY = {"open": 0.3, "start": 2.0, "reply": 0.01, "loader": 3.0, "reboot": 3.0, "retry": 1.0,
          "poll": 1.0, "hs": 1.0, "idle_check": 8.0, "idle_write": 180.0,
          "wait_loader": 30.0, "wait_reboot": 40.0}
 
-EXIT = {"usage": 2, "badpkg": 2, "notfound": 3, "model": 6, "lost": 4, "stopped": 4, "badreq": 4,
+EXIT = {"usage": 2, "badpkg": 2, "notfound": 3, "model": 6, "lost": 4, "stopped": 4, "badreq": 4, "loaderfail": 4,
         "noloader": 5, "noreturn": 5, "mismatch": 6}
 
 
@@ -87,6 +88,25 @@ def response(addr, data, fl=0):
     body += addr.to_bytes(4, "little") + bytes([n & 0xFF, (n >> 8) & 0xFF, 0]) + bytes(data)
     body.append(~sum(body[6:]) & 0xFF)
     return b"\xF0" + pack7(body) + b"\xF7"
+
+
+REPORT_NAMES = ("PORTD_OUT", "PORTD_DIR", "PORTD_DIE", "PORTD_PU", "PORTD_PD", "SPI0_CON", "SPI0_BAUD", "IOMAP_CON0",
+                "SFC_CON", "flash_id", "pins", "rc", "head32", "head36")
+
+
+def loader_report(rep):
+    """firmware/loader/loader.c ldr_tell -> a message: why, and every value (to paste into a bug report)"""
+    v = [rep.get(2 * i, 0) | rep.get(2 * i + 1, 0) << 16 for i in range(len(REPORT_NAMES))]
+    rc = v[11] - (1 << 32) if v[11] & 0x80000000 else v[11]
+    why = ("no flash answered on any pin setting" if rc == -51 else
+           "the flash write test failed" if -56 <= rc <= -52 else
+           "the chip key could not be read from the flash's head" if -44 <= rc <= -40 else
+           "the write failed partway: run the install again to finish" if -11 <= rc <= -8 else
+           "the package does not match this FM-1" if rc in (-6, -12, -14) else "it stopped")
+    safe = "" if -11 <= rc <= -8 else " Nothing of the installed firmware was erased."
+    vals = "  ".join(f"{n}={x:08X}" if n not in ("pins", "rc") else f"{n}={x - (1 << 32) if x & 0x80000000 else x}"
+                     for n, x in zip(REPORT_NAMES, v))
+    return f"the update loader stopped ({rc}): {why}.{safe}\nloader report: {vals}"
 
 
 def parse_request(pkt):
@@ -285,7 +305,7 @@ class Updater:
 
     def serve(self, link, image, finish, idle, progress):
         """answer read requests until the device asks for `finish`; -> (served, finished, lost)"""
-        served, last = 0, time.monotonic()
+        served, last, rep = 0, time.monotonic(), {}
         while True:
             pkt = link.read(DELAY["poll"])
             if pkt is None:
@@ -299,6 +319,13 @@ class Updater:
                 continue
             fl, addr, n = r
             last = time.monotonic()
+            if REPORT <= addr < FINISH_CHECK:          # (from DUO v0.8.6) the loader tells why it stopped
+                link.send(response(addr, bytes(min(n, 8)), fl))
+                k = addr >> 16 & 0xFF
+                if k == 0xFF:
+                    raise InstallError("loaderfail", loader_report(rep))
+                rep[k] = addr & 0xFFFF
+                continue
             if addr in (FINISH_CHECK, FINISH_WRITE):
                 link.send(response(addr, b"success\0"))
                 if addr == finish:
@@ -419,6 +446,17 @@ class Progress:
             self.line = False
 
 
+# (from DUO v0.8.2) an FM-1 on official V16 or later: its flash header (which an install keeps) boots the processor at
+# 320 MHz, not V15's 360 (isd_config SYS_CLK); the firmware runs, with less time for the sound. The way back to stock is V15 first.
+V16_NOTE = ("note:    this FM-1 runs official V16: the firmware installs and runs on it, but V16's boot settings run the processor at\n"
+            "         320 MHz instead of V15's 360 (about 11 % less time for the sound). To go back\n"
+            "         to stock later: install the official V15 file with this tool, then update to V16 with M-VAVE's updater.")
+
+
+def v16_note(ident):
+    return not ident.loader and ident.model == "FM-1" and 16 <= ident.version < 900
+
+
 def run(a, backend, out, ask):
     up = Updater(backend, a.port)
     if a.info:
@@ -428,6 +466,8 @@ def run(a, backend, out, ask):
         dev.link.close()
         mode = "update loader (update not finished)" if dev.id.loader else "running"
         print(f"{dev.id.text}  [{mode}]  port: {dev.name}", file=out)
+        if v16_note(dev.id):
+            print(V16_NOTE, file=out)
         return 0
     product, image = load_package(a.package, a.force)
     print(f"package: {product}  ({a.package})", file=out)
@@ -436,6 +476,8 @@ def run(a, backend, out, ask):
         raise not_found(up)
     print(f"device:  {dev.id.text}  ({dev.name})" + ("  in update mode: the write will be finished" if dev.id.loader else ""),
           file=out)
+    if v16_note(dev.id):
+        print(V16_NOTE, file=out)
     if not a.yes and not ask("Install? Do not unplug the FM-1 while writing. [y/N] "):
         dev.link.close()
         print("cancelled", file=out)

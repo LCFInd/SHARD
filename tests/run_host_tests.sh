@@ -534,6 +534,7 @@ fi
 
 
 run "installer CLI (fm1_install.py) against a simulated FM-1" python3 tests/install_test.py
+run "rescue CLI (fm1_rescue.py): the download mode's ROM, the loader into RAM, then the install" python3 tests/rescue_test.py
 
 if command -v node >/dev/null 2>&1; then
     run "web pages: editor protocol + samples, package builder, update protocol" node web/test_web.mjs

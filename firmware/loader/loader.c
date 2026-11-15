@@ -19,7 +19,7 @@
 /* the loader may write the app area and erase update records; never the head, nor Felucca's store
  * [0x97000, 0xE0000) (user data, never a record: ldr_core.c) */
 #define FL_RANGE_OK(off, n) (FL_IN(off, n, 0x4000u, 0x97000u) || FL_IN(off, n, 0xE0000u, 0xFC000u))
-#include "fm1_flash.h"
+#include "fm1_flash_ldr.h"                  /* (hal/: the BSP's fm1_flash.h + the download-mode start) */
 #include "../bsp/chip/libc.c"
 #include "../bsp/chip/usb.c"
 
@@ -75,16 +75,84 @@ static void ldr_record_clear(void)
 static void ldr_progress(uint32_t done, uint32_t total) { (void)done; (void)total; ldr_poll(); }
 #include "ldr_core.c"
 
+/* tools/fm1_rescue.py sends this image straight to the mask ROM's UBOOT mode (no SPL, no update record, no staged copy
+ * at 0xE0000) and sets the last byte to '1' in what it sends. Started that way:
+ *  - a loader no installer talks to within LDR_ROM_WAIT_MS (no upgrade request) reboots into the app (untouched), instead
+ *    of waiting with the watchdog fed until the battery is flat;
+ *  - before the session, the flash: its pins set up from reset (the ROM leaves them; hal/fm1_flash.h fl_rom_pins), then
+ *    a write test on the first sector of the update staging area (0xE0000: nothing of the app, nothing stored);
+ *  - a session that fails before its first erase reboots into the app after its report; one that fails after it keeps
+ *    the loader up, as always: the install is run again.
+ * Started by the SPL the byte stays '0'. Any failed session reports to the host (ldr_tell). */
+static volatile const char ldr_rom_start[16] = "SHD-ROMSTART2-0";
+#define LDR_ROM_WAIT_MS 60000u
+#define LDR_TEST_SEC 0xE0000u
+
+/* the report: 0..8 port D and SPI0 as found (fl_regs), 9 flash id, 10 pin setting, 11 rc, 12..13 the head at 32 */
+enum { LDR_D_ID = 9, LDR_D_PINS, LDR_D_RC, LDR_D_HEAD, LDR_D_N = 14 };
+static uint32_t ldr_diag[LDR_D_N];
+
+static int ldr_rom_flash(void)
+{
+    static uint8_t b[256];
+    uint32_t i, id;
+    int pins = fl_rom_pins(&id);
+    ldr_diag[LDR_D_ID] = id;
+    ldr_diag[LDR_D_PINS] = (uint32_t)pins;
+    if (pins < 0)
+        return -51;                                 /* no flash answers on any pin setting */
+    if (ldr_erase(LDR_TEST_SEC))
+        return -52;
+    for (i = 0; i < 256u; i++)
+        b[i] = (uint8_t)(i * 7u + 1u);
+    if (ldr_prog(LDR_TEST_SEC, b, 256))
+        return -53;
+    for (i = 0; i < 256u; i++)
+        b[i] = 0;
+    if (ldr_fread(LDR_TEST_SEC, b, 256))
+        return -54;
+    for (i = 0; i < 256u; i++)
+        if (b[i] != (uint8_t)(i * 7u + 1u))
+            return -55;                             /* written, read back other */
+    return ldr_erase(LDR_TEST_SEC) ? -56 : 0;
+}
+
+/* a failed session, told to the host: read requests at 0xD0kk_vvvv (kk = 2 i (low half), 2 i + 1 (high), FF the end),
+ * which tools/fm1_install.py answers and prints; an older host stops at the first */
+static void ldr_tell(int rc)
+{
+    uint8_t b[8];
+    uint32_t i, v;
+    ldr_diag[LDR_D_RC] = (uint32_t)rc;
+    if (!ldr_fread(32, b, 8))
+        ldr_diag[LDR_D_HEAD] = ota_rd32(b), ldr_diag[LDR_D_HEAD + 1] = ota_rd32(b + 4);
+    for (i = 0; i < LDR_D_N; i++) {
+        v = ldr_diag[i];
+        if (ota_read(0xD0000000u | (2u * i) << 16 | (v & 0xFFFFu), b, 4) ||
+            ota_read(0xD0000000u | (2u * i + 1u) << 16 | v >> 16, b, 4))
+            return;
+    }
+    (void)ota_read(0xD0FF0000u, b, 4);
+}
+
 extern uint32_t _bss_start[], _bss_end[];
 
 void ldr_main(void)
 {
+    uint32_t talked = 0, rom = ldr_rom_start[14] == '1';
+    int rc, flash = 1;                              /* (ROM start) 1 = not set up yet, else ldr_rom_flash's */
     fm1_wdt_arm(0x0D);                              /* ~8 s, fed by ldr_poll */
     fm1_time_init();
+    fl_regs(ldr_diag);                              /* (as found: read only) */
     usb_start();
     for (;;) {
         ldr_poll();
         usb_retry(ldr_ms());
+        if (rom && !talked && ldr_ms() > LDR_ROM_WAIT_MS) {
+            usb_detach();
+            fm1_delay_ms(30);
+            fm1_reboot();
+        }
         if (usb.uboot_req) {                        /* soft key: mask-ROM UBOOT, as in Felucca */
             usb_detach();
             fm1_delay_ms(30);
@@ -92,12 +160,23 @@ void ldr_main(void)
         }
         ota_service();                              /* handshake */
         if (usb.ota_req) {
+            talked = 1;
             usb.ota_req = 0;
-            if (ldr_session() == 0) {
+            if (rom && flash > 0)
+                flash = ldr_rom_flash();
+            rc = rom && flash ? flash : ldr_session();
+            if (rc == 0) {
                 fm1_delay_ms(200);                  /* the "success" reply leaves */
                 usb_detach();
                 fm1_delay_ms(30);
                 fm1_core_reset();                   /* the SPL boots the new app */
+            }
+            ldr_tell(rc);
+            if (rom && (rc < -11 || rc > -8)) {     /* nothing of the app erased (-8..-11: the write began) */
+                fm1_delay_ms(200);
+                usb_detach();
+                fm1_delay_ms(30);
+                fm1_reboot();
             }
         }
     }

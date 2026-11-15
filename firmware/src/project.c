@@ -1187,6 +1187,17 @@ static uint8_t persist_pending;                 /* 1 requested, 2 waiting after 
 static uint32_t persist_retry_ms;
 #endif
 
+/* the flash SHARD stores in: any 1 MiB (8 Mbit) SPI NOR (JEDEC capacity byte 0x14), as DUO v0.8.4 (LCFInd/DUO).
+ * Felucca took Puya's 0x856014 and 0xB36014; FM-1s are built with other makers' parts too, and the commands used here
+ * (9F 05 35 06 20 02 0B) are the common SPI NOR set the update loader already writes the app with */
+#if FELUCCA_FLASH
+static uint32_t fl_id_ok(uint32_t id)
+{
+    uint32_t mf = id >> 16 & 0xFFu;
+    return (id & 0xFFu) == 0x14u && mf != 0x00u && mf != 0xFFu;
+}
+#endif
+
 static void persist_boot(void)                    /* before settings_init / panel_init */
 {
 #if FELUCCA_SHARD
@@ -1196,7 +1207,7 @@ static void persist_boot(void)                    /* before settings_init / pane
     persist_t p;
     uint32_t f = irq_save();
     uint32_t flash_id = FL_FAR(fl_jedec_ram)();
-    flash_ok = flash_id == 0x856014u || flash_id == 0xB36014u; /* known 1 MiB parts, else RAM-only */
+    flash_ok = fl_id_ok(flash_id);                 /* any 1 MiB SPI NOR, else RAM-only */
     irq_restore(f);
     if (!flash_ok)
         return;

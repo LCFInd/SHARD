@@ -26,6 +26,18 @@ and install it from the command line (needs `pip3 install mido python-rtmidi`):
 python3 tools/fm1_install.py felucca-shard-XXXXXXX.fwsc
 ```
 
+**If the installer says "the update loader did not appear"** (some FM-1s, on official V16 or with another maker's
+flash chip), install through the chip's USB download mode instead. Download `fm1_rescue.py`, `fm1_install.py`,
+`lz4blk.py` and the `.fwsc` from the release into one folder, then:
+
+```
+pip3 install mido python-rtmidi pyusb libusb-package
+sudo python3 fm1_rescue.py felucca-shard-XXXXXXX.fwsc
+```
+
+Nothing is written until the final step; if that stops halfway, run it again. (The rescue route and its loader
+support come from [DUO](https://github.com/LCFInd/DUO) v0.8.6.)
+
 Felucca's hosted installer installs only Felucca's own releases, so use one of the two routes above. Both installers
 offer a way back: Felucca's [installer](https://hugelton.github.io/Felucca/) puts stock Felucca back on, and its
 "Return to official V15" option restores M-VAVE's firmware.

@@ -80,9 +80,10 @@ jobs:
           set -e
           cp build/felucca.fwsc "felucca-shard-${GITHUB_SHA::7}.fwsc"
           gh release delete shard-latest --yes --cleanup-tag || true
-          gh release create shard-latest "felucca-shard-${GITHUB_SHA::7}.fwsc" --prerelease --target "$GITHUB_SHA" \
+          gh release create shard-latest "felucca-shard-${GITHUB_SHA::7}.fwsc" \
+            tools/fm1_install.py tools/fm1_rescue.py tools/lz4blk.py --prerelease --target "$GITHUB_SHA" \
             --title "SHARD latest (${GITHUB_SHA::7})" \
-            --notes "The newest SHARD build from the shard branch (${GITHUB_SHA::7}). Install it in Chrome or Edge with SHARD's own installer (https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/), or with tools/fm1_install.py. Felucca's hosted installer installs only Felucca's own releases."
+            --notes "The newest SHARD build from the shard branch (${GITHUB_SHA::7}). Install it in Chrome or Edge with SHARD's own installer (https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/), or from Terminal: python3 fm1_install.py felucca-shard-${GITHUB_SHA::7}.fwsc (or sudo python3 fm1_rescue.py ... on an FM-1 whose firmware won't start the update). Felucca's hosted installer installs only Felucca's own releases."
 
       # SHARD's own web installer (Felucca's installer page with this build inside), for GitHub Pages
       - name: The installer site

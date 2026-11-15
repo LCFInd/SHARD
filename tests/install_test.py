@@ -206,6 +206,19 @@ def installs():
     rc, out, err = cli(["--info"], dev)
     ok(rc == 0 and "update loader" in out, "--info: device in update mode")
 
+    # (DUO v0.8.2) an FM-1 on official V16: the note on its 320 MHz boot settings, with --info and before installing;
+    # none for V15, for a running Felucca / DUO (FM-1_9xx) or for the update loader
+    dev = FakeFM1(image, identity="FM-1_016")
+    rc, out, err = cli(["--info"], dev)
+    ok(rc == 0 and "official V16" in out and "320 MHz" in out, "--info: an FM-1 on V16 gets the note on its 320 MHz boot settings")
+    dev = FakeFM1(image, identity="FM-1_016")
+    rc, out, err = cli([p], dev, answer=False)
+    ok(rc == 1 and "official V16" in out and dev.upgrades == 0, "install on V16: the note before the question; no -> nothing sent")
+    for ident in ("FM-1_015", "FM-1_905", "ota-FM-1_900"):
+        dev = FakeFM1(image, identity=ident)
+        rc, out, err = cli(["--info"], dev)
+        ok(rc == 0 and "official V16" not in out, f"--info: no V16 note for {ident}")
+
     dev = FakeFM1(image, identity="\x1b[2J\x1b]0;x\x07FM-1_905", name="Felucca")
     rc, out, err = cli(["--info"], dev)
     ok(rc == 0 and "FM-1_905" in out and not any(c in out for c in "\x1b\x07"),
@@ -306,11 +319,12 @@ def official():
     ok(rc == 2 and "official V15" in err and dev.sent == [], "a modified V15 is still refused (no MIDI)")
 
 
-wire()
-installs()
-errors()
-against_js()
-official()
-shutil.rmtree(TMP, ignore_errors=True)
-print(f"INSTALL TESTS FAILED ({failed})" if failed else "install tests passed")
-sys.exit(1 if failed else 0)
+if __name__ == "__main__":                          # (tests/rescue_test.py imports the fake FM-1)
+    wire()
+    installs()
+    errors()
+    against_js()
+    official()
+    shutil.rmtree(TMP, ignore_errors=True)
+    print(f"INSTALL TESTS FAILED ({failed})" if failed else "install tests passed")
+    sys.exit(1 if failed else 0)

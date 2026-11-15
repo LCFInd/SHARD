@@ -20,6 +20,10 @@ thanks the work below; each keeps its own licence (see [LICENSE](LICENSE), [LICE
   [X0X](https://github.com/charlesvestal/fm1-x0x) by [charlesvestal](https://github.com/charlesvestal) (in felucca-bsp); the parts' split,
   measurements and hardening after [Jangada](https://github.com/zednaked/jangada) by [zednaked](https://github.com/zednaked) (GPL-3.0)
 - AFTERTOUCH's key pressure: after [fm1-base](https://github.com/charlesvestal/fm1-base) by [charlesvestal](https://github.com/charlesvestal) ([MPL-2.0](LICENSES/MPL-2.0-felucca-bsp.txt); `firmware/src/keytouch.{c,h}`)
+- SHARD's rescue install (`tools/fm1_rescue.py`, `tools/fm1_install.py`'s loader report, the update loader's start from the
+  download mode in `firmware/loader/loader.c` and `firmware/hal/fm1_flash_ldr.h`, any 1 MiB flash part): from
+  [DUO](https://github.com/LCFInd/DUO) v0.8.6 by LCFInd (GPL-3.0), after [jl-uboot-tool](https://github.com/kagaimiq/jl-uboot-tool)
+  by kagaimiq and FM-1-transporter
 - Package format and boot files: [JieLi AC79 SDK](https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK) ([Apache-2.0](LICENSES/Apache-2.0.txt); three of its files are in every package, none in this tree)
 - Contributions: [keremimo](https://github.com/keremimo) (white-key scales, #2), [ChanceTheMaker](https://github.com/ChanceTheMaker)
   (TRS MIDI, bend, sustain and clock, palettes, favourites, editor display settings: #8, #10, #11, #12),
