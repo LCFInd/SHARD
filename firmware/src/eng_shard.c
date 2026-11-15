@@ -1239,6 +1239,8 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
             y = (int32_t)(((int64_t)w * (32768 - gq / 2)) >> 15);
         } else if (sl->filt) {                      /* the slice's filter: Chamberlin at 2x */
             int32_t ff = SHD_SVF_F[sl->cut & 127], qq = SHD_SVF_Q[sl->res & 127], in = shd_sat(y, 65535), hi = 0, k;
+            if (qq > SHD_SVF_QMAX[sl->cut & 127])   /* (stable at the top: CUT 127 with a low RES ran away and clipped) */
+                qq = SHD_SVF_QMAX[sl->cut & 127];
             for (k = 0; k < 2; k++) {
                 x->lo = shd_sat(x->lo + ((ff * x->bd) >> 14), 65535);
                 hi = shd_sat(in - x->lo - ((qq * x->bd) >> 14), 65535);

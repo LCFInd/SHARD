@@ -16,6 +16,12 @@ table("uint32_t", "SHD_ENV_STEP", [max(1, round((1 << 30) / (t(i) * FS))) for i 
 hz = lambda i: 30 * (16000 / 30) ** (i / 127)
 table("int32_t", "SHD_SVF_F", [round(16384 * 2 * math.sin(math.pi * hz(i) / (2 * FS))) for i in range(128)])
 table("int32_t", "SHD_SVF_Q", [round(16384 * (2.0 - 1.92 * (i / 127) ** 0.7)) for i in range(128)])
+# the damping's ceiling per cutoff: the Chamberlin filter is stable only while f q < 2 and f^2 + 2 f q < 4 (each of
+# the two steps a sample); near the top a low RES broke both (CUT 127, RES 0: f q 2.16, a sine came out clipped at
+# 3x). With a margin (f q <= 1.6, f^2 + 2 f q <= 3.4) the top 9 cutoffs take less damping; below, the table is 2.0
+svf_f = [2 * math.sin(math.pi * hz(i) / (2 * FS)) for i in range(128)]
+table("int32_t", "SHD_SVF_QMAX", [min(32768, int(16384 * min(1.6 / f, (3.4 - f * f) / (2 * f)))) for f in
+                                  [round(16384 * x) / 16384 for x in svf_f]])
 # band split one-poles: 0..127 -> 40 Hz .. 12 kHz (Q15)
 xo = lambda i: 40 * (12000 / 40) ** (i / 127)
 table("int32_t", "SHD_ONEPOLE", [round(32768 * (1 - math.exp(-2 * math.pi * xo(i) / FS))) for i in range(128)])

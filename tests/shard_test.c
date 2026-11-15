@@ -1085,6 +1085,37 @@ int main(int argc, char **argv)
         }
     }
     check("every FILTER x DRIVE at full resonance and drive, 8 voices: bounded", ok, 0);
+    {   /* (2026-11-14, from the hardware) LP fully open, RES low: the Chamberlin filter ran away (f q 2.16) and the
+         * slice came out distorted. Now SHD_SVF_QMAX holds it: the slice as with FILTER OFF, at every low RES */
+        double e[4];
+        int32_t pk[4];
+        uint32_t r, w = 1;
+        static const uint8_t RES[3] = {0, 15, 30};
+        fresh(1, SHD_M_LOOP, 5);                         /* (a run first: the tests before leave voices, a fade) */
+        blocks(400);
+        for (r = 0; r < 4u; r++) {
+            fresh(1, SHD_M_LOOP, 5);
+            for (i = 0; i < SLC_AUTO; i++) {
+                shd_kit[0].sl[i].filt = r ? SHD_F_LP : SHD_F_OFF;
+                shd_kit[0].sl[i].cut = 127;
+                shd_kit[0].sl[i].res = r ? RES[r - 1u] : 0;
+                shd_kit[0].sl[i].dtype = 0;              /* (the test before left DRIVE on) */
+                shd_kit[0].sl[i].drv = 0;
+            }
+            trk_note_on(T, 60, 100);
+            blocks(40);                                  /* (the voice under way) */
+            out_peak = 0;
+            out_energy = 0;
+            blocks(200);
+            e[r] = out_energy;
+            pk[r] = out_peak;
+        }
+        for (r = 1; r < 4u; r++)
+            w &= e[r] > e[0] * 0.8 && e[r] < e[0] * 1.25 && pk[r] < pk[0] * 5 / 4 + 200;
+        printf("shard: LP CUT 127 (RES 0, 15, 30) against FILTER OFF: energy x%.2f x%.2f x%.2f, peak %d %d %d / %d\n",
+               e[1] / e[0], e[2] / e[0], e[3] / e[0], (int)pk[1], (int)pk[2], (int)pk[3], (int)pk[0]);
+        check("LP fully open, low RES: the slice as with FILTER OFF (it ran away and distorted)", w, 0);
+    }
     {
         voice_t *v0;
         fresh(1, SHD_M_LOOP, 5);
