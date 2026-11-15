@@ -462,6 +462,9 @@ typedef struct {
 
 static const page_t PAGES[] = {
     {"ENV", FAM_ENV, SC_TRACK, GR_ADSR, {P_ATK, P_DEC, P_SUS, P_REL}},
+    {"LOOP", FAM_ENV, SC_TRACK, GR_LOOP, {P_ATK, P_DEC, P_SUS, P_REL}},  /* SHARD only, in ENV's place (2026-11-14: was
+                                                                             * EDIT's first page): the whole loop, the voices playing it,
+                                                                             * the track's ENV over it (ui_slice.c); ENV's page hides */
     {"ENV DEST", FAM_ENV, SC_TRACK, GR_NONE, {P_ED_FLT, P_ED_PIT, P_ED_SHP, P_ESYNC}},   /* (P_ED_FX: nothing reads it);
                                                                              * 1.5: ESYNC, ENV's times as note values */
     {"LFO", FAM_LFO, SC_TRACK, GR_LFO, {P_LRATE, P_LWAVE, P_LPHASE, P_LFADE}},
@@ -478,8 +481,6 @@ static const page_t PAGES[] = {
     {"LIVE", FAM_SCL, SC_GLOBAL, GR_LIVE, {0xFF, 0xFF, 0xFF, 0xFF}},   /* the mangler: SCL is LIVE (live.c); SCL, CHORD hide */
     {"SCL", FAM_SCL, SC_TRACK, GR_SCALE, {P_ROOT, P_SCALE, P_QUANT, P_TRANS}},
     {"CHORD", FAM_SCL, SC_TRACK, GR_CHORD, {P_CHRD, P_VOIC, 0xFF, 0xFF}},   /* SCL again: the chord keys (chord.c) */
-    {"LOOP", FAM_EDIT, SC_TRACK, GR_LOOP, {P_ATK, P_DEC, P_SUS, P_REL}},  /* SHARD only: the whole loop, the voices
-                                                                             * playing it, the track's ENV over it (ui_slice.c); ENV's page hides */
     {"EDIT 1", FAM_EDIT, SC_ENGINE, GR_NONE, {P_E0, P_E1, P_E2, P_E3}},
     {"EDIT 2", FAM_EDIT, SC_ENGINE, GR_NONE, {P_E4, P_E5, P_E6, P_E7}},
     {"FILTER", FAM_EDIT, SC_TRACK, GR_NONE, {P_FTYPE, P_E4, P_E5, P_E7}},   /* ANALOG only (1.5, #104): TYPE CUT RES KTR */

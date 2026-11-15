@@ -155,10 +155,16 @@ static int lfo(void)
         t->p[P_M1SRC] = t->p[P_M1DST] = t->p[P_M1AMT] = 0;
         t->p[P_LPOL] = 0;
     }
-    bad += check("LFO 2 is no automation (motion_param), its page SYNC TRIG POL after LFO (LFO's family)",
-                 !motion_param(P_LSYNC) && !motion_param(P_LTRIG) && !motion_param(P_LPOL) && !motion_param(P_SQNT) &&
-                 motion_param(P_LN7) && motion_param(P_E0) && PAGES[3].id[0] == P_LSYNC && !strcmp(PAGES[3].title, "LFO 2") &&
-                 PAGES[3].fam == FAM_LFO && PAGES[2].graph == GR_LFO && !strcmp(PAGES[4].title, "LFO DEST"));
+    {   /* (SHARD: LOOP sits after ENV, so LFO 2 is found by its title, not at index 3) */
+        uint32_t l2 = 0;
+        while (l2 + 1u < NPAGES && strcmp(PAGES[l2].title, "LFO 2"))
+            l2++;
+        bad += check("LFO 2 is no automation (motion_param), its page SYNC TRIG POL after LFO (LFO's family)",
+                     !motion_param(P_LSYNC) && !motion_param(P_LTRIG) && !motion_param(P_LPOL) && !motion_param(P_SQNT) &&
+                     motion_param(P_LN7) && motion_param(P_E0) && l2 > 0u && PAGES[l2].id[0] == P_LSYNC &&
+                     !strcmp(PAGES[l2].title, "LFO 2") && PAGES[l2].fam == FAM_LFO && PAGES[l2 - 1u].graph == GR_LFO &&
+                     !strcmp(PAGES[l2 + 1u].title, "LFO DEST"));
+    }
     go_page(GR_LFO);
     ui.page++;                                       /* LFO 2 */
     page_entered();

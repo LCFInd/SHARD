@@ -98,11 +98,11 @@ The mangler build has its own black-and-white look:
 - **Parameter icons are off** (`FELUCCA_ICONS` defaults to 0): labels are words. Only the knob you're turning has a white label and gauge; the others are grey.
 - The full Felucca build keeps Inter Tight and its palettes.
 
-## LOOP (EDIT's first page on SHARD)
+## LOOP (ENV's first page on SHARD)
 
 LOOP shows the whole sample with every slice marker. A slice a voice is playing is drawn inverted (white, with its waveform cut out in black) and has its playhead (`shd_heads`). Keys pick the slice, as they do on SLICES.
 
-The track's ENV (ATK, DEC, SUS, REL on KNOB 1–4) is drawn in red over the loop, in the loop's time, starting at the slice the last note began on. It assumes the note is held for one slice; ONE has no release. Red (`ux.env`) is used only for this and for the GRAIN engine's scrub line (below). On SHARD tracks the ENV page is hidden (ENV opens on ENV DEST), and `page_first` returns a family's first visible page.
+The track's ENV (ATK, DEC, SUS, REL on KNOB 1–4) is drawn in red over the loop, in the loop's time, starting at the slice the last note began on. It assumes the note is held for one slice; ONE has no release. Red (`ux.env`) is used only for this and for the GRAIN engine's scrub line (below). LOOP is in the ENV family, in place of ENV's own page, which is hidden on SHARD tracks: ENV opens on LOOP, then ENV DEST. EDIT opens on EDIT 1. (Until 2026-11-14 LOOP was EDIT's first page.) `page_first` returns a family's first visible page.
 
 ## The GRAIN engine's view (its EDIT pages)
 

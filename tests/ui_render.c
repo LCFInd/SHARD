@@ -843,7 +843,7 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "menu_select", "project_erase", "confirm_erase_project", "tools_clean", "confirm_clean",
     "menu_midi_track", "menu_midi_channels_unused", "menu_midi_auto_select", "home_tracks_midi", "mixer_midi", "edit_phase_fold",
     "shard_slice_fx", "shard_slice_fx_bus", "shard_slice_fx_route", "shard_slice_fx_nofile", "shard_edit1", "shard_edit2",
-    "shard_presets", "shard_slices", "shard_home", "loop", "loop_playing", "loop_release", "env_family_shard", "shfx_grain", "shfx_grain_size", "shfx_bus_grain", "shfx_bus_fdbk", "shfx_bus_press",
+    "shard_presets", "shard_slices", "shard_home", "loop", "loop_playing", "loop_release", "edit_family_shard", "shfx_grain", "shfx_grain_size", "shfx_bus_grain", "shfx_bus_fdbk", "shfx_bus_press",
 #if FELUCCA_MANGLER
     "arp_layer", "arp_layer_held", "arp_layer_knobs", "arp_layer_pre", "bounce", "bounce_used", "bounce_busy", "live_off", "live_playing", "live_layer",
     "edit_grain_playing",
@@ -1739,15 +1739,15 @@ static void setup(int s)
     case S_SHARD_PRESETS: eng(ENGI_SHARD); go_page(GR_BROWSE); break;
     case S_SHARD_SLICES: eng(ENGI_SHARD); go_page(GR_SLICES); sp.sel = 5; ui.msg_t = 0; break;
     case S_SHARD_HOME: eng(ENGI_SHARD); song.playing = 1; break;
-    /* EDIT > LOOP (SHARD): BREAK whole, slice 5 picked, the envelope from it (DEC hot); two notes playing (their
-     * slices inverted, the playheads); a long release; ENV on a SHARD track (its first page: ENV DEST) */
+    /* ENV > LOOP (SHARD; was EDIT's first page): BREAK whole, slice 5 picked, the envelope from it (DEC hot); two notes
+     * playing (their slices inverted, the playheads); a long release; EDIT on a SHARD track (its first page: EDIT 1) */
     case S_LOOP:
-        eng(ENGI_SHARD); open_family(FAM_EDIT); sp.sel = 4; TSEL->p[P_ATK] = 10; TSEL->p[P_DEC] = 70;
+        eng(ENGI_SHARD); open_family(FAM_ENV); sp.sel = 4; TSEL->p[P_ATK] = 10; TSEL->p[P_DEC] = 70;
         TSEL->p[P_SUS] = 40; ui.hot_col = 1; ui.hot_t = 30; ui.msg_t = 0;
         break;
     case S_LOOP_PLAY: {
         uint32_t v;
-        eng(ENGI_SHARD); open_family(FAM_EDIT); sp.sel = 0; ui.msg_t = 0;
+        eng(ENGI_SHARD); open_family(FAM_ENV); sp.sel = 0; ui.msg_t = 0;
         trk_note_on(TSEL, 60, 110);
         trk_note_on(TSEL, 67, 110);
         for (v = 0; v < NVOICE; v++)                    /* (no audio here: each voice halfway through its slice) */
@@ -1756,10 +1756,10 @@ static void setup(int s)
         break;
     }
     case S_LOOP_REL:
-        eng(ENGI_SHARD); open_family(FAM_EDIT); sp.sel = 2; TSEL->p[P_E4] = 3; TSEL->p[P_REL] = 100; TSEL->p[P_SUS] = 90;
+        eng(ENGI_SHARD); open_family(FAM_ENV); sp.sel = 2; TSEL->p[P_E4] = 3; TSEL->p[P_REL] = 100; TSEL->p[P_SUS] = 90;
         ui.hot_col = 3; ui.hot_t = 30; ui.msg_t = 0;
         break;
-    case S_ENV_SHARD: eng(ENGI_SHARD); open_family(FAM_ENV); break;
+    case S_ENV_SHARD: eng(ENGI_SHARD); open_family(FAM_EDIT); break;   /* (EDIT now: LOOP moved to ENV) */
     case S_SHFX_GRAIN:                               /* a slice's GRAIN: STRETCH */
         eng(ENGI_SHARD); go_page(GR_SHFX); sp.sel = 2; shfx_sl_param = SHFX_GRAIN; shfx_knob(2, 2); ui.msg_t = 0;
         break;

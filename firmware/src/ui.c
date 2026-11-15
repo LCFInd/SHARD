@@ -448,7 +448,7 @@ static int page_visible(uint32_t i)
                                                      * no INSERT, no MOD matrix (mangler_trim keeps them off) */
         return 0;
     if (PAGES[i].fam == FAM_EDIT && (PAGES[i].id[0] == P_VOICE || PAGES[i].id[0] == P_ALLOC || PAGES[i].id[0] == P_SPRD) &&
-        TSEL->eng_req % NENGINES == ENGI_SHARD)       /* SHARD: no VOICE pages (EDIT: LOOP .. SLICE FX) */
+        TSEL->eng_req % NENGINES == ENGI_SHARD)       /* SHARD: no VOICE pages (EDIT: EDIT 1 .. SLICE FX) */
         return 0;
 #else
     if (PAGES[i].graph == GR_LIVE)
