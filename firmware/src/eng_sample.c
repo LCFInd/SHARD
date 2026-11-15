@@ -302,28 +302,34 @@ static void sx_build(sx_part_t *P, uint32_t zl)
     P->iidx[e + 1u] = (uint8_t)idx;
     P->zdone[zl] = (uint16_t)(k + 1u);
 }
-/* sample p of the voice's zone through its cache (ph[2]: two segment tags + 1 in bits 0..10 and 11..21, the way used
- * last in bit 22, the index generation in 23..31); -32769 = its segment is not indexed yet (the voice waits) */
+/* sample p of the voice's zone through its cache: ph[2] the two segment tags + 1 (bits 0..15, 16..31); s[5] bit 11 the
+ * way used last, bits 16..24 the index generation the tags belong to (a rebuilt index: nothing cached is valid); bits
+ * 8..10 the voice's buffers. (The fields keep clear of masks in 0xFFC0_0000..0xFFCF_FFFF: build.py's ROM check.)
+ * -32769 = its segment is not indexed yet (the voice waits) */
 #define SX_WAIT (-32769)
 static int32_t sx_at(sx_part_t *P, voice_t *v, const smp_zone_t *z, uint32_t zl, uint32_t p)
 {
-    uint32_t seg = p >> SX_SEG_LOG2, tag = seg + 1u, c = v->ph[2], w, i, e;
+    uint32_t seg = p >> SX_SEG_LOG2, tag = seg + 1u, c = v->ph[2], f = (uint32_t)v->s[5], w, i, e;
+    uint32_t gen = (uint32_t)P->gen & 511u, vb = (f >> 8) & 7u;
     int16_t *b;
     int32_t pred, idx;
-    if ((c >> 23) != (P->gen & 511u))
-        c = (uint32_t)(P->gen & 511u) << 23;        /* (a rebuilt index: nothing cached is valid) */
-    if ((c & 2047u) == tag)
+    if (((f >> 16) & 511u) != gen) {
+        c = 0;
+        f = (f & 0xFFFFu) | gen << 16;
+    }
+    if ((c & 0xFFFFu) == tag)
         w = 0;
-    else if (((c >> 11) & 2047u) == tag)
+    else if ((c >> 16) == tag)
         w = 1;
     else {
         if (zl >= P->nz || seg >= P->zdone[zl]) {
             v->ph[2] = c;
+            v->s[5] = (int32_t)f;
             P->want = 1;
             return SX_WAIT;
         }
-        w = (c >> 22) & 1u ? 0u : 1u;               /* the way not used last */
-        b = P->buf[v->s[5] >> 8 & 7u][w];
+        w = (f >> 11) & 1u ? 0u : 1u;               /* the way not used last */
+        b = P->buf[vb][w];
         e = P->zbase[zl] + seg;
         pred = P->ipred[e];
         idx = P->iidx[e];
@@ -334,10 +340,11 @@ static int32_t sx_at(sx_part_t *P, voice_t *v, const smp_zone_t *z, uint32_t zl,
             P->iidx[e + 1u] = (uint8_t)idx;
             P->zdone[zl] = (uint16_t)(seg + 2u);
         }
-        c = w ? (c & ~(2047u << 11)) | tag << 11 : (c & ~2047u) | tag;
+        c = w ? (c & 0xFFFFu) | tag << 16 : (c >> 16) << 16 | tag;
     }
-    v->ph[2] = (c & ~(1u << 22)) | w << 22;
-    return P->buf[v->s[5] >> 8 & 7u][w][p & (SX_SEG - 1u)];
+    v->ph[2] = c;
+    v->s[5] = (int32_t)(w ? f | 1u << 11 : f & ~(1u << 11));
+    return P->buf[vb][w][p & (SX_SEG - 1u)];
 }
 /* START..END of zone z for the track's values (END exclusive, >= START + 2) */
 static void sx_region(const int16_t *p, const smp_zone_t *z, uint32_t *lo, uint32_t *hi)
@@ -363,7 +370,7 @@ static void sx_region(const int16_t *p, const smp_zone_t *z, uint32_t *lo, uint3
     *hi = len >= n - a ? n : a + len;
 }
 /* the next source sample in PLAY's order; the position ph[0] (the index to read), s[5] bit 0 the direction (1 back),
- * bits 8..10 the voice's buffers; SX_WAIT, or s[6] = 1 when a one-shot is past its end */
+ * bits 8..10 the voice's buffers (sx_at: bit 11, 16..24 its cache's); SX_WAIT, or s[6] = 1 when a one-shot is past its end */
 static int32_t sx_next(sx_part_t *P, voice_t *v, const smp_zone_t *z, uint32_t zl, const int16_t *p)
 {
     uint32_t lo, hi, pos = v->ph[0], mode = (uint32_t)clamp(p[P_E3], 0, SX_RLOOP);
