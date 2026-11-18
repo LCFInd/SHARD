@@ -372,8 +372,9 @@ static void proj_smp_len(project_t *q)
 
 /* (SHARD, 2026-11-17) DECK MODE: a track's FM operator values are its deck's (core.h P_DK_*). A project of before holds
  * the operators' defaults there (CURVE 127, out of its range): every track gets the deck defaults, and decks A and B
- * on SHARD take their source kit's crossovers, FDBK and PRESS (SLICE FX's BUS before, now the deck's); the kit's
- * shapers, gates and levels are not carried over. On every load, idempotent */
+ * on SHARD take their source kit's crossovers, FDBK and PRESS (SLICE FX's BUS before, now the deck's), and when its
+ * slices went through the bus (any ROUTE not DIRECT) its low, mid and high channels' shapers (TYPE, DRIVE); the
+ * gates, levels and FULL are not carried over. On every load, idempotent */
 static void proj_deck(project_t *q)
 {
 #if FELUCCA_MANGLER
@@ -392,6 +393,13 @@ static void proj_deck(project_t *q)
             d->p[P_DK_FBMID] = (int16_t)(b->fb[1] & 127);
             d->p[P_DK_FBHI] = (int16_t)(b->fb[2] & 127);
             d->p[P_DK_PRESS] = (int16_t)(b->press & 127);
+            for (i = 0; i < SLC_AUTO && shd_kit[slc_src_of(d->p)].sl[i].route == SHD_DIRECT; i++)
+                ;
+            if (i < SLC_AUTO)                           /* (the bus in use: its shapers) */
+                for (i = 0; i < 3u; i++) {
+                    d->p[DK_TYPE(i)] = (int16_t)(b->type[i] < SHD_NDRIVE ? b->type[i] : 0);
+                    d->p[DK_DRV(i)] = (int16_t)(b->drive[i] & 127);
+                }
         }
         hit = 1;
     }

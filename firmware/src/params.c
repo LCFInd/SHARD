@@ -163,8 +163,8 @@ static const param_desc_t TP[P_COUNT] = {
     [P_DK_LO] = {"LO", F_INT, 0, 127, 64, DECK_DB_NAMES, 0},
     [P_DK_MID] = {"MID", F_INT, 0, 127, 64, DECK_DB_NAMES, 0},
     [P_DK_HI] = {"HI", F_INT, 0, 127, 64, DECK_DB_NAMES, 0},
-    [P_DK_TYPE] = PE("TYPE", N_SHD_DRIVE, 0),
-    [P_DK_DRIVE] = PD("DRIVE", F_PCT, 0, 127, 40),
+    [P_DK_LTYPE] = PE("TYPE", N_SHD_DRIVE, 0),
+    [P_DK_LDRV] = PD("DRIVE", F_PCT, 0, 127, 40),
     [P_DK_FILT] = {"FILT", F_INT, -64, 63, 0, DECK_FILT_NAMES, 0},
     [P_DK_XLO] = {"XLO", F_INT, 0, 127, 51, DECK_HZ_NAMES, 0},
     [P_DK_XHI] = {"XHI", F_INT, 0, 127, 96, DECK_HZ_NAMES, 0},
@@ -175,10 +175,10 @@ static const param_desc_t TP[P_COUNT] = {
     [P_DK_PRESS] = PD("PRESS", F_PCT, 0, 127, 0),
     [P_DK_XFADE] = PD("XFADE", F_BIPCT, -64, 63, 0),
     [P_DK_CURVE] = PE("CURVE", N_DK_CURVE, 0),
-    [P_DK_SYNC] = PE("SYNC", N_ONOFF, 0),
-    [P_DK_R16] = PD("-", F_INT, 0, 0, 0),
-    [P_DK_R17] = PD("-", F_INT, 0, 0, 0),
-    [P_DK_R18] = PD("-", F_INT, 0, 0, 0),
+    [P_DK_MTYPE] = PE("TYPE", N_SHD_DRIVE, 0),
+    [P_DK_MDRV] = PD("DRIVE", F_PCT, 0, 127, 40),
+    [P_DK_HTYPE] = PE("TYPE", N_SHD_DRIVE, 0),
+    [P_DK_HDRV] = PD("DRIVE", F_PCT, 0, 127, 40),
     [P_DK_R19] = PD("-", F_INT, 0, 0, 0),
 #else
 #define FMOP(k) [P_FM##k##_ATK] = PD("ATK", F_TIME, 0, 127, 0), \
@@ -549,10 +549,6 @@ static const page_t PAGES[] = {
     {"LFO DEST", FAM_LFO, SC_TRACK, GR_NONE, {P_LD_PIT, P_LD_FLT, P_LD_SHP, P_LD_AMP}},
     {"MOD", FAM_LFO, SC_TRACK, GR_MOD, {0xFF, P_M1SRC, P_M1DST, P_M1AMT}},   /* KNOB 1: the slot (mod_ui_slot) */
     {"FX", FAM_FX, SC_TRACK, GR_FX, {P_DIST, P_CHOR, P_DLY, P_REV}},
-#if FELUCCA_MANGLER
-    {"FEEDBACK", FAM_FX, SC_TRACK, GR_DKFB, {P_DK_FBLO, P_DK_FBMID, P_DK_FBHI, P_DK_PITCH}},   /* DECK MODE: decks A, B */
-    {"DECK", FAM_FX, SC_TRACK, GR_NONE, {P_DK_PRESS, 0xFF, 0xFF, 0xFF}},   /* PRESS: the keys into DRIVE, FEEDBACK */
-#endif
     {"SLICER", FAM_FX, SC_TRACK, GR_SLCR, {P_SLCR, P_SLPAT, P_SLRATE, P_SLDEPTH}},
     {"INSERT", FAM_FX, SC_TRACK, GR_INS, {P_ITYPE, P_IA, P_IB, P_IC}},   /* 1.5: the track's INSERT (fx.c) */
     {"INSERT 2", FAM_FX, SC_TRACK, GR_INS, {P_IMIX, 0xFF, 0xFF, 0xFF}},  /* .. its dry / wet */
@@ -565,8 +561,11 @@ static const page_t PAGES[] = {
     {"EDIT 1", FAM_EDIT, SC_ENGINE, GR_NONE, {P_E0, P_E1, P_E2, P_E3}},
     {"EDIT 2", FAM_EDIT, SC_ENGINE, GR_NONE, {P_E4, P_E5, P_E6, P_E7}},
 #if FELUCCA_MANGLER
-    {"ISOLATE", FAM_EDIT, SC_TRACK, GR_DKISO, {P_DK_LO, P_DK_MID, P_DK_HI, P_DK_DRIVE}},       /* DECK MODE (deck.c): */
-    {"ISOLATE 2", FAM_EDIT, SC_TRACK, GR_DKISO, {P_DK_XLO, P_DK_XHI, P_DK_TYPE, P_DK_FILT}},   /* decks A and B only */
+    {"ISOLATE", FAM_EDIT, SC_TRACK, GR_DKISO, {P_DK_LO, P_DK_MID, P_DK_HI, P_DK_FILT}},       /* DECK MODE (deck.c): */
+    {"XOVER", FAM_EDIT, SC_TRACK, GR_DKISO, {P_DK_XLO, P_DK_XHI, P_DK_PITCH, P_DK_PRESS}},   /* decks A and B only; */
+    {"LOW", FAM_EDIT, SC_TRACK, GR_DKFB, {P_DK_LTYPE, P_DK_LDRV, P_DK_FBLO, P_DK_LO}},        /* a band each: its */
+    {"MID", FAM_EDIT, SC_TRACK, GR_DKFB, {P_DK_MTYPE, P_DK_MDRV, P_DK_FBMID, P_DK_MID}},      /* shaper, feedback, */
+    {"HIGH", FAM_EDIT, SC_TRACK, GR_DKFB, {P_DK_HTYPE, P_DK_HDRV, P_DK_FBHI, P_DK_HI}},       /* level */
 #endif
     {"FILTER", FAM_EDIT, SC_TRACK, GR_NONE, {P_FTYPE, P_E4, P_E5, P_E7}},   /* ANALOG only (1.5, #104): TYPE CUT RES KTR */
     {"LANES", FAM_EDIT, SC_TRACK, GR_NONE, {P_LN0, P_LN1, P_LN2, P_LN3}},   /* DRUM only: the lane levels */

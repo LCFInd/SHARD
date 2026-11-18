@@ -1760,8 +1760,8 @@ static void setup(int s)
         break;
     }
     /* DECK MODE (deck.c): deck A on BREAK in PLAY, a note held a second: ISOLATE (MID at KILL, HI +2 dB: the analyzer),
-     * ISOLATE 2 (the crossovers set, the DJ filter's LP), MIX (deck B on USR2's GRAIN too, XFADE left of the middle,
-     * CUT), FEEDBACK (FB MID 100, then the voices gone: the MID band holding itself, red) */
+     * XOVER (the crossovers set, the DJ filter's LP), MIX (deck B on USR2's GRAIN too, XFADE left of the middle,
+     * CUT), MID (HARD, FB MID 100, then the voices gone: the MID band holding itself, red) */
     case S_DECK_ISO:
     case S_DECK_ISO2:
     case S_DECK_MIX:
@@ -1775,7 +1775,7 @@ static void setup(int s)
         if (s == S_DECK_ISO) { TSEL->p[P_DK_MID] = 0; TSEL->p[P_DK_HI] = 70; }
         if (s == S_DECK_ISO2) { TSEL->p[P_DK_XLO] = 40; TSEL->p[P_DK_XHI] = 100; TSEL->p[P_DK_FILT] = -30; }
         if (s == S_DECK_MIX) { trk[0].p[P_DK_XFADE] = -20; trk[0].p[P_DK_CURVE] = 2; }
-        if (s >= S_DECK_FB) { TSEL->p[P_DK_FBMID] = 100; TSEL->p[P_DK_TYPE] = SHD_D_HARD; TSEL->p[P_DK_DRIVE] = 60; }
+        if (s >= S_DECK_FB) { TSEL->p[P_DK_FBMID] = 100; TSEL->p[P_DK_MTYPE] = SHD_D_HARD; TSEL->p[P_DK_MDRV] = 60; }
         for (b = 0; b < 256u && (b < 1u || TSEL->xf_on || TSEL->eng_req != TSEL->engine); b++)
             mix_block(o, CTL);
         trk_note_on(TSEL, 60, 110);
@@ -1791,9 +1791,9 @@ static void setup(int s)
                 mix_block(o, CTL);
         }
         if (s == S_DECK_ISO) go_title("ISOLATE");
-        else if (s == S_DECK_ISO2) go_title("ISOLATE 2");
+        else if (s == S_DECK_ISO2) go_title("XOVER");
         else if (s == S_DECK_MIX) { go_home(); home_tap(); }
-        else go_title("FEEDBACK");
+        else go_title("MID");
         ui.msg_t = 0;
         break;
     }

@@ -2648,12 +2648,13 @@ static void graph_deck_mix(uint16_t c)
         cv_text_on(PANEL_X0 + (PANEL_W - text_w(&AF_S, s)) / 2, 84 - AF_S_CAP_Y, &AF_S, s, T_DIM, T_SURF);
     }
 }
-/* FEEDBACK: a bar per band, as high as its FB, and in it how loud the band rings now (red while it holds itself) */
+/* LOW, MID, HIGH: a bar per band, as high as its FB, and in it how loud the band rings now (red while it holds
+ * itself); the page's own band named in TEXT */
 static void graph_deck_fb(const track_t *t, uint16_t c)
 {
     static const char *const BN[3] = {"LO", "MID", "HI"};
     const deck_st_t *ds = &deck_st[(uint32_t)(t - trk) % NDECK];
-    uint32_t b;
+    uint32_t b, own = cur_page()->id[0] == P_DK_LTYPE ? 0u : cur_page()->id[0] == P_DK_MTYPE ? 1u : 2u;
     for (b = 0; b < 3u; b++) {
         int32_t x = PANEL_X0 + 18 + (int32_t)b * 70, fb = clamp(t->p[P_DK_FBLO + b], 0, 127), h = fb * 70 / 127;
         int32_t a = ds->fy[b] < 0 ? -ds->fy[b] : ds->fy[b], r = meter_px(a) * 70 / (TS_MH - 2);
@@ -2664,7 +2665,8 @@ static void graph_deck_fb(const track_t *t, uint16_t c)
             cv_rect(x, 80 - h, 44, h, T_MID);
         if (fb && r > 0)
             cv_rect(x + 8, 80 - r, 28, r, hot ? ux.env : c);
-        cv_text_on(x + (44 - text_w(&AF_S, nm)) / 2, 84 - AF_S_CAP_Y, &AF_S, nm, hot ? ux.env : T_DIM, T_SURF);
+        cv_text_on(x + (44 - text_w(&AF_S, nm)) / 2, 84 - AF_S_CAP_Y, &AF_S, nm, hot ? ux.env : b == own ? T_TEXT : T_DIM,
+                   T_SURF);
     }
 }
 #endif

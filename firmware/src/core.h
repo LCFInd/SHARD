@@ -137,17 +137,19 @@ enum {                          /* per-track parameters */
 
 #if FELUCCA_MANGLER
 /* DECK MODE (2026-11-17, deck.c): tracks 1 and 2 are decks A and B, each through its own isolator (three bands, LO MID
- * HI, at XLO and XHI), one shaper (TYPE, DRIVE) and a DJ filter, with feedback per band; then the crossfader. Their
+ * HI, at XLO and XHI), each band with its own shaper (TYPE, DRIVE: Ohmnicide's) and feedback, and a DJ filter; then the crossfader. Their
  * values live in the 20 FM operator values every track stores (P_FM1_ATK .. P_FM4_LEVEL), which no engine of the
  * mangler reads: projects, user presets, the editor and motion carry them as they are. A sound load keeps them
  * (ui.c param_kept): they are the deck's, not the sound's. XFADE and CURVE are track 1's. A project of before (CURVE
  * out of its range: the FM defaults there) gets the deck defaults at its load (project.c proj_deck) */
-enum {
-    P_DK_LO = P_FM1_ATK, P_DK_MID, P_DK_HI, P_DK_TYPE, P_DK_DRIVE,
+enum {                          /* (each band's shaper: its TYPE and DRIVE, LO's first, MID's and HI's in 15 .. 18) */
+    P_DK_LO = P_FM1_ATK, P_DK_MID, P_DK_HI, P_DK_LTYPE, P_DK_LDRV,
     P_DK_FILT, P_DK_XLO, P_DK_XHI, P_DK_FBLO, P_DK_FBMID,
     P_DK_FBHI, P_DK_PITCH, P_DK_PRESS, P_DK_XFADE, P_DK_CURVE,
-    P_DK_SYNC, P_DK_R16, P_DK_R17, P_DK_R18, P_DK_R19
+    P_DK_MTYPE, P_DK_MDRV, P_DK_HTYPE, P_DK_HDRV, P_DK_R19
 };
+#define DK_TYPE(b) ((b) == 0 ? P_DK_LTYPE : (b) == 1 ? P_DK_MTYPE : P_DK_HTYPE)   /* band b's shaper */
+#define DK_DRV(b) ((b) == 0 ? P_DK_LDRV : (b) == 1 ? P_DK_MDRV : P_DK_HDRV)
 _Static_assert((int)P_DK_R19 == (int)P_FM4_LEVEL, "DECK MODE: the 20 values of the FM operators");
 #define NDECK 2u
 #define deck_of(t) ((uint32_t)((t) - trk) < NDECK)    /* tracks 1 and 2 */

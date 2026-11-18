@@ -9,13 +9,14 @@
  *     -> each band: its FEEDBACK (FB LO / FBMID / FB HI, ARP's FEEDBACK SWELL at least, PRESS pushing it): the band's
  *        last output band-passed at its own pitch (150 Hz, 900 Hz, 4 kHz, moved by PITCH and ARP's PITCH) back into
  *        it, the band held by a soft clip (shd_soft) while it feeds back; ARP's PANIC stops every loop for ~0.5 s
+ *     -> each band's own shaper (Ohmnicide's: LOW, MID, HIGH pages' TYPE, any of SHARD's, and DRIVE, plus EDIT 2's
+ *        DRIVE on a SHARD deck and PRESS)
  *     -> each band's level: LO MID HI, KILL .. 0 dB (64) .. +6 dB (shard_tables.h DECK_GAIN_Q14)
- *     -> the sum through one shaper (TYPE, any of SHARD's; DRIVE, plus EDIT 2's DRIVE on a SHARD deck)
  *     -> the DJ filter (FILT: left of 0 a low-pass closing, right a high-pass opening; SHARD's state-variable filter
  *        at 2x, a little resonance)
  *     -> a DC blocker (only behind a shaper or feedback), then on a SHARD deck MULTI (E6) mixes dry and this.
  *
- * Untouched (every band 0 dB, TYPE OFF, FILT OFF, no feedback) a deck is its input bit for bit and costs nothing.
+ * Untouched (every band 0 dB, every TYPE OFF, FILT OFF, no feedback) a deck is its input bit for bit and costs nothing.
  * Its values: core.h P_DK_* (the FM operator values every track stores); this replaces SHARD's per-source bus
  * (eng_shard.c shard_post, which the mangler no longer runs: every slice plays DIRECT into its part, its ROUTE, the
  * FULL channel and the gates gone). Tracks 3 and 4 play into the mix as they are. */
@@ -23,9 +24,10 @@
 typedef struct {
     int32_t a1, a2, b1, b2, c1;                     /* the split: XLO's one-poles' states, XHI's, XHI's all-pass on LOW */
     int32_t fl[3], fb[3], fy[3];                    /* FEEDBACK: each band's band-pass (low, band), its last output */
+    int32_t fai[3], fao[3];                         /* .. its shaper's mean in and out (its gain: their ratio) */
     int32_t sl, sb;                                 /* the DJ filter (low, band) */
     int32_t dcx, dcy;
-    shd_ds_t ds;                                    /* the shaper's state */
+    shd_ds_t ds[3];                                 /* each band's shaper's state */
     uint32_t tail, kseen, kleft;                    /* blocks of tail left; PANIC seen, blocks of feedback off */
     uint8_t live;                                   /* last block was processed (else its states start again) */
 } deck_st_t;
@@ -62,7 +64,8 @@ static inline int32_t deck_gain(const int16_t *p, uint32_t b) { return DECK_GAIN
 static int deck_flat(const track_t *t)
 {
     const int16_t *p = t->p;
-    return p[P_DK_LO] == 64 && p[P_DK_MID] == 64 && p[P_DK_HI] == 64 && !p[P_DK_TYPE] && !p[P_DK_FILT] &&
+    return p[P_DK_LO] == 64 && p[P_DK_MID] == 64 && p[P_DK_HI] == 64 && !p[P_DK_LTYPE] && !p[P_DK_MTYPE] &&
+           !p[P_DK_HTYPE] && !p[P_DK_FILT] &&
            p[P_DK_FBLO] <= 0 && p[P_DK_FBMID] <= 0 && p[P_DK_FBHI] <= 0 && !shd_swell;
 }
 
@@ -72,7 +75,8 @@ static uint32_t deck_post(track_t *t, int32_t *out, uint32_t n, uint32_t nr)
     deck_st_t *d = &deck_st[(uint32_t)(t - trk) % NDECK];
     const int16_t *p = t->p;
     int32_t al, ah, g[3], fg[3], ff[3], sf = 0, sq = 0, mix = 127;
-    uint32_t i, b, hot = 0, type = (uint32_t)clamp(p[P_DK_TYPE], 0, SHD_NDRIVE - 1), drv, pr;
+    uint32_t i, b, hot = 0, type[3], drv[3], shaped = 0, pr;
+    int32_t off;
     int32_t filt = clamp(p[P_DK_FILT], -64, 63);
     if (deck_flat(t)) {
         d->live = 0;
@@ -87,6 +91,8 @@ static uint32_t deck_post(track_t *t, int32_t *out, uint32_t n, uint32_t nr)
         memset(d->fl, 0, sizeof d->fl);
         memset(d->fb, 0, sizeof d->fb);
         memset(d->fy, 0, sizeof d->fy);
+        memset(d->fai, 0, sizeof d->fai);
+        memset(d->fao, 0, sizeof d->fao);
     }
     pr = (uint32_t)t->at * (uint32_t)clamp(p[P_DK_PRESS], 0, 127) / 127u;   /* PRESS: the keys' pressure */
     for (b = 0; b < 3u; b++) {
@@ -128,7 +134,12 @@ static uint32_t deck_post(track_t *t, int32_t *out, uint32_t n, uint32_t nr)
         al = ah;
         ah = tmp;
     }
-    drv = (uint32_t)clamp(p[P_DK_DRIVE] + (t->engine == ENGI_SHARD ? p[P_E7] : 0) + (int32_t)(pr / 2u), 0, 127);
+    off = (t->engine == ENGI_SHARD ? p[P_E7] : 0) + (int32_t)(pr / 2u);   /* EDIT 2's DRIVE, PRESS: every band's */
+    for (b = 0; b < 3u; b++) {
+        type[b] = (uint32_t)clamp(p[DK_TYPE(b)], 0, SHD_NDRIVE - 1);
+        drv[b] = (uint32_t)clamp(p[DK_DRV(b)] + off, 0, 127);
+        shaped |= type[b];
+    }
     if (filt) {                                     /* the DJ filter: LP 64 .. 1 from the top down, HP 1 .. 63 up */
         uint32_t c = filt < 0 ? (uint32_t)(127 + filt * 2) : (uint32_t)(filt * 2);
         sf = SHD_SVF_F[c & 127];
@@ -152,17 +163,38 @@ static uint32_t deck_post(track_t *t, int32_t *out, uint32_t n, uint32_t nr)
         for (b = 0; b < 3u; b++) {
             int32_t v = band[b];
             if (fg[b]) {                            /* FEEDBACK: the last output, band-passed (Q 2), back in */
-                int32_t hi;
+                int32_t hi, cq = 8192;
                 d->fl[b] = shd_sat(d->fl[b] + ((ff[b] * d->fb[b]) >> 14), 1 << 17);
                 hi = shd_sat(d->fy[b] - d->fl[b] - (d->fb[b] >> 1), 1 << 17);
                 d->fb[b] = shd_sat(d->fb[b] + ((ff[b] * hi) >> 14), 1 << 17);
-                v = shd_soft(shd_sat(v + (int32_t)(((int64_t)d->fb[b] * fg[b]) >> 15), 3 << 15));
-                d->fy[b] = v;
+                if (type[b]) {                      /* (as SHARD's bus: the shaper's gain undone, its means' ratio,
+                                                     * up to 4 (Q13); quiet, less: the loop dies away) */
+                    int32_t o = d->fao[b] > 512 ? d->fao[b] : 512;
+                    cq = (int32_t)(((uint32_t)(d->fai[b] > 0 ? d->fai[b] : 0) << 13) / (uint32_t)o);
+                    cq = cq > 32768 ? 32768 : cq;
+                }
+                v += (int32_t)(((((int64_t)d->fb[b] * fg[b]) >> 15) * cq) >> 13);
             }
+            if (type[b]) {                          /* the band's own shaper */
+                int32_t in = shd_sat(v, 1 << 17), a = in < 0 ? -in : in;
+                v = shd_shape(type[b], in, drv[b], &d->ds[b]);
+                if (fg[b]) {
+                    if (v > SHD_CEIL || v < -SHD_CEIL) {   /* the howl's ceiling: bent over, 4:1, to 20000 */
+                        int32_t m = v < 0 ? -v : v;
+                        m = SHD_CEIL + ((m - SHD_CEIL) >> 2);
+                        m = m > 20000 ? 20000 : m;
+                        v = v < 0 ? -m : m;
+                    }
+                    d->fai[b] += (a - d->fai[b]) >> 7;   /* (means over ~3 ms) */
+                    d->fao[b] += ((v < 0 ? -v : v) - d->fao[b]) >> 7;
+                }
+            } else if (fg[b]) {
+                v = shd_soft(shd_sat(v, 3 << 15));  /* (no shaper: a soft clip holds the loop) */
+            }
+            if (fg[b])
+                d->fy[b] = shd_sat(v, 1 << 16);
             y += (int32_t)(((int64_t)v * g[b]) >> 14);
         }
-        if (type)
-            y = shd_shape(type, y, drv, &d->ds);
         if (filt) {                                 /* two steps a sample (the table is for 2x) */
             uint32_t k;
             for (k = 0; k < 2u; k++) {
@@ -174,7 +206,7 @@ static uint32_t deck_post(track_t *t, int32_t *out, uint32_t n, uint32_t nr)
                     y = filt < 0 ? d->sl : h;
             }
         }
-        if (type || fg[0] | fg[1] | fg[2]) {        /* DC blocker, ~10 Hz (a lopsided shaper, a loop) */
+        if (shaped || fg[0] | fg[1] | fg[2]) {        /* DC blocker, ~10 Hz (a lopsided shaper, a loop) */
             int32_t dc = y - d->dcx + (int32_t)(((int64_t)d->dcy * 32700) >> 15);
             d->dcx = y;
             d->dcy = dc;

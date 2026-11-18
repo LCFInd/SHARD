@@ -134,8 +134,8 @@ int main(void)
             int32_t b[CTL];
             uint32_t f;
             deck_reset();
-            A->p[P_DK_TYPE] = (int16_t)k;
-            A->p[P_DK_DRIVE] = 127;
+            A->p[P_DK_LTYPE] = A->p[P_DK_MTYPE] = A->p[P_DK_HTYPE] = (int16_t)k;
+            A->p[P_DK_LDRV] = A->p[P_DK_MDRV] = A->p[P_DK_HDRV] = 127;
             A->p[P_DK_LO] = A->p[P_DK_MID] = A->p[P_DK_HI] = 127;
             for (f = 0; f < FS / 4u; f += CTL) {
                 for (i = 0; i < CTL; i++)
@@ -199,16 +199,23 @@ int main(void)
         shd_kit[1].bus.hi = 100;
         shd_kit[1].bus.fb[1] = 77;
         shd_kit[1].bus.press = 9;
+        shd_kit[1].bus.type[0] = SHD_D_TUBE;
+        shd_kit[1].bus.drive[0] = 30;
+        shd_kit[1].bus.type[2] = SHD_D_FOLD;
+        shd_kit[1].bus.drive[2] = 90;
+        shd_kit[1].sl[3].route = SHD_MULTI;
         q.sum = proj_sum(&q);
         proj_deck(&q);
         for (t = 1; t < NTRK; t++)
             for (k = P_FM1_ATK; k <= P_FM4_LEVEL; k++)
                 fresh_ok &= q.t[t].p[k] == TP[k].def;
         kit_ok = q.t[0].p[P_DK_XLO] == 40 && q.t[0].p[P_DK_XHI] == 100 && q.t[0].p[P_DK_FBMID] == 77 &&
-                 q.t[0].p[P_DK_PRESS] == 9 && q.t[0].p[P_DK_LO] == 64 && q.t[0].p[P_DK_CURVE] == 0;
+                 q.t[0].p[P_DK_PRESS] == 9 && q.t[0].p[P_DK_LO] == 64 && q.t[0].p[P_DK_CURVE] == 0 &&
+                 q.t[0].p[P_DK_LTYPE] == SHD_D_TUBE && q.t[0].p[P_DK_LDRV] == 30 && q.t[0].p[P_DK_HTYPE] == SHD_D_FOLD &&
+                 q.t[0].p[P_DK_HDRV] == 90;
         check("a project of before: every track the deck defaults (deck B on GRAIN, tracks 3 and 4 too)", fresh_ok,
               0, 0, 0);
-        check("a project of before: deck A on SHARD takes its kit's crossovers, FDBK and PRESS", kit_ok, 0, 0, 0);
+        check("a project of before: deck A on SHARD takes its kit's crossovers, FDBK, PRESS and band shapers", kit_ok, 0, 0, 0);
         q.t[0].p[P_DK_XLO] = 7;
         q.sum = proj_sum(&q);
         proj_deck(&q);

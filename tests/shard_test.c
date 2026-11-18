@@ -573,8 +573,8 @@ static void fb_tests(void)
         fresh(1, SHD_M_ONE, 5);
         T->p[P_E6] = 127;
 #if FELUCCA_MANGLER                                    /* DECK MODE: track 1's deck, its MID band */
-        T->p[P_DK_TYPE] = SHD_D_HARD;
-        T->p[P_DK_DRIVE] = 60;
+        T->p[P_DK_MTYPE] = SHD_D_HARD;
+        T->p[P_DK_MDRV] = 60;
         T->p[P_DK_FBMID] = AMT[k];
         (void)i;
 #else
@@ -725,8 +725,8 @@ static void fp_setup(uint32_t fb)
     fresh(1, SHD_M_ONE, 5);
     T->p[P_E6] = 127;
 #if FELUCCA_MANGLER                                    /* DECK MODE: track 1's deck, its MID band */
-    T->p[P_DK_TYPE] = SHD_D_HARD;
-    T->p[P_DK_DRIVE] = 60;
+    T->p[P_DK_MTYPE] = SHD_D_HARD;
+    T->p[P_DK_MDRV] = 60;
     T->p[P_DK_FBMID] = (int16_t)fb;
     (void)i;
 #else
