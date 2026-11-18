@@ -29,12 +29,12 @@ typedef struct {
     uint32_t tail, kseen, kleft;                    /* blocks of tail left; PANIC seen, blocks of feedback off */
     uint8_t live;                                   /* last block was processed (else its states start again) */
 } deck_st_t;
-static deck_st_t deck_st[NDECK];
+static deck_st_t deck_st[NDECK] __attribute__((section(".pool")));   /* (the main RAM's headroom: build.py) */
 /* the ISOLATE page's analyzer (ui_graph.c): the watched deck's last DECK_SN samples in and out (the UI sets
  * deck_watch to 1 + the deck each frame it shows; none: nothing is kept) */
 #define DECK_SN 256u
 static volatile uint8_t deck_watch;
-static int16_t deck_sin[DECK_SN], deck_sout[DECK_SN];
+static int16_t deck_sin[DECK_SN] __attribute__((section(".pool"))), deck_sout[DECK_SN] __attribute__((section(".pool")));
 static volatile uint32_t deck_sw;
 static void deck_take(uint32_t d, const int32_t *in, const int32_t *out, uint32_t n)
 {
