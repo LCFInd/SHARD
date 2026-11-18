@@ -71,7 +71,6 @@ static void audio_block(int32_t *out, uint32_t n)       /* mix (fx.c), then Q15 
 static volatile uint8_t shed_req;
 static uint8_t shed_over;                              /* bit k: the half k halves ago was over 85 % */
 #define SHED_TICKS ((HALF_FRAMES * 1000000u / FS) * 85u / 100u * FM1_TICKS_PER_US)   /* 85 % of a half */
-static uint32_t shed_count;
 
 /* end of a half: all = its ticks, TIMER5 nested in it included -> the render alone in us. The deadline sees
  * both; shed after 2 overloaded halves in a row (out of line: keeps the ISR's render loops as they were) */
@@ -83,33 +82,49 @@ static __attribute__((noinline)) uint32_t shed_check(uint32_t all)
     return (all - t5_nested_ticks) / FM1_TICKS_PER_US;
 }
 
-static void shed_voice(void)
+/* the voice to give up when the audio runs late, in this order (2026-11-17, SHARD: a slice that had just started was
+ * taken while an old tail rang on, and a sequenced track lost its hits to one held key elsewhere):
+ *   1. a released voice older than SHED_YOUNG halves: the quietest (env_out, the amplitude it plays at; then env),
+ *      the oldest of equals;
+ *   2. a held voice: not a POLY part's lowest held note, not a MONO / LEGATO / UNISON lead: the youngest, as before;
+ *   3. a released voice that has only just started: the quietest.
+ * (voice_clock: the audio ISR's halves; the host tests set it) */
+#define SHED_YOUNG 16u                                 /* halves: ~46 ms */
+static voice_t *shed_released(int young)
 {
     uint32_t p, i;
     voice_t *best = 0;
     for (p = 0; p < NPART; p++)
         for (i = 0; i < NVOICE; i++) {
             voice_t *v = &trk[p].v[i];
-            if (v->active && !v->gate && v->stage != 4u && (!best || v->env < best->env))
+            int y = voice_clock - voice_born[p][i] < SHED_YOUNG;
+            if (!v->active || v->gate || v->stage == 4u || y != young)
+                continue;
+            if (!best || v->env_out < best->env_out ||
+                (v->env_out == best->env_out && (v->env < best->env || (v->env == best->env && v->age < best->age))))
                 best = v;
         }
-    if (best) {
-        voice_kill(best);
-        shed_count++;
-        return;
-    }
-    for (p = 0; p < NPART; p++) {
-        const track_t *t = &trk[p];
-        uint32_t mode = trk_vmode(t), low = mode == V_POLY ? lowest_held(t) : 0u;
-        for (i = 0; i < NVOICE; i++) {
-            voice_t *v = &trk[p].v[i];
-            if (v->active && v->gate && v->stage != 4u &&
-                ((mode == V_POLY && i != low) || (mode != V_POLY && i > 0u))) {
-                if (!best || v->age < best->age)
-                    best = v;
+    return best;
+}
+static void shed_voice(void)
+{
+    uint32_t p, i;
+    voice_t *best = shed_released(0);
+    if (!best)
+        for (p = 0; p < NPART; p++) {
+            const track_t *t = &trk[p];
+            uint32_t mode = trk_vmode(t), low = mode == V_POLY ? lowest_held(t) : 0u;
+            for (i = 0; i < NVOICE; i++) {
+                voice_t *v = &trk[p].v[i];
+                if (v->active && v->gate && v->stage != 4u &&
+                    ((mode == V_POLY && i != low) || (mode != V_POLY && i > 0u))) {
+                    if (!best || v->age < best->age)
+                        best = v;
+                }
             }
         }
-    }
+    if (!best)
+        best = shed_released(1);
     if (best) {
         voice_kill(best);
         shed_count++;
@@ -143,6 +158,7 @@ void fm1_alnk0_irq(void)                       /* via isr_alnk0 (bsp/chip/fm1_is
         }
         fm1_audio_ack_half();
         audio_halves++;
+        voice_clock++;
         us = shed_check(fm1_ticks() - t0);
         if (us > audio_max_us)
             audio_max_us = us;

@@ -54,6 +54,7 @@ static void fresh(void)
     memset(&felucca_dbg, 0, sizeof felucca_dbg);
     audio_cpu_rem = audio_halves = audio_max_us = 0;
     shed_req = 0; shed_count = 0; shed_over = 0;
+    voice_clock = 1000u; memset(voice_born, 0, sizeof voice_born);   /* every voice old, as after a while */
     host_clock = host_us = host_half_reads = host_dma_advanced = host_acks = host_nest = 0;
     host_pending = FM1_AUDIO_HALF;
     transport_req = panic_req = 0;
@@ -116,6 +117,34 @@ static void overload(void)
     lead->env = 10000; extra->env = 10;
     shed_voice();
     check("released voices shed the quieter tail first", extra->stage == 4u && lead->stage != 4u);
+
+    /* 2026-11-17 (SHARD): a slice that has only just started is not taken while an old tail rings; a held note
+     * elsewhere (not a lead) goes before it; the young one goes only when nothing else can */
+    fresh();
+    trk[0].p[P_VOICE] = V_POLY; trk[1].p[P_VOICE] = V_POLY;
+    trk_note_on(&trk[0], 60, 100);
+    lead = held(&trk[0], 60);
+    trk_note_off(&trk[0], 60);
+    voice_clock += 100u;                                    /* .. 100 halves later */
+    trk_note_on(&trk[0], 64, 100);
+    extra = held(&trk[0], 64);
+    trk_note_off(&trk[0], 64);
+    lead->env_out = 20000; extra->env_out = 100;            /* the new one quieter (in its attack) */
+    shed_voice();
+    check("overload takes the old tail, not a slice that has just started", lead->stage == 4u && extra->stage != 4u);
+    fresh();
+    trk[0].p[P_VOICE] = V_POLY; trk[1].p[P_VOICE] = V_POLY;
+    trk_note_on(&trk[1], 48, 100); trk_note_on(&trk[1], 60, 100);   /* held: 48 the bass (kept), 60 an extra */
+    bass = held(&trk[1], 48); lead = held(&trk[1], 60);
+    voice_clock += 100u;
+    trk_note_on(&trk[0], 64, 100);
+    extra = held(&trk[0], 64);
+    trk_note_off(&trk[0], 64);
+    shed_voice();
+    check("overload takes a held extra note before a just-started slice", lead->stage == 4u && extra->stage != 4u &&
+          bass->stage != 4u);
+    shed_voice();
+    check(".. and the just-started slice only when nothing else is left", extra->stage == 4u && bass->stage != 4u);
 }
 static void dma(void)
 {

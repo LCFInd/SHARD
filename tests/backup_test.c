@@ -178,8 +178,8 @@ int main(void)
 
     reset();
     trk[0].step[0] = (step_t){{60}, 1, ST_NOTE, 0, 96, 0, 0};
-    bad += check("LIST captures the runtime: 13 objects (id 8 empty, id 9 the FM6 patches), runtime 3840 B (FUN10)",
-                 list(0, &len, &crc) == 0 && rep[2] == 13u && len == sizeof(project_store_t) && len == 3840u &&
+    bad += check("LIST captures the runtime: 16 objects (id 8 empty, id 9 the FM6 patches, 10..12), runtime 3840 B (FUN10)",
+                 list(0, &len, &crc) == 0 && rep[2] == 16u && len == sizeof(project_store_t) && len == 3840u &&
                  crc == st_crc32(ED_BK_RAW, len));
     bad += check("an empty project slot lists as length 0", list(2, &len, &crc) == 0 && len == 0);
     bad += check("GET of the runtime copy", get(0, 0, 64) == 0);
@@ -189,6 +189,20 @@ int main(void)
     bad += check("a new LIST makes it readable again", list(0, &len, &crc) == 0 && get(0, 0, 64) == 0);
     usb.resets++;
     bad += check("a USB reset after LIST: GET is stale (5)", get(2, 0, 16) == 5u);
+    {   /* 2026-11-17 (SHARD): ids 10..12, a user slot's MAN slices and kit; empty with no sample there */
+        static uint8_t junk[ED_BK_REC_LEN];
+        len = 1;
+        bad += check("slot records: an empty user slot lists its record object (10) as length 0",
+                     list(10, &len, &crc) == 0 && len == 0);
+        memset(junk, 0x5A, sizeof junk);
+        bad += check("slot records: a record of the wrong length is refused at the start (1)",
+                     put_begin(10, 100u, 0) == 1u);
+        bad += check("slot records: a damaged record is refused (2), nothing written",
+                     put_all(10, junk, sizeof junk, st_crc32(junk, sizeof junk)) == 2u);
+        bad += check("slot records: an empty record (none in the archive) restores as nothing (0)",
+                     put_all(11, junk, 0, 0) == 0u);
+        bad += check("slot records: id 13 is not an object (1)", put_begin(13, 0, 0) == 1u);
+    }
 
     /* settings */
     reset();
@@ -377,7 +391,7 @@ int main(void)
         bad += check("an id 9 of another layout is refused (2), the patches kept",
                      put_all(9, &got, sizeof got, st_crc32(&got, sizeof got)) == 2u && !upf_get(0, pk));
         bad += check("an id 9 of the wrong size is refused at begin (1)", put_begin(9, sizeof got - 4u, 0) == 1u);
-        bad += check("an id 10 is refused (1)", put_begin(10, 0, 0) == 1u);
+        bad += check("an id 13 is refused (1)", put_begin(13, 0, 0) == 1u);
     }
     memcpy(&st, &proj_slot[2], sizeof st);
     erase_error = 1;

@@ -31,7 +31,7 @@ function device(objs, opt = {}) {
     }
     if (cmd === BACKUP_CMD.PUT) {
       const [op, id] = a;
-      if (op === 0 && id > (opt.maxId ?? 9)) { d.log.push(`refused ${id}`); return [op, id, 1]; }   // (an older firmware)
+      if (op === 0 && id > (opt.maxId ?? 12)) { d.log.push(`refused ${id}`); return [op, id, 1]; }   // (an older firmware)
       if (op === 0) { d.staged = { id, size: bkR32(a, 2), crc: bkR32(a, 7), bytes: [] }; return [op, id, 0]; }
       if (op === 1) {
         if (opt.failChunk === id) return [op, id, 2];
@@ -67,11 +67,13 @@ const order = target.log.filter((x) => typeof x === "number");
 ok(order.at(-1) === 0 && order.at(-2) === 1 && order.indexOf(2) < order.indexOf(1), "backup: restore order: projects, banks, samples, settings, live music last");
 ok([0, 1, 2, 6].every((id) => target.objs.get(id).every((v, i) => v === objs.find((o) => o[0] === id)[1][i])), "backup: restored objects equal the source");
 {   /* the FM6 patch bank (id 8) and the archives of firmware before it (11 objects, no id 8) */
-  ok(BACKUP_IDS.length === 13 && file.objects.some((o) => o.id === 8) && file.objects.some((o) => o.id === 9),
-    "backup: 13 objects: id 8 (the retired FM6 bank, empty) and id 9 (the user presets' FM6 patches)");
-  const v2 = JSON.parse(JSON.stringify(file)); v2.objects = v2.objects.filter((o) => o.id !== 9);
+  ok(BACKUP_IDS.length === 16 && file.objects.some((o) => o.id === 8) && file.objects.some((o) => o.id === 9),
+    "backup: 16 objects: id 8 (the retired FM6 bank, empty), id 9 (the user presets' FM6 patches), 10..12");
+  const v3 = JSON.parse(JSON.stringify(file)); v3.objects = v3.objects.filter((o) => o.id < 10 || o.id >= 32);
+  ok(readBackup(v3).objects.length === 13, "backup: an archive before the slot records (13 objects) still reads");
+  const v2 = JSON.parse(JSON.stringify(file)); v2.objects = v2.objects.filter((o) => o.id !== 9 && (o.id < 10 || o.id >= 32));
   ok(readBackup(v2).objects.length === 12, "backup: an archive of 1.0..1.0.2 (12 objects, the bank as id 8) still reads");
-  const old = JSON.parse(JSON.stringify(file)); old.objects = old.objects.filter((o) => o.id !== 8 && o.id !== 9);
+  const old = JSON.parse(JSON.stringify(file)); old.objects = old.objects.filter((o) => o.id !== 8 && o.id !== 9 && (o.id < 10 || o.id >= 32));
   ok(readBackup(old).objects.length === 11, "backup: an archive of the 11 objects before FM6 still reads");
   const odd = JSON.parse(JSON.stringify(file)); odd.objects = odd.objects.filter((o) => o.id !== 33);
   ok(throws(() => readBackup(odd)), "backup: an archive missing another object is refused");
@@ -83,7 +85,7 @@ ok([0, 1, 2, 6].every((id) => target.objs.get(id).every((v, i) => v === objs.fin
     const r = await v2dev.request([cmd, a]);
     if (cmd !== BACKUP_CMD.LIST) return r;
     const n = r[2], keep = [];
-    for (let i = 0; i < n; i++) if (r[3 + i * 11] !== 9) keep.push(...r.slice(3 + i * 11, 14 + i * 11));
+    for (let i = 0; i < n; i++) { const id = r[3 + i * 11]; if (id !== 9 && (id < 10 || id >= 32)) keep.push(...r.slice(3 + i * 11, 14 + i * 11)); }
     return [1, 0, keep.length / 11, ...keep];
   }, "1.0.2");
   const to103 = device([]);
@@ -99,6 +101,23 @@ ok([0, 1, 2, 6].every((id) => target.objs.get(id).every((v, i) => v === objs.fin
   const to103b = device([]);
   await restoreBackup(to103b.request, newFile);
   ok(to103b.objs.get(9).every((v, i) => v === patches[i]), "backup: a 1.0.3 archive restores id 9");
+}
+{   /* 2026-11-17 (SHARD): the slot records 10..12 go back after the samples they belong to; older firmware skips them */
+  const sample = new Uint8Array(1024); const dv = new DataView(sample.buffer);
+  dv.setUint32(0, 0x504d5346, true); dv.setUint16(4, 1, true); sample[6] = 1; dv.setUint32(16, 512, true);
+  sample.set(rnd(512, 11), 512); dv.setUint32(20, bkCrc(sample.subarray(512)), true);
+  dv.setUint32(32, 0, true); dv.setUint32(36, 1000, true); dv.setUint32(40, 0, true); dv.setUint32(44, 10, true); dv.setUint32(48, 22050, true);
+  const rec = rnd(840, 12);
+  const kf = await captureBackup(device([...objs, [10, rec], [32, sample]]).request, "TEST");
+  const to = device([]);
+  await restoreBackup(to.request, kf);
+  const lg = to.log.filter((x) => typeof x === "number");
+  ok(lg.indexOf(10) > lg.indexOf(32) && lg.indexOf(10) >= 0 && to.objs.get(10).every((v, i) => v === rec[i]),
+    "backup: a slot's MAN slices and kit (id 10) restored after its sample");
+  const toOld = device([], { maxId: 9 });
+  await restoreBackup(toOld.request, kf);
+  ok(toOld.log.includes("refused 10") && !toOld.objs.has(10) && toOld.log.at(-1) === 0,
+    "backup: onto firmware before the slot records: 10..12 skipped, the rest restored");
 }
 const failing = device([], { failChunk: 2 });
 ok(await athrows(() => restoreBackup(failing.request, file)) && failing.log.includes("abort 2") && !failing.log.includes(0), "backup: a refused chunk aborts that object and stops before the live music");

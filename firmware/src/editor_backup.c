@@ -7,8 +7,24 @@
  * Id 8 (the FM6 patch bank of 1.0..1.0.2) is listed empty since 1.0.3; a PUT of it from an older archive moves its
  * patches into the user presets restored before it (ids 6, 7), as the first boot after the update does (up_fm6.c).
  * Id 9 is the user presets' FM6 patches (up_fm6.c), appended in 1.0.3.
+ * Ids 10..12 (SHARD, 2026-11-17): user slot k's MAN slices and SHARD kit, the two records slice_store.c keeps in the
+ * slot's last sector (slc_rec_t, then shd_rec_t), as they are now (RAM: unsaved edits too); empty when the slot is
+ * empty or its sample leaves no room for them. A restore writes them after the samples (the editor's order) and only
+ * onto the sample they were made for (len and data CRC); another slot's material ignores them.
  */
-static const uint8_t ED_BK_IDS[13] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 32, 33, 34};
+static const uint8_t ED_BK_IDS[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 32, 33, 34};
+#define ED_BK_REC0 10u
+#if FELUCCA_SHARD && defined(SLC_REC_OFF)            /* (the records: slice_store.c, a build with flash) */
+#define ED_BK_RECS 1
+#else
+#define ED_BK_RECS 0
+#endif
+#define ED_BK_REC_LEN 840u                  /* sizeof(slc_rec_t) + sizeof(shd_rec_t), as stored in every build */
+#if ED_BK_RECS
+typedef struct { slc_rec_t s; shd_rec_t k; } ed_bk_rec_t;
+static ed_bk_rec_t ed_bk_rec __attribute__((section(".pool")));
+_Static_assert(sizeof(ed_bk_rec_t) == ED_BK_REC_LEN, "backup: the slot records' size");
+#endif
 #define ED_BK_N ((uint32_t)sizeof ED_BK_IDS)
 #define ED_BK_MAX ((uint32_t)sizeof proj_wire_u.raw)
 #define ED_BK_RAW (proj_wire_u.raw)  /* reuse the existing serialized main-loop scratch */
@@ -50,6 +66,19 @@ static const uint8_t *ed_bk_object(uint32_t id, uint32_t *len)
         if (upf_valid(&upf)) *len = sizeof upf;
         return (const uint8_t *)&upf;
     }
+    if (id >= ED_BK_REC0 && id < ED_BK_REC0 + SMP_USER_SLOTS) {   /* (rebuilt at each read: the same bytes while */
+#if ED_BK_RECS                                                      /* nothing changes; a change fails the CRC) */
+        uint32_t k = id - ED_BK_REC0;
+        if (!usr_nz[k] || !slc_rec_room(k) || !slc_get(slc_src_of_slot(k)))
+            return ED_BK_RAW;
+        slc_rec_make(k, &ed_bk_rec.s);
+        shd_rec_make(k, &ed_bk_rec.k);
+        *len = sizeof ed_bk_rec;
+        return (const uint8_t *)&ed_bk_rec;
+#else
+        return ED_BK_RAW;
+#endif
+    }
     if (id >= 32u && id < 32u + SMP_USER_SLOTS) {
         uint32_t k = id - 32u;
         const smp_user_hdr_t *h = (const smp_user_hdr_t *)smp_user_xip(k);
@@ -88,6 +117,30 @@ static int ed_bk_panel_valid(const panel_t *p)
     }
     return 1;
 }
+#if ED_BK_RECS
+/* ids 10..12: slot k's records back, onto the sample they were made for (else nothing, rc 0: the rest goes on) */
+static uint32_t ed_bk_rec_put(uint32_t k, const uint8_t *raw, uint32_t n)
+{
+    static ed_bk_rec_t r;                          /* (off the main loop's stack) */
+    const smp_user_hdr_t *h = (const smp_user_hdr_t *)smp_user_xip(k);
+    const slc_src_t *s = slc_get(slc_src_of_slot(k));
+    uint32_t off = smp_user_off(k) + SLC_REC_OFF;
+    if (!n)
+        return 0;
+    if (n != sizeof r)
+        return 2;
+    memcpy(&r, raw, sizeof r);
+    if (r.s.magic != SLC_REC_MAGIC || r.s.rcrc != st_crc32(&r.s, sizeof r.s - 4u) ||
+        r.k.magic != SHD_REC_MAGIC || r.k.rcrc != st_crc32(&r.k, sizeof r.k - 4u))
+        return 2;
+    if (!usr_nz[k] || !s || !slc_rec_room(k) || r.s.len != s->len || r.s.crc != h->crc || r.k.len != s->len || r.k.crc != h->crc)
+        return 0;                                  /* not this slot's sample (or no room): ignored */
+    if (!flash_ok || st_erase(off) || st_prog(off, &r.s, sizeof r.s) || st_prog(off + (SHD_REC_OFF - SLC_REC_OFF), &r.k, sizeof r.k))
+        return 4;
+    slc_store_load(k);                             /* in use now, as at a scan */
+    return 0;
+}
+#endif
 static uint32_t ed_bk_commit(void)
 {
     uint8_t *raw = ED_BK_RAW;
@@ -128,6 +181,12 @@ static uint32_t ed_bk_commit(void)
         if (ed_bk_len) memcpy(&upf, raw, sizeof upf); else upf_empty();
         sync_reload = 1; ui.force = 1;
         return upf_save() == 2 ? 4u : 0u;           /* (a failed write keeps the restored RAM copy) */
+    } else if (ed_bk_id >= ED_BK_REC0 && ed_bk_id < ED_BK_REC0 + SMP_USER_SLOTS) {
+#if ED_BK_RECS
+        return ed_bk_rec_put(ed_bk_id - ED_BK_REC0, raw, ed_bk_len);
+#else
+        return 0;
+#endif
     } else return 1;
 #if FELUCCA_FLASH
     if (!flash_ok || st_save(obj, raw, ed_bk_len)) return 4;
@@ -163,7 +222,7 @@ static int proj_store_len(uint32_t len)
 static uint32_t ed_bk_write(const uint8_t *a, uint32_t n)
 {
     /* the arguments first: a malformed request never stops the transport */
-    if (n < 2u || a[0] > 3u || a[1] > 9u) return 1;
+    if (n < 2u || a[0] > 3u || a[1] > ED_BK_REC0 + SMP_USER_SLOTS - 1u) return 1;
     if (a[0] == 0u) {
         if (n != 12u || a[6] > 15u || a[11] > 15u) return 1;
         uint32_t len = ed_bk_r32(a + 2);
@@ -171,7 +230,8 @@ static uint32_t ed_bk_write(const uint8_t *a, uint32_t n)
             (a[1] == 1u && len != sizeof(persist_t)) ||
             (a[1] >= 2u && a[1] <= 5u && len && !proj_store_len(len)) ||
             ((a[1] == 6u || a[1] == 7u) && len && len != sizeof(up_bank_t)) ||
-            (a[1] == 8u && len && len != sizeof(fm6_bank_t)) || (a[1] == 9u && len && len != sizeof(upf_t))) return 1;
+            (a[1] == 8u && len && len != sizeof(fm6_bank_t)) || (a[1] == 9u && len && len != sizeof(upf_t)) ||
+            (a[1] >= ED_BK_REC0 && len && len != ED_BK_REC_LEN)) return 1;
         if (ed_flash_stop()) return 3;
         ed_bk_valid = 0; ed_bk_put = 1; ed_bk_id = a[1]; ed_bk_len = len; ed_bk_gen = ++proj_wire_gen;
         ed_bk_crc = ed_bk_r32(a + 7); ed_bk_pos = 0;

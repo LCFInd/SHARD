@@ -322,6 +322,22 @@ static void head_group(void)
     GFX_HOOK_ALIGN(0, 0, 0, H_HEAD, AL_V, "header text on its middle");
     cv_text(x + 4, HEAD_MY, &AF_M, b, T_THEME);
 }
+/* the overload light (2026-11-17): the track's icon in the header red for ~0.7 s after the audio dropped a voice to keep
+ * up (audio.c shed_voice: too much playing at once; MENU > INFO > CPU shows the load) */
+#define OVL_LIT_MS 700u
+static int ovl_lit(void)
+{
+    static uint32_t seen, at;
+    static uint8_t on;
+    if (shed_count != seen) {
+        seen = shed_count;
+        at = fm1_ms;
+        on = 1;
+    }
+    if (on && fm1_ms - at >= OVL_LIT_MS)
+        on = 0;
+    return on;
+}
 static void draw_head(void)
 {
     static int16_t metro_x = -1;                       /* the metronome's ink as drawn (-1: hidden), its beat */
@@ -336,7 +352,8 @@ static void draw_head(void)
                    (ui.msg_t ? str_hash(7u, ui.msg) : ui.layer * 7919u + (uint32_t)layer_locked() * 3u) + (uint32_t)song.g[G_BPM] * 101u + (ui.bpm_t != 0) * 31u +
                    (uint32_t)seq_counting() * 7u + (ui_prefs & PREF_BPM_LOCK) * 4099u +
                    (uint32_t)batt_shown() * 7777u + (chain.running ? (chain.row + 1u) * 104729u : 0u) +
-                   (slot ? str_hash(11u, sl) : 0u) + (uint32_t)midi_lit(song.sel) * 15485863u;   /* (1.5.5) */
+                   (slot ? str_hash(11u, sl) : 0u) + (uint32_t)midi_lit(song.sel) * 15485863u +   /* (1.5.5) */
+                   (uint32_t)ovl_lit() * 32452843u;
     int msg = ui.msg_t || ui.layer;
     int centre = !msg || ui.bpm_t || ui.layer == LAYER_GLO;   /* the BPM being changed: it stays, the message right */
     int32_t rx = HEAD_REC_X;
@@ -371,7 +388,7 @@ static void draw_head(void)
     ui.head_sig = sig;
     metro_x = -1;
     cv_begin(240, H_HEAD, T_BG);
-    cv_icon_mid(HEAD_TRK_X, H_HEAD / 2, 16, trk_icon(song.sel, 1), midi_lit(song.sel) ? T_TEXT : T_ACCENT, T_BG);   /* (1.5.5:
+    cv_icon_mid(HEAD_TRK_X, H_HEAD / 2, 16, trk_icon(song.sel, 1), ovl_lit() ? T_REC : midi_lit(song.sel) ? T_TEXT : T_ACCENT, T_BG);   /* (1.5.5:
                                                        * a MIDI IN note into it, #208: lit) */
     if (slot && (centre || !msg)) {                    /* the slot letter (not under a message centred: its room) */
         char l[2] = {sl[0], 0};

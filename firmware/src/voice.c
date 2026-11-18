@@ -12,6 +12,10 @@
  * declicks it); one of the part's own is restarted in place, as before. Extra UNISON
  * voices only start when there is room. */
 static uint32_t vage;                                   /* voice ages: one clock for every part */
+/* the overload shedding (audio.c shed_voice): when each voice started, in audio halves (voice_clock, ticked by the
+ * audio ISR; 0 on the host), so a slice that has only just started is not the first to go; the voices shed */
+static volatile uint32_t voice_clock, shed_count;
+static uint32_t voice_born[NTRK][NVOICE];
 static int32_t lfo_wave(track_t *t, uint32_t ph)
 {
     switch (t->p[P_LWAVE]) {
@@ -301,6 +305,7 @@ static void voice_start(track_t *t, voice_t *v, uint32_t note, uint32_t vel, int
     v->active = 1;
     v->stage = 1;
     v->age = ++vage;
+    voice_born[(uint32_t)(t - trk) % NTRK][(uint32_t)(v - t->v) % NVOICE] = voice_clock;
     v->pitch16 = (int32_t)note * 16;
     v->mvel = t->m_vel;                                 /* mod.c: the note's VEL and RAND */
     v->mrnd = t->m_rnd;
