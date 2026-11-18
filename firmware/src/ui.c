@@ -442,6 +442,8 @@ static int page_visible(uint32_t i)
     if (PAGES[i].graph >= GR_FMOP && PAGES[i].graph <= GR_FMENV)
         return TSEL->eng_req % NENGINES == ENGI_FM6;
 #if FELUCCA_MANGLER
+    if (PAGES[i].scope == SC_TRACK && PAGES[i].id[0] >= P_FM1_ATK && PAGES[i].id[0] <= P_FM4_LEVEL)
+        return song.sel < NDECK;                    /* DECK MODE's pages (ISOLATE, FEEDBACK ..): decks A and B */
     if (PAGES[i].graph == GR_SCALE || PAGES[i].graph == GR_CHORD)   /* (SCL is LIVE: no scales, no chords) */
         return 0;
     if (PAGES[i].fam == FAM_ARP || PAGES[i].graph == GR_MOD || PAGES[i].graph == GR_INS)   /* the mangler's trim: no ARP,
@@ -1310,7 +1312,8 @@ static void pat_load_ui(track_t *t, uint32_t n)
 static int param_kept(uint32_t i)
 {
     return i == P_LEVEL || i == P_PAN || i == P_MUTE || (i >= P_AMODE && i <= P_SGATE) ||
-           (i >= P_SLCR && i <= P_SLDEPTH) || i == P_CHRD || i == P_VOIC || i == P_SQNT;
+           (i >= P_SLCR && i <= P_SLDEPTH) || i == P_CHRD || i == P_VOIC || i == P_SQNT ||
+           (FELUCCA_MANGLER && i >= P_FM1_ATK && i <= P_FM4_LEVEL);   /* (DECK MODE's values: the deck's) */
 }
 
 /* a retired preset kept as an alias, so stored preset numbers stay valid: SAMPLE 1, once TRANH, is PIANO

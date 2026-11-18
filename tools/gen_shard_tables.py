@@ -57,6 +57,16 @@ table("int32_t", "SHD_RAT_LP", [a1(max(2500, min(20000, 1.6e6 / (1 + r / 47)))) 
 # x2700 in all; the sputter gate's threshold (Q15) rising with the gain
 table("int32_t", "SHD_WAR_G", [round(256 * 14 ** d) for d in dn])
 table("int32_t", "SHD_WAR_TH", [round(1800 * d ** 2) for d in dn])
+# DECK MODE (deck.c): a band's level 0..127 -> KILL (0), -40 .. 0 dB (1 .. 64, 0 dB at 64), 0 .. +6 dB (64 .. 127), as
+# a gain (Q14) and as shown (0.1 dB); the crossovers' frequencies as shown (Hz, the split one-poles' xo)
+deck_db = lambda i: -40 * (64 - i) / 63 if i <= 64 else 6 * (i - 64) / 63
+table("int32_t", "DECK_GAIN_Q14", [0] + [16384 if i == 64 else round(16384 * 10 ** (deck_db(i) / 20)) for i in range(1, 128)])
+table("int16_t", "DECK_GAIN_DB10", [-999] + [round(10 * deck_db(i)) for i in range(1, 128)])
+table("uint16_t", "DECK_XO_HZ", [round(xo(i)) for i in range(128)])
+# the crossovers' one-poles, trapezoidal (TPT: 2 LP - x is an exact all-pass, so the bands add up flat): G = g / (1 + g),
+# g = tan(pi f / fs) (Q15)
+table("int32_t", "DECK_TPT_G", [round(32768 * math.tan(math.pi * xo(i) / FS) / (1 + math.tan(math.pi * xo(i) / FS)))
+                               for i in range(128)])
 out.append("#endif")
 path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "firmware", "src", "shard_tables.h")
 open(path, "w").write("\n".join(out) + "\n")

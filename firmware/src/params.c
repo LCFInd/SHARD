@@ -93,6 +93,12 @@ static const char *const N_SLOT[] = {"A", "B", "C", "D", 0};   /* G_SLOT 1..4 (F
 #define PD(l, f, mn, mx, df) {l, f, mn, mx, df, 0, 0}
 #define PE(l, n, df) {l, F_ENUM, 0, (int16_t)(sizeof(n) / sizeof(n[0]) - 1), df, n, 0}
 
+#if FELUCCA_MANGLER
+static const char *const DECK_DB_NAMES[] = {0};      /* markers for param_format: KILL / dB, LP / OFF / HP, Hz */
+static const char *const DECK_FILT_NAMES[] = {0};
+static const char *const DECK_HZ_NAMES[] = {0};
+static const char *const N_DK_CURVE[] = {"SMOOTH", "DJ", "CUT"};
+#endif
 static const param_desc_t TP[P_COUNT] = {
     [P_LEVEL] = PD("LVL", F_DB, 0, 127, 104),
     [P_ATK] = PD("ATK", F_TIME, 0, 127, 10),
@@ -150,6 +156,31 @@ static const param_desc_t TP[P_COUNT] = {
 /* the OP ENV / OP LEVEL values of DIGITAL (ids 61..80): with FELUCCA_FM4 its operator envelopes; without it
  * inert, on no page and in no editor layout, read only when a DIGITAL sound converts (fm4_convert.c). Their labels
  * stay: the editor's library files key parameters by label ("ATK#2" ..), so an old file's values still find them */
+#if FELUCCA_MANGLER
+/* DECK MODE (core.h P_DK_*, deck.c): the same ids as decks A and B's values (no engine of the mangler reads them as
+ * operators). LO MID HI: KILL .. 0 dB (64) .. +6 dB; XLO XHI: 40 Hz .. 12 kHz; FILT: LP to the left, HP to the right
+ * (param_format: their names lists are markers) */
+    [P_DK_LO] = {"LO", F_INT, 0, 127, 64, DECK_DB_NAMES, 0},
+    [P_DK_MID] = {"MID", F_INT, 0, 127, 64, DECK_DB_NAMES, 0},
+    [P_DK_HI] = {"HI", F_INT, 0, 127, 64, DECK_DB_NAMES, 0},
+    [P_DK_TYPE] = PE("TYPE", N_SHD_DRIVE, 0),
+    [P_DK_DRIVE] = PD("DRIVE", F_PCT, 0, 127, 40),
+    [P_DK_FILT] = {"FILT", F_INT, -64, 63, 0, DECK_FILT_NAMES, 0},
+    [P_DK_XLO] = {"XLO", F_INT, 0, 127, 51, DECK_HZ_NAMES, 0},
+    [P_DK_XHI] = {"XHI", F_INT, 0, 127, 96, DECK_HZ_NAMES, 0},
+    [P_DK_FBLO] = PD("FB LO", F_PCT, 0, 127, 0),
+    [P_DK_FBMID] = PD("FBMID", F_PCT, 0, 127, 0),
+    [P_DK_FBHI] = PD("FB HI", F_PCT, 0, 127, 0),
+    [P_DK_PITCH] = PD("PITCH", F_SEMI, -24, 24, 0),
+    [P_DK_PRESS] = PD("PRESS", F_PCT, 0, 127, 0),
+    [P_DK_XFADE] = PD("XFADE", F_BIPCT, -64, 63, 0),
+    [P_DK_CURVE] = PE("CURVE", N_DK_CURVE, 0),
+    [P_DK_SYNC] = PE("SYNC", N_ONOFF, 0),
+    [P_DK_R16] = PD("-", F_INT, 0, 0, 0),
+    [P_DK_R17] = PD("-", F_INT, 0, 0, 0),
+    [P_DK_R18] = PD("-", F_INT, 0, 0, 0),
+    [P_DK_R19] = PD("-", F_INT, 0, 0, 0),
+#else
 #define FMOP(k) [P_FM##k##_ATK] = PD("ATK", F_TIME, 0, 127, 0), \
                 [P_FM##k##_DEC] = PD("DEC", F_TIME, 0, 127, 0), \
                 [P_FM##k##_SUS] = PD("SUS", F_PCT, 0, 127, 127), \
@@ -157,6 +188,7 @@ static const param_desc_t TP[P_COUNT] = {
                 [P_FM##k##_LEVEL] = PD("LVL", F_PCT, 0, 127, 127)
     FMOP(1), FMOP(2), FMOP(3), FMOP(4),
 #undef FMOP
+#endif
     [P_CHRD] = PE("CHRD", N_CHRD, 0),
     [P_VOIC] = PE("VOIC", N_VOIC, 0),
 /* the DRUM engine's lane levels (eng_drum.c, #97): 100 % = the kit as designed (the sound before 1.1) */
@@ -342,6 +374,46 @@ static void param_format(const param_desc_t *d, int32_t v, char *val, const char
 {
     *unit = "";
     fmt_named = d->fmt == F_ENUM;
+#if FELUCCA_MANGLER
+    if (d->names == DECK_DB_NAMES) {                  /* a deck's band: KILL, then dB */
+        int32_t db = DECK_GAIN_DB10[clamp(v, 0, 127)];
+        fmt_named = v <= 0;
+        if (v <= 0) {
+            str_cpy(val, "KILL", 6);
+        } else {
+            fmt_fix(val, db < 0 ? -db : db, 1);
+            if (db < 0 || db > 0) {
+                char t[8];
+                str_cpy(t, val, 8);
+                val[0] = db < 0 ? '-' : '+';
+                str_cpy(val + 1, t, 6);
+            }
+            *unit = "dB";
+        }
+        return;
+    }
+    if (d->names == DECK_FILT_NAMES) {                /* the DJ filter: LP n (left), OFF, HP n (right) */
+        fmt_named = !v;
+        if (!v) {
+            str_cpy(val, "OFF", 6);
+        } else {
+            fmt_int(val, v < 0 ? -v : v);
+            *unit = v < 0 ? "LP" : "HP";
+        }
+        return;
+    }
+    if (d->names == DECK_HZ_NAMES) {                  /* a crossover */
+        uint32_t h = DECK_XO_HZ[clamp(v, 0, 127)];
+        if (h < 1000u) {
+            fmt_int(val, (int32_t)h);
+            *unit = "Hz";
+        } else {
+            fmt_fix(val, (int32_t)(h / 100u), 1);
+            *unit = "kHz";
+        }
+        return;
+    }
+#endif
     switch (d->fmt) {
     case F_PCT:                                     /* a 0..100 range (SWG) is its value, others a share of 127 */
         fmt_int(val, d->max == 100 ? v : (v * 100 + 63) / 127);
@@ -472,6 +544,10 @@ static const page_t PAGES[] = {
     {"LFO DEST", FAM_LFO, SC_TRACK, GR_NONE, {P_LD_PIT, P_LD_FLT, P_LD_SHP, P_LD_AMP}},
     {"MOD", FAM_LFO, SC_TRACK, GR_MOD, {0xFF, P_M1SRC, P_M1DST, P_M1AMT}},   /* KNOB 1: the slot (mod_ui_slot) */
     {"FX", FAM_FX, SC_TRACK, GR_FX, {P_DIST, P_CHOR, P_DLY, P_REV}},
+#if FELUCCA_MANGLER
+    {"FEEDBACK", FAM_FX, SC_TRACK, GR_NONE, {P_DK_FBLO, P_DK_FBMID, P_DK_FBHI, P_DK_PITCH}},   /* DECK MODE: decks A, B */
+    {"FEEDBACK 2", FAM_FX, SC_TRACK, GR_NONE, {P_DK_PRESS, 0xFF, 0xFF, 0xFF}},                /* (ui.c page_visible) */
+#endif
     {"SLICER", FAM_FX, SC_TRACK, GR_SLCR, {P_SLCR, P_SLPAT, P_SLRATE, P_SLDEPTH}},
     {"INSERT", FAM_FX, SC_TRACK, GR_INS, {P_ITYPE, P_IA, P_IB, P_IC}},   /* 1.5: the track's INSERT (fx.c) */
     {"INSERT 2", FAM_FX, SC_TRACK, GR_INS, {P_IMIX, 0xFF, 0xFF, 0xFF}},  /* .. its dry / wet */
@@ -483,6 +559,10 @@ static const page_t PAGES[] = {
     {"CHORD", FAM_SCL, SC_TRACK, GR_CHORD, {P_CHRD, P_VOIC, 0xFF, 0xFF}},   /* SCL again: the chord keys (chord.c) */
     {"EDIT 1", FAM_EDIT, SC_ENGINE, GR_NONE, {P_E0, P_E1, P_E2, P_E3}},
     {"EDIT 2", FAM_EDIT, SC_ENGINE, GR_NONE, {P_E4, P_E5, P_E6, P_E7}},
+#if FELUCCA_MANGLER
+    {"ISOLATE", FAM_EDIT, SC_TRACK, GR_NONE, {P_DK_LO, P_DK_MID, P_DK_HI, P_DK_DRIVE}},       /* DECK MODE (deck.c): */
+    {"ISOLATE 2", FAM_EDIT, SC_TRACK, GR_NONE, {P_DK_XLO, P_DK_XHI, P_DK_TYPE, P_DK_FILT}},   /* decks A and B only */
+#endif
     {"FILTER", FAM_EDIT, SC_TRACK, GR_NONE, {P_FTYPE, P_E4, P_E5, P_E7}},   /* ANALOG only (1.5, #104): TYPE CUT RES KTR */
     {"LANES", FAM_EDIT, SC_TRACK, GR_NONE, {P_LN0, P_LN1, P_LN2, P_LN3}},   /* DRUM only: the lane levels */
     {"LANES 2", FAM_EDIT, SC_TRACK, GR_NONE, {P_LN4, P_LN5, P_LN6, P_LN7}},

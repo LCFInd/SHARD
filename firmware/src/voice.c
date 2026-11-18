@@ -766,6 +766,10 @@ static uint32_t track_render(track_t *t, int32_t *out, uint32_t n)
         SPREAD_SUM(out, t);                /* out: every voice; spread_buf: the left ones */
     if (e->post)                                        /* the engine's own effect over the part (ADPCM: its echo) */
         nr += e->post(t, out, n);
+#if FELUCCA_MANGLER
+    if (deck_of(t))                                     /* DECK MODE: tracks 1 and 2 through their isolators (deck.c) */
+        nr += deck_post(t, out, n, nr);
+#endif
     if (fade) {
         for (i = 0; i < 8u; i++)
             t->p[P_E0 + i] = pe_new[i];

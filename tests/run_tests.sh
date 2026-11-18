@@ -570,6 +570,11 @@ fi
 # The suites above test Felucca's full set (HALI: FELUCCA_MANGLER=0); these, the mangler's own: SHARD's test (its
 # engine table, the power-on tracks) and the UI renders' lint and alignment over every page and value
 MCC="${CC%% *} -O1 -Wall -Wno-unused-function -Ifirmware/hal -Ifirmware/bsp/chip -Ifirmware/bsp/boards/fm1 -Ifirmware/src"
+if $MCC -O2 -w -Ibuild/gen -o "$OUT/deck_test" tests/deck_test.c -lm; then
+    run "DECK MODE (the mangler): the isolators' bands, KILL, the DJ filter, the shapers bounded, old projects converted" "$OUT/deck_test"
+else
+    echo "the mangler: deck_test does not build"; fail=1
+fi
 if $MCC -O2 -w -Ibuild/gen -o "$OUT/shard_test_m" tests/shard_test.c -lm; then
     run "the mangler: SHARD, SAMPLE and GRAIN only (shard_test)" "$OUT/shard_test_m" build/slice_demo/loop build/shard_demo_m
 else

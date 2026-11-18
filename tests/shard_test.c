@@ -572,11 +572,18 @@ static void fb_tests(void)
     for (k = 0; k < 4u; k++) {
         fresh(1, SHD_M_ONE, 5);
         T->p[P_E6] = 127;
+#if FELUCCA_MANGLER                                    /* DECK MODE: track 1's deck, its MID band */
+        T->p[P_DK_TYPE] = SHD_D_HARD;
+        T->p[P_DK_DRIVE] = 60;
+        T->p[P_DK_FBMID] = AMT[k];
+        (void)i;
+#else
         for (i = 0; i < SLC_AUTO; i++)
             shd_kit[0].sl[i].route = k == 3u ? SHD_DIRECT : SHD_MID;   /* (SWELL: the kit as it comes, DIRECT) */
         shd_kit[0].bus.type[1] = SHD_D_HARD;
         shd_kit[0].bus.drive[1] = 60;
         shd_kit[0].bus.fb[1] = AMT[k];
+#endif
         shd_swell = k == 3u ? 100u : 0u;
         trk_note_on(T, 60, 110);
         blocks(FS / 4u / CTL);
@@ -592,7 +599,11 @@ static void fb_tests(void)
                             "FEEDBACK SWELL (ARP): DIRECT slices howl through FULL at FDBK 0, bounded",
                   e_tail[k] > 1e6 && out_peak < 32767, "rms %.0f, peak %d", sqrt(e_tail[k]), out_peak);
         if (k == 2u) {
+#if FELUCCA_MANGLER
+            T->p[P_DK_FBMID] = 0;
+#else
             shd_kit[0].bus.fb[1] = 0;
+#endif
             blocks(FS / 2u / CTL);
             out_peak = 0;
             blocks(FS / 4u / CTL);
@@ -713,11 +724,18 @@ static void fp_setup(uint32_t fb)
     uint32_t i;
     fresh(1, SHD_M_ONE, 5);
     T->p[P_E6] = 127;
+#if FELUCCA_MANGLER                                    /* DECK MODE: track 1's deck, its MID band */
+    T->p[P_DK_TYPE] = SHD_D_HARD;
+    T->p[P_DK_DRIVE] = 60;
+    T->p[P_DK_FBMID] = (int16_t)fb;
+    (void)i;
+#else
     for (i = 0; i < SLC_AUTO; i++)
         shd_kit[0].sl[i].route = SHD_MID;
     shd_kit[0].bus.type[1] = SHD_D_HARD;
     shd_kit[0].bus.drive[1] = 60;
     shd_kit[0].bus.fb[1] = (uint8_t)fb;
+#endif
 }
 static void fp_tests(void)
 {
@@ -757,7 +775,11 @@ static void fp_tests(void)
         double e[2];
         for (k = 0; k < 2u; k++) {
             fp_setup(50);
+#if FELUCCA_MANGLER
+            T->p[P_DK_PRESS] = 127;
+#else
             shd_kit[0].bus.press = 127;
+#endif
             T->at = k ? 127 : 0;
             trk_note_on(T, 60, 110);
             blocks(FS / 4u / CTL);

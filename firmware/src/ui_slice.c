@@ -371,6 +371,34 @@ static void shd_sens_poll(void)                     /* ui_input, every frame */
     ui.force = 1;
 }
 static uint8_t shfx_sl_param, shfx_bus_param;
+/* DECK MODE (the mangler, deck.c): every slice plays DIRECT into its part, the bus is the deck's: ROUTE, PRESS, the
+ * split points and the channels are not offered here (their bytes stay in the kit, unread) */
+static int shfx_shown(int bus, uint32_t k)
+{
+#if FELUCCA_MANGLER
+    if (!bus)
+        return k != SHFX_ROUTE;
+    return k != SHFX_PRESS && !(k >= SHFX_XLOW && k < SHFX_TEMPO);
+#else
+    (void)bus;
+    (void)k;
+    return 1;
+#endif
+}
+/* KNOB 2: from k, steps over the shown params of n */
+static uint8_t shfx_param_step(int bus, uint32_t k, int32_t steps, uint32_t n)
+{
+    int32_t v = (int32_t)k, d = steps > 0 ? 1 : -1;
+    for (; steps; steps -= d) {
+        int32_t w = v + d;
+        while (w >= 0 && w < (int32_t)n && !shfx_shown(bus, (uint32_t)w))
+            w += d;
+        if (w < 0 || w >= (int32_t)n)
+            break;
+        v = w;
+    }
+    return (uint8_t)v;
+}
 
 /* the kit of the selected part's source; *bus 1 on the BUS marker, *j the slice */
 static shd_kit_t *shfx_kit(uint32_t *src, uint32_t *j, int *bus)
@@ -460,9 +488,9 @@ static void shfx_knob(uint32_t slot, int32_t steps)
     k = bus ? shfx_bus_param : shfx_sl_param;
     if (slot == 1u) {
         if (bus)
-            shfx_bus_param = (uint8_t)clamp((int32_t)k + steps, 0, NELEM(SHFX_BUS) - 1);
+            shfx_bus_param = shfx_param_step(1, k, steps, NELEM(SHFX_BUS));
         else
-            shfx_sl_param = (uint8_t)clamp((int32_t)k + steps, 0, NELEM(SHFX_SL) - 1);
+            shfx_sl_param = shfx_param_step(0, k, steps, NELEM(SHFX_SL));
         return;
     }
     d = bus ? &SHFX_BUS[k] : &SHFX_SL[k];

@@ -1309,9 +1309,10 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
             mem->dsend[i] += (int32_t)(((int64_t)q * ((int32_t)(sl->dly & 127) * 258)) >> 15);
             mem->dused = 1;
         }
-        if (sl->route == SHD_DIRECT || sl->route >= SHD_NROUTE) {
+        /* (the mangler: every slice DIRECT, its deck's isolator after it: deck.c) */
+        if (FELUCCA_MANGLER || sl->route == SHD_DIRECT || sl->route >= SHD_NROUTE) {
             out[i] += q;
-            if (shd_swell) {                        /* (ARP's FEEDBACK SWELL: DIRECT feeds FULL as it rises) */
+            if (!FELUCCA_MANGLER && shd_swell) {    /* (ARP's FEEDBACK SWELL: DIRECT feeds FULL as it rises) */
                 mem->bus[SHD_NCH][i] += (int32_t)(((int64_t)q * (int32_t)shd_swell) >> 7);
                 mem->used |= 1u << SHD_NCH;
             }
@@ -1479,6 +1480,6 @@ static const engine_t ENG_SHARD = {
     .keys = slice_keys,
     .amp = shard_amp,
     .block = shard_block,
-    .post = shard_post,
+    .post = FELUCCA_MANGLER ? 0 : shard_post,        /* (the mangler: DECK MODE's isolators instead, deck.c) */
     .mem = sizeof(shd_mem_t),
 };

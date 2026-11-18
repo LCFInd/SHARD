@@ -1552,8 +1552,11 @@ static void mangler_trim(void)
         for (m = 0; m < 4u; m++)
             if (t->p[P_M1AMT + 3u * m])
                 t->p[P_M1AMT + 3u * m] = 0;
-        if (t->eng_req % NENGINES == ENGI_SHARD) {      /* PRESS (SLICE FX's BUS): the keys' pressure read for it */
-            int16_t want = shd_kit[slc_src_of(t->p)].bus.press ? 6 : 0;
+        if (k < NDECK && t->p[P_DK_CURVE] > 2)          /* DECK MODE: a deck's values of before (the FM defaults) */
+            for (m = P_FM1_ATK; m <= P_FM4_LEVEL; m++)  /* (project.c proj_deck converts a project at its load) */
+                t->p[m] = TP[m].def;
+        if (deck_of(t) || t->eng_req % NENGINES == ENGI_SHARD) {   /* PRESS (the deck's): the keys' pressure read */
+            int16_t want = deck_of(t) && t->p[P_DK_PRESS] ? 6 : 0;
             if (t->p[P_ATSNS] != want)
                 t->p[P_ATSNS] = want;
             if (t->p[P_ATAMT])

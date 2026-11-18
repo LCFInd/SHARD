@@ -370,6 +370,38 @@ static void proj_smp_len(project_t *q)
         q->sum = proj_sum(q);
 }
 
+/* (SHARD, 2026-11-17) DECK MODE: a track's FM operator values are its deck's (core.h P_DK_*). A project of before holds
+ * the operators' defaults there (CURVE 127, out of its range): every track gets the deck defaults, and decks A and B
+ * on SHARD take their source kit's crossovers, FDBK and PRESS (SLICE FX's BUS before, now the deck's); the kit's
+ * shapers, gates and levels are not carried over. On every load, idempotent */
+static void proj_deck(project_t *q)
+{
+#if FELUCCA_MANGLER
+    uint32_t k, i, hit = 0;
+    for (k = 0; k < NTRK; k++) {
+        proj_trk_t *d = &q->t[k];
+        if (d->p[P_DK_CURVE] >= 0 && d->p[P_DK_CURVE] <= 2)
+            continue;
+        for (i = P_FM1_ATK; i <= P_FM4_LEVEL; i++)
+            d->p[i] = TP[i].def;
+        if (k < NDECK && d->engine == ENGI_SHARD) {
+            const shd_bus_t *b = &shd_kit[slc_src_of(d->p)].bus;
+            d->p[P_DK_XLO] = (int16_t)(b->lo & 127);
+            d->p[P_DK_XHI] = (int16_t)(b->hi & 127);
+            d->p[P_DK_FBLO] = (int16_t)(b->fb[0] & 127);
+            d->p[P_DK_FBMID] = (int16_t)(b->fb[1] & 127);
+            d->p[P_DK_FBHI] = (int16_t)(b->fb[2] & 127);
+            d->p[P_DK_PRESS] = (int16_t)(b->press & 127);
+        }
+        hit = 1;
+    }
+    if (hit)
+        q->sum = proj_sum(q);
+#else
+    (void)q;
+#endif
+}
+
 /* SAMPLE tracks of the retired PERC set (SET 4) -> DRUM with its default kit (see the top; core.h drum_from_perc,
  * whatever format the project is: on every load, the stored record keeps what it holds until it is saved again).
  * Their motion events on the EDIT values go. Idempotent */
@@ -518,6 +550,7 @@ static int proj_import(project_t *q, const void *b, int n)
     proj_fm4(q);
     proj_perc(q);
     proj_smp_len(q);
+    proj_deck(q);
     return 1;
 }
 static int proj_import_any(project_t *q, const void *b, int n)
@@ -1081,6 +1114,7 @@ static int project_restore_runtime(const project_t *input)
     proj_fm4(p);                                        /* .. that had DIGITAL tracks */
     proj_perc(p);                                       /* .. or SAMPLE PERC tracks */
     proj_smp_len(p);                                    /* .. or SAMPLE without LEN (SHARD) */
+    proj_deck(p);                                       /* .. or before DECK MODE (SHARD) */
     transport_req = 2;
     panic_req = (1u << NTRK) - 1u;
     fm1_irq_off();                                      /* the audio ISR must not see half a project */

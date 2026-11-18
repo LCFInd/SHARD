@@ -52,6 +52,9 @@ static uint8_t eng_mem_owner[NPART];       /* engine index + 1 whose state is in
 #endif
 #if FELUCCA_SHARD
 #include "eng_shard.c"           /* SHARD: per-slice settings, PLAY, the multiband distortion (on SLICE's material) */
+#if FELUCCA_MANGLER
+#include "deck.c"                /* DECK MODE: tracks 1 and 2 through their isolators (after SHARD: its shapers) */
+#endif
 #if !FELUCCA_ADPCM
 static void adpcm_gone_note_on(struct track *t, voice_t *v) { (void)t; v->active = 0; }
 static void adpcm_gone_render(struct track *t, voice_t *v, int32_t *out, uint32_t n, const vmod_t *m)
