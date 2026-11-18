@@ -809,6 +809,7 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
 #if FELUCCA_MANGLER
        S_ARP_PEEK, S_ARP_HELD, S_ARP_KNOBS, S_ARP_PRE, S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY, S_LIVE_OFF, S_LIVE_PLAY, S_LIVE_LAYER,
        S_EDIT_GRAIN_PLAY, S_THEME_LOOP, S_THEME_SLICES, S_SAMPLE_TRIM,
+       S_DECK_ISO, S_DECK_ISO2, S_DECK_MIX, S_DECK_FB, S_DECK_FB_RING,
 #endif
        S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
@@ -847,6 +848,7 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
 #if FELUCCA_MANGLER
     "arp_layer", "arp_layer_held", "arp_layer_knobs", "arp_layer_pre", "bounce", "bounce_used", "bounce_busy", "live_off", "live_playing", "live_layer",
     "edit_grain_playing", "theme_custom_loop", "theme_custom_slices", "sample_trim_playing",
+    "deck_isolate", "deck_isolate2", "deck_mix", "deck_feedback", "deck_feedback_ring",
 #endif
 };
 
@@ -1754,6 +1756,44 @@ static void setup(int s)
             mix_block(o, CTL);
         sample_wave_tick(TSEL);
         for (i = 0; i < 4000u && !sample_wave.ready; i++) sample_wave_tick(TSEL);
+        ui.msg_t = 0;
+        break;
+    }
+    /* DECK MODE (deck.c): deck A on BREAK in PLAY, a note held a second: ISOLATE (MID at KILL, HI +2 dB: the analyzer),
+     * ISOLATE 2 (the crossovers set, the DJ filter's LP), MIX (deck B on USR2's GRAIN too, XFADE left of the middle,
+     * CUT), FEEDBACK (FB MID 100, then the voices gone: the MID band holding itself, red) */
+    case S_DECK_ISO:
+    case S_DECK_ISO2:
+    case S_DECK_MIX:
+    case S_DECK_FB:
+    case S_DECK_FB_RING: {
+        int32_t o[2u * CTL];
+        uint32_t b, v;
+        song.sel = 0;
+        eng(ENGI_SHARD);
+        TSEL->p[P_E4] = SHD_M_PLAY;
+        if (s == S_DECK_ISO) { TSEL->p[P_DK_MID] = 0; TSEL->p[P_DK_HI] = 70; }
+        if (s == S_DECK_ISO2) { TSEL->p[P_DK_XLO] = 40; TSEL->p[P_DK_XHI] = 100; TSEL->p[P_DK_FILT] = -30; }
+        if (s == S_DECK_MIX) { trk[0].p[P_DK_XFADE] = -20; trk[0].p[P_DK_CURVE] = 2; }
+        if (s >= S_DECK_FB) { TSEL->p[P_DK_FBMID] = 100; TSEL->p[P_DK_TYPE] = SHD_D_HARD; TSEL->p[P_DK_DRIVE] = 60; }
+        for (b = 0; b < 256u && (b < 1u || TSEL->xf_on || TSEL->eng_req != TSEL->engine); b++)
+            mix_block(o, CTL);
+        trk_note_on(TSEL, 60, 110);
+        if (s == S_DECK_MIX)
+            trk_note_on(&trk[1], 60, 100);
+        deck_watch = 1;
+        for (b = 0; b < 1400u; b++)
+            mix_block(o, CTL);
+        if (s == S_DECK_FB_RING) {
+            for (v = 0; v < NVOICE; v++)
+                TSEL->v[v].active = 0;
+            for (b = 0; b < 2800u; b++)
+                mix_block(o, CTL);
+        }
+        if (s == S_DECK_ISO) go_title("ISOLATE");
+        else if (s == S_DECK_ISO2) go_title("ISOLATE 2");
+        else if (s == S_DECK_MIX) { go_home(); home_tap(); }
+        else go_title("FEEDBACK");
         ui.msg_t = 0;
         break;
     }

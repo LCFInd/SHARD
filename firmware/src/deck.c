@@ -30,6 +30,23 @@ typedef struct {
     uint8_t live;                                   /* last block was processed (else its states start again) */
 } deck_st_t;
 static deck_st_t deck_st[NDECK];
+/* the ISOLATE page's analyzer (ui_graph.c): the watched deck's last DECK_SN samples in and out (the UI sets
+ * deck_watch to 1 + the deck each frame it shows; none: nothing is kept) */
+#define DECK_SN 256u
+static volatile uint8_t deck_watch;
+static int16_t deck_sin[DECK_SN], deck_sout[DECK_SN];
+static volatile uint32_t deck_sw;
+static void deck_take(uint32_t d, const int32_t *in, const int32_t *out, uint32_t n)
+{
+    uint32_t i, w = deck_sw;
+    if (deck_watch != d + 1u)
+        return;
+    for (i = 0; i < n; i++, w++) {
+        deck_sin[w & (DECK_SN - 1u)] = (int16_t)shd_sat(in ? in[i] >> 1 : out[i] >> 1, 32767);
+        deck_sout[w & (DECK_SN - 1u)] = (int16_t)shd_sat(out[i] >> 1, 32767);
+    }
+    deck_sw = w;
+}
 
 /* a trapezoidal one-pole (TPT): its state s, coefficient G (Q15) -> the low-pass of x */
 static inline int32_t deck_tpt(int32_t x, int32_t *s, int32_t G)
@@ -60,6 +77,8 @@ static uint32_t deck_post(track_t *t, int32_t *out, uint32_t n, uint32_t nr)
     if (deck_flat(t)) {
         d->live = 0;
         d->tail = 0;
+        if (nr)
+            deck_take((uint32_t)(t - trk) % NDECK, 0, out, n);   /* (the analyzer: in = out) */
         return 0;
     }
     if (d->kseen != shd_kill) {                     /* PANIC: every loop stopped, feedback off a while */
@@ -117,6 +136,9 @@ static uint32_t deck_post(track_t *t, int32_t *out, uint32_t n, uint32_t nr)
     }
     if (t->engine == ENGI_SHARD)
         mix = clamp(p[P_E6], 0, 127);
+    if (deck_watch == (uint32_t)(t - trk) % NDECK + 1u)   /* (the analyzer: the input, before it is overwritten) */
+        for (i = 0; i < n && i < DECK_SN; i++)
+            deck_sin[(deck_sw + i) & (DECK_SN - 1u)] = (int16_t)shd_sat(out[i] >> 1, 32767);
     for (i = 0; i < n; i++) {
         int32_t x = shd_sat(out[i], 1 << 19), band[3], y = 0, r, y1, y2, z1, z2;
         y1 = deck_tpt(x, &d->a1, al);
@@ -159,6 +181,11 @@ static uint32_t deck_post(track_t *t, int32_t *out, uint32_t n, uint32_t nr)
             y = dc;
         }
         out[i] = mix >= 127 ? y : (int32_t)((((int64_t)x * (127 - mix) + (int64_t)shd_sat(y, 1 << 20) * mix) * 516) >> 16);
+    }
+    if (deck_watch == (uint32_t)(t - trk) % NDECK + 1u) {   /* (the analyzer: the output beside its input) */
+        for (i = 0; i < n && i < DECK_SN; i++)
+            deck_sout[(deck_sw + i) & (DECK_SN - 1u)] = (int16_t)shd_sat(out[i] >> 1, 32767);
+        deck_sw += n;
     }
     return 1;
 }

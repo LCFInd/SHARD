@@ -1440,6 +1440,9 @@ static uint32_t graph_signature(void)
     if (strip_kind() == SK_TITLE)                    /* MENU > LARGE: the page's title (its engine, its number) */
         return h ^ 0x5A17u;
     if (pg->graph == GR_NONE || pg->graph == GR_ARP) h ^= ui.frame / 2u;
+#if FELUCCA_MANGLER
+    if (pg->graph == GR_DKISO || pg->graph == GR_DKMIX || pg->graph == GR_DKFB) h ^= ui.frame / 2u;   /* (they move) */
+#endif
     for (i = 0; i < P_COUNT; i++)
         h = (h ^ (uint32_t)t->p[i]) * 16777619u;
     h ^= (uint32_t)TSEL->preset * 7u + (uint32_t)song.g[G_SLOT] * 13u + TSEL->user * 257u + up_gen * 7919u + ui.uslot * 104729u +
@@ -2539,6 +2542,132 @@ static void graph_song(void)
                      i < 4u ? "[K3] ADD SECTION" : "[SAVE] PROJECT A-D", T_MID, T_SURF, x0 - 10 - SG_X0);
     }
 }
+#if FELUCCA_MANGLER
+/* ---- DECK MODE's pictures (deck.c) */
+/* x of frequency hz on the analyzer's log scale (50 Hz .. 12 kHz over x0 .. x0 + w) */
+static int32_t dk_fx(uint32_t hz, int32_t x0, int32_t w)
+{
+    int32_t lg = 0, v;                               /* 8 log2(hz / 50), 0 .. 63 */
+    uint32_t a = hz < 50u ? 50u : hz;
+    while ((a >> lg) >= 100u)
+        lg++;
+    v = lg * 8 + (int32_t)(((a >> lg) - 50u) * 8u / 50u);   /* (a >> lg in 50 .. 99: the octave, then linear) */
+    return x0 + clamp(v, 0, 63) * w / 63;
+}
+/* a band's level (Goertzel at DECK_GZ_C[k] over the 256 samples of s, Hann windowed) -> px 0 .. hmax, 72 dB */
+static int32_t dk_band(const int16_t *s, uint32_t w0, uint32_t k, int32_t hmax)
+{
+    int32_t c = DECK_GZ_C[k], s1 = 0, s2 = 0, lg = 0, v;
+    uint32_t i;
+    int64_t p;
+    for (i = 0; i < DECK_SN; i++) {
+        int32_t x = (int32_t)(((int32_t)s[(w0 + i) & (DECK_SN - 1u)] * (int32_t)DECK_HANN[i]) >> 15);
+        int32_t s0 = x + (int32_t)(((int64_t)c * s1) >> 14) - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    p = (int64_t)s1 * s1 + (int64_t)s2 * s2 - ((((int64_t)c * s1) >> 14) * s2);
+    if (p < 65536)
+        return 0;
+    while ((p >> lg) > 1)
+        lg++;
+    v = lg * 4 + (int32_t)(((p << 2) >> lg) & 3);    /* 4 log2(p): 6 dB a 4 (a full-scale sine: ~160) */
+    return clamp((v - 64) * hmax / 96, 0, hmax);     /* (72 dB under it, the floor) */
+}
+static uint8_t dk_peak[20];                          /* the input's peaks, falling */
+/* ISOLATE, ISOLATE 2: the deck's 20 bands, its input as RAISE ghost bars with their peaks, its output on them (the
+ * accent; a band at KILL, red), the crossovers as red lines (solid on ISOLATE 2, where they are set), the band names */
+static void graph_deck_iso(const track_t *t, uint16_t c)
+{
+    static const char *const BN[3] = {"LO", "MID", "HI"};
+    uint32_t d = (uint32_t)(t - trk) % NDECK, k, w0 = deck_sw - DECK_SN;
+    int32_t x0 = PANEL_X0 + 2, w = PANEL_W - 4, bw = w / 20, yb = 84, hmax = 70, xl, xh;
+    int set = cur_page()->id[0] == P_DK_XLO;
+    deck_watch = (uint8_t)(d + 1u);
+    xl = dk_fx(DECK_XO_HZ[clamp(t->p[P_DK_XLO], 0, 127)], x0, w);
+    xh = dk_fx(DECK_XO_HZ[clamp(t->p[P_DK_XHI], 0, 127)], x0, w);
+    if (xh < xl) {
+        int32_t tmp = xl;
+        xl = xh;
+        xh = tmp;
+    }
+    for (k = 0; k < 20u; k++) {
+        int32_t x = x0 + (int32_t)k * bw, hi = dk_band(deck_sin, w0, k, hmax), ho = dk_band(deck_sout, w0, k, hmax);
+        int32_t cx = x + bw / 2, band = cx < xl ? 0 : cx < xh ? 1 : 2;
+        int kill = t->p[P_DK_LO + band] <= 0;
+        dk_peak[k] = (uint8_t)(hi > dk_peak[k] ? hi : dk_peak[k] > 2 ? dk_peak[k] - 2 : 0);
+        if (hi > 0)
+            cv_rect(x + 1, yb - hi, bw - 2, hi, T_RAISE);
+        if (dk_peak[k])
+            cv_rect(x + 1, yb - dk_peak[k], bw - 2, 1, T_MID);
+        if (ho > 0)
+            cv_rect(x + 2, yb - ho, bw - 4, ho, kill ? ux.env : c);
+    }
+    for (k = 0; k < 2u; k++) {                       /* the crossovers */
+        int32_t x = k ? xh : xl, y;
+        if (set)
+            cv_rect(x - 1, 8, 2, yb - 8, ux.env);
+        else
+            for (y = 8; y < yb; y += 6)
+                cv_rect(x, y, 1, 3, ux.env);
+    }
+    for (k = 0; k < 3u; k++) {                       /* the bands' names over them (KILL red) */
+        int32_t a = k == 0u ? x0 : k == 1u ? xl : xh, b = k == 0u ? xl : k == 1u ? xh : x0 + w;
+        int32_t tw = text_w(&AF_S, BN[k]);
+        if (b - a > tw + 4)
+            cv_text_on((a + b - tw) / 2, 4 - AF_S_CAP_Y, &AF_S, BN[k], t->p[P_DK_LO + k] <= 0 ? ux.env : T_DIM, T_SURF);
+    }
+}
+/* MIX: deck A's and B's names and meters (the levels after the crossfader), the crossfader's travel with its thumb,
+ * the CURVE's name */
+static void graph_deck_mix(uint16_t c)
+{
+    static const char *const CV[3] = {"SMOOTH", "DJ", "CUT"};
+    uint32_t d;
+    int32_t xf = clamp(trk[0].p[P_DK_XFADE], -64, 63), tx;
+    for (d = 0; d < NDECK; d++) {
+        track_t *t = &trk[d];
+        int32_t y = 10 + (int32_t)d * 26, m = meter_px(t->peak) * 150 / (TS_MH - 2);
+        const char *nm = t->eng_req % NENGINES == ENGI_SHARD ? N_SLC_SRC[clamp(t->p[P_E0], 0, SLC_NSRC - 1)] :
+                         ENGINES[t->eng_req % NENGINES]->name;
+        t->peak = 0;
+        cv_text_on(PANEL_X0 + 2, y + 2 - AF_S_CAP_Y, &AF_S, d ? "B" : "A", T_TEXT, T_SURF);
+        cv_text_on(PANEL_X0 + 14, y + 2 - AF_S_CAP_Y, &AF_S, nm, T_MID, T_SURF);
+        cv_rect(PANEL_X0 + 66, y, 150, 9, T_RAISE);
+        if (m > 0)
+            cv_rect(PANEL_X0 + 66, y, m, 9, c);
+    }
+    cv_rect(PANEL_X0 + 10, 70, PANEL_W - 20, 2, T_RAISE);   /* the crossfader */
+    cv_rect(PANEL_X0 + PANEL_W / 2, 66, 1, 10, T_MID);
+    tx = PANEL_X0 + 10 + (xf + 64) * (PANEL_W - 28) / 127;
+    cv_rrect(tx, 62, 8, 18, 2, T_TEXT, T_SURF);
+    cv_text_on(PANEL_X0 + 2, 84 - AF_S_CAP_Y, &AF_S, "A", T_DIM, T_SURF);
+    cv_text_r(PANEL_X0 + PANEL_W - 2, 84 - AF_S_CAP_Y, &AF_S, "B", T_DIM, T_SURF);
+    {
+        const char *s = CV[clamp(trk[0].p[P_DK_CURVE], 0, 2)];
+        cv_text_on(PANEL_X0 + (PANEL_W - text_w(&AF_S, s)) / 2, 84 - AF_S_CAP_Y, &AF_S, s, T_DIM, T_SURF);
+    }
+}
+/* FEEDBACK: a bar per band, as high as its FB, and in it how loud the band rings now (red while it holds itself) */
+static void graph_deck_fb(const track_t *t, uint16_t c)
+{
+    static const char *const BN[3] = {"LO", "MID", "HI"};
+    const deck_st_t *ds = &deck_st[(uint32_t)(t - trk) % NDECK];
+    uint32_t b;
+    for (b = 0; b < 3u; b++) {
+        int32_t x = PANEL_X0 + 18 + (int32_t)b * 70, fb = clamp(t->p[P_DK_FBLO + b], 0, 127), h = fb * 70 / 127;
+        int32_t a = ds->fy[b] < 0 ? -ds->fy[b] : ds->fy[b], r = meter_px(a) * 70 / (TS_MH - 2);
+        int hot = fb && (ds->fb[b] > 512 || ds->fb[b] < -512);
+        const char *nm = BN[b];
+        cv_rect(x, 80 - 70, 44, 70, T_RAISE);
+        if (h > 0)
+            cv_rect(x, 80 - h, 44, h, T_MID);
+        if (fb && r > 0)
+            cv_rect(x + 8, 80 - r, 28, r, hot ? ux.env : c);
+        cv_text_on(x + (44 - text_w(&AF_S, nm)) / 2, 84 - AF_S_CAP_Y, &AF_S, nm, hot ? ux.env : T_DIM, T_SURF);
+    }
+}
+#endif
 static void draw_graph(void)
 {
     const page_t *pg = cur_page();
@@ -2577,6 +2706,10 @@ static void draw_graph(void)
         cv_oy = 0;
         graph_scope(c);
     } else {
+#if FELUCCA_MANGLER
+        if (pg->graph != GR_DKISO)
+            deck_watch = 0;                          /* (the analyzer's capture off) */
+#endif
         switch (pg->graph) {
         case GR_ADSR:
             graph_adsr(t, c);
@@ -2668,6 +2801,20 @@ static void draw_graph(void)
         case GR_FMOP2:
             if (fop_ok()) graph_fm6(t, c, fop_op % 6u);   /* the chart, the operator picked */
             break;
+#if FELUCCA_MANGLER
+        case GR_DKISO:
+            cv_oy = 0;
+            graph_deck_iso(t, c);
+            break;
+        case GR_DKMIX:
+            cv_oy = 0;
+            graph_deck_mix(c);
+            break;
+        case GR_DKFB:
+            cv_oy = 0;
+            graph_deck_fb(t, c);
+            break;
+#endif
         case GR_FMENV:
             if (fop_ok()) graph_fm6env(t, c);
             break;

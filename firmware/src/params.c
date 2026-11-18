@@ -375,21 +375,24 @@ static void param_format(const param_desc_t *d, int32_t v, char *val, const char
     *unit = "";
     fmt_named = d->fmt == F_ENUM;
 #if FELUCCA_MANGLER
-    if (d->names == DECK_DB_NAMES) {                  /* a deck's band: KILL, then dB */
-        int32_t db = DECK_GAIN_DB10[clamp(v, 0, 127)];
+    if (d->names == DECK_DB_NAMES) {                  /* a deck's band: KILL, then dB (one decimal under 10) */
+        int32_t db = DECK_GAIN_DB10[clamp(v, 0, 127)], a = db < 0 ? -db : db;
         fmt_named = v <= 0;
         if (v <= 0) {
             str_cpy(val, "KILL", 6);
-        } else {
-            fmt_fix(val, db < 0 ? -db : db, 1);
-            if (db < 0 || db > 0) {
-                char t[8];
-                str_cpy(t, val, 8);
-                val[0] = db < 0 ? '-' : '+';
-                str_cpy(val + 1, t, 6);
-            }
-            *unit = "dB";
+            return;
         }
+        val[0] = db < 0 ? '-' : '+';
+        if (a >= 100)
+            fmt_int(val + 1, (a + 5) / 10);
+        else {
+            fmt_int(val + 1, a / 10);
+            str_cpy(val + str_len(val), ".", 2);
+            fmt_int(val + str_len(val), a % 10);
+        }
+        if (!db)
+            str_cpy(val, "0", 6);
+        *unit = "dB";
         return;
     }
     if (d->names == DECK_FILT_NAMES) {                /* the DJ filter: LP n (left), OFF, HP n (right) */
@@ -521,10 +524,12 @@ static void param_format(const param_desc_t *d, int32_t v, char *val, const char
 /* ------------------------------------------------------------ pages --- */
 enum { FAM_HOME, FAM_ENV, FAM_LFO, FAM_FX, FAM_SCL, FAM_EDIT, FAM_GLO, FAM_SAVE, FAM_ARP, FAM_SEQ, FAM_TRK,
        FAM_COUNT };
-enum { SC_TRACK, SC_GLOBAL, SC_ENGINE, SC_STEP, SC_TRK };   /* SC_TRK: the TRACKS page (ui_input.c tracks_edit) */
+enum { SC_TRACK, SC_GLOBAL, SC_ENGINE, SC_STEP, SC_TRK, SC_DECK };   /* SC_TRK: the TRACKS page (ui_input.c tracks_edit);
+                                                                   * SC_DECK: DECK MODE's MIX (ui_input.c deck_mix_edit) */
 enum { GR_NONE, GR_ADSR, GR_LFO, GR_STEPS, GR_ARP, GR_SCALE, GR_FX, GR_ROLL, GR_BROWSE, GR_SLOTS, GR_USER, GR_TRK,
        GR_SLCR, GR_MOD, GR_PATS, GR_SONG, GR_TOOLS, GR_CHORD, GR_SLICES, GR_EVENTS,
-       GR_FMOP, GR_FMOP2, GR_FMENV, GR_INS, GR_SHFX, GR_BOUNCE, GR_LOOP, GR_LIVE };   /* GR_SHFX: SHARD's SLICE FX (ui_slice.c); GR_BOUNCE: SAVE > BOUNCE (bounce.c) */   /* (GR_STEPS: SEQ TOOLS' knobs; GR_FMOP..: FM6's operator pages, ui_fm6op.c) */
+       GR_FMOP, GR_FMOP2, GR_FMENV, GR_INS, GR_SHFX, GR_BOUNCE, GR_LOOP, GR_LIVE,
+       GR_DKISO, GR_DKMIX, GR_DKFB };   /* (DECK MODE: ISOLATE's analyzer, MIX, FEEDBACK: ui_graph.c) */   /* GR_SHFX: SHARD's SLICE FX (ui_slice.c); GR_BOUNCE: SAVE > BOUNCE (bounce.c) */   /* (GR_STEPS: SEQ TOOLS' knobs; GR_FMOP..: FM6's operator pages, ui_fm6op.c) */
 
 typedef struct {
     const char *title;
@@ -545,8 +550,8 @@ static const page_t PAGES[] = {
     {"MOD", FAM_LFO, SC_TRACK, GR_MOD, {0xFF, P_M1SRC, P_M1DST, P_M1AMT}},   /* KNOB 1: the slot (mod_ui_slot) */
     {"FX", FAM_FX, SC_TRACK, GR_FX, {P_DIST, P_CHOR, P_DLY, P_REV}},
 #if FELUCCA_MANGLER
-    {"FEEDBACK", FAM_FX, SC_TRACK, GR_NONE, {P_DK_FBLO, P_DK_FBMID, P_DK_FBHI, P_DK_PITCH}},   /* DECK MODE: decks A, B */
-    {"FEEDBACK 2", FAM_FX, SC_TRACK, GR_NONE, {P_DK_PRESS, 0xFF, 0xFF, 0xFF}},                /* (ui.c page_visible) */
+    {"FEEDBACK", FAM_FX, SC_TRACK, GR_DKFB, {P_DK_FBLO, P_DK_FBMID, P_DK_FBHI, P_DK_PITCH}},   /* DECK MODE: decks A, B */
+    {"DECK", FAM_FX, SC_TRACK, GR_NONE, {P_DK_PRESS, 0xFF, 0xFF, 0xFF}},   /* PRESS: the keys into DRIVE, FEEDBACK */
 #endif
     {"SLICER", FAM_FX, SC_TRACK, GR_SLCR, {P_SLCR, P_SLPAT, P_SLRATE, P_SLDEPTH}},
     {"INSERT", FAM_FX, SC_TRACK, GR_INS, {P_ITYPE, P_IA, P_IB, P_IC}},   /* 1.5: the track's INSERT (fx.c) */
@@ -560,8 +565,8 @@ static const page_t PAGES[] = {
     {"EDIT 1", FAM_EDIT, SC_ENGINE, GR_NONE, {P_E0, P_E1, P_E2, P_E3}},
     {"EDIT 2", FAM_EDIT, SC_ENGINE, GR_NONE, {P_E4, P_E5, P_E6, P_E7}},
 #if FELUCCA_MANGLER
-    {"ISOLATE", FAM_EDIT, SC_TRACK, GR_NONE, {P_DK_LO, P_DK_MID, P_DK_HI, P_DK_DRIVE}},       /* DECK MODE (deck.c): */
-    {"ISOLATE 2", FAM_EDIT, SC_TRACK, GR_NONE, {P_DK_XLO, P_DK_XHI, P_DK_TYPE, P_DK_FILT}},   /* decks A and B only */
+    {"ISOLATE", FAM_EDIT, SC_TRACK, GR_DKISO, {P_DK_LO, P_DK_MID, P_DK_HI, P_DK_DRIVE}},       /* DECK MODE (deck.c): */
+    {"ISOLATE 2", FAM_EDIT, SC_TRACK, GR_DKISO, {P_DK_XLO, P_DK_XHI, P_DK_TYPE, P_DK_FILT}},   /* decks A and B only */
 #endif
     {"FILTER", FAM_EDIT, SC_TRACK, GR_NONE, {P_FTYPE, P_E4, P_E5, P_E7}},   /* ANALOG only (1.5, #104): TYPE CUT RES KTR */
     {"LANES", FAM_EDIT, SC_TRACK, GR_NONE, {P_LN0, P_LN1, P_LN2, P_LN3}},   /* DRUM only: the lane levels */
@@ -601,10 +606,18 @@ static const page_t PAGES[] = {
                                                                              * list, PLAY and CLEAR (ui_events.c) */
     /* HOME's pages (1.2): HOME tapped on HOME the MIXER (up to 1.1.5 GLO's; LEVEL PAN REV MUTE), again CLOCK (up to 1.1.5
      * GLO > GLOBAL; its TUNE is MENU > AUDIO's now), again HOME (ui.c home_tap) */
+#if FELUCCA_MANGLER
+    {"MIX", FAM_TRK, SC_DECK, GR_DKMIX, {0, 1, 2, 3}},   /* DECK MODE (decks A and B only): XFADE A LVL B LVL CURVE */
+#endif
     {"MIXER", FAM_TRK, SC_TRK, GR_TRK, {0, 1, 2, 3}},
     {"CLOCK", FAM_TRK, SC_GLOBAL, GR_NONE, {G_BPM, G_SWING, G_CLOCK, 0xFF}},
 };
 #define NPAGES (sizeof(PAGES) / sizeof(PAGES[0]))
+#if FELUCCA_MANGLER
+/* DECK MODE's MIX (decks A and B): KNOB 1 XFADE and KNOB 4 CURVE, track 1's; KNOB 2 A LVL, KNOB 3 B LVL, the decks'
+ * LEVELs (ui_input.c deck_mix_edit, ui_draw.c) */
+static const struct { uint8_t trk, id; } DECK_MIX[4] = {{0, P_DK_XFADE}, {0, P_LEVEL}, {1, P_LEVEL}, {0, P_DK_CURVE}};
+#endif
 static uint8_t mod_ui_slot;      /* the MOD page: the matrix slot (0..3) KNOB 2..4 edit */
 
 static const param_desc_t *page_desc(const page_t *pg, uint32_t slot, int16_t **valp)
@@ -614,7 +627,7 @@ static const param_desc_t *page_desc(const page_t *pg, uint32_t slot, int16_t **
         *valp = 0;
         return 0;
     }
-    if (pg->scope == SC_STEP || pg->scope == SC_TRK) {
+    if (pg->scope == SC_STEP || pg->scope == SC_TRK || pg->scope == SC_DECK) {
         *valp = 0;
         return 0;
     }

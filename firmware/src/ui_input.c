@@ -539,6 +539,19 @@ static void tracks_edit(uint32_t slot, int32_t steps)
     ml_knob(t, (uint32_t)(vp - t->p));
 }
 
+#if FELUCCA_MANGLER
+/* DECK MODE's MIX (params.c DECK_MIX): each knob's value recorded as automation on the track it belongs to */
+static void deck_mix_edit(uint32_t slot, int32_t steps)
+{
+    track_t *t = &trk[DECK_MIX[slot & 3u].trk];
+    uint32_t id = DECK_MIX[slot & 3u].id;
+    const param_desc_t *d = &TP[id];
+    t->p[id] = (int16_t)param_turn(d, t->p[id], accel(EN_K1 + slot, steps, d->fmt == F_ENUM ? 0 : d->max - d->min));
+    motion_capture(t, id, t->p[id]);
+    ml_knob(t, id);
+}
+#endif
+
 /* SEQ > STEP's piano roll (not the DRUM grid, whose white keys stay its steps): where step recording writes */
 static int roll_on(void)
 {
@@ -1011,6 +1024,12 @@ static void edit_param(uint32_t slot, int32_t steps)
         tracks_edit(slot, steps);
         return;
     }
+#if FELUCCA_MANGLER
+    if (pg->scope == SC_DECK) {
+        deck_mix_edit(slot, steps);
+        return;
+    }
+#endif
     if (pg->graph == GR_BROWSE) {                         /* KNOB 1: one preset, KNOB 2: the next / previous engine */
         if (slot == 0u) {
             preset_step(steps);
@@ -1908,7 +1927,7 @@ static void ui_input(void)
             ui.hot_t = 40;
             continue;
         }
-        if (ui.home || pg->scope == SC_STEP || pg->scope == SC_TRK || page_desc(pg, k, &hv) ||
+        if (ui.home || pg->scope == SC_STEP || pg->scope == SC_TRK || pg->scope == SC_DECK || page_desc(pg, k, &hv) ||
             ((pg->graph == GR_USER || pg->graph == GR_MOD || pg->graph == GR_PATS) && k == 0u)
             || pg->graph == GR_SONG || (pg->graph == GR_SLICES && k < 2u) || pg->graph == GR_SHFX ||
             (pg->graph == GR_BOUNCE && k < 3u) || (pg->graph == GR_LIVE && k == 0u) || fop_page(pg->graph)) {   /* (not an empty

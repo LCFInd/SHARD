@@ -63,6 +63,17 @@ deck_db = lambda i: -40 * (64 - i) / 63 if i <= 64 else 6 * (i - 64) / 63
 table("int32_t", "DECK_GAIN_Q14", [0] + [16384 if i == 64 else round(16384 * 10 ** (deck_db(i) / 20)) for i in range(1, 128)])
 table("int16_t", "DECK_GAIN_DB10", [-999] + [round(10 * deck_db(i)) for i in range(1, 128)])
 table("uint16_t", "DECK_XO_HZ", [round(xo(i)) for i in range(128)])
+# the crossfader (fx.c mix_part): deck A's gain at position i (XFADE + 64; deck B's: at 127 - i), Q15, for each CURVE:
+# SMOOTH (both at full in the middle, each down to 0 over its own half), DJ (equal power: -3 dB in the middle), CUT
+# (a scratch curve: full until the last 1/16 of the travel). (XFADE 0 is i = 64: SMOOTH x 2.02 keeps it full there)
+xf = [lambda x: min(1.0, 2.02 * (1 - x)), lambda x: math.cos(x * math.pi / 2), lambda x: min(1.0, max(0.0, (1 - x) * 16))]
+table("int16_t", "DECK_XF_Q15", [min(32767, round(32767 * f(i / 127))) for f in xf for i in range(128)])
+# the ISOLATE page's analyzer (ui_graph.c graph_deck_iso): 20 bands 50 Hz .. 12 kHz, each a Goertzel over the last
+# 256 samples: its coefficient 2 cos(w) (Q14) and the band's centre (Hz); a Hann window (Q15)
+gz = [50 * (12000 / 50) ** (k / 19) for k in range(20)]
+table("int16_t", "DECK_GZ_C", [round(16384 * 2 * math.cos(2 * math.pi * f / FS)) for f in gz])
+table("uint16_t", "DECK_GZ_HZ", [round(f) for f in gz])
+table("uint16_t", "DECK_HANN", [round(32767 * 0.5 * (1 - math.cos(2 * math.pi * i / 255))) for i in range(256)])
 # the crossovers' one-poles, trapezoidal (TPT: 2 LP - x is an exact all-pass, so the bands add up flat): G = g / (1 + g),
 # g = tan(pi f / fs) (Q15)
 table("int32_t", "DECK_TPT_G", [round(32768 * math.tan(math.pi * xo(i) / FS) / (1 + math.tan(math.pi * xo(i) / FS)))

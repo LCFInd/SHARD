@@ -13,14 +13,14 @@ has ratchets, chance, swing, conditions and parameter locks. SHARD adds the foll
 
 | | |
 |---|---|
-| **Per-slice settings** | PITCH, LEVEL, an envelope (ATTACK, DECAY, SUS, REL), MODE (track / ONE / GATE / LOOP), DIR (FWD, REV, PING), FILTER (LP / HP / BP / COMB- / COMB+) with CUT and RES, DRIVE (OVRDRV DIST FOLD CRUSH DECIM HALF TUBE FUZZ) with AMT, DELAY, ROUTE, CHOKE (1–4) |
+| **Per-slice settings** | PITCH, LEVEL, an envelope (ATTACK, DECAY, SUS, REL), MODE (track / ONE / GATE / LOOP), DIR (FWD, REV, PING), FILTER (LP / HP / BP / COMB- / COMB+) with CUT and RES, DRIVE (OVRDRV DIST FOLD CRUSH DECIM HALF TUBE FUZZ) with AMT, DELAY, CHOKE (1–4) |
 | **Direction** | MODE and DIR together give forward once (ONE + FWD), forward loop (LOOP + FWD), reverse once (ONE + REV), reverse loop (LOOP + REV) and forward-back loop (LOOP + PING). ONE + PING plays forward then back once |
 | **Envelope** | ATTACK, then DECAY down to SUS, held while the key is down. REL starts at the key's release. REL OFF leaves the release to the track's envelope. In ONE the slice ignores the key's release |
 | **DELAY** | A per-slice send into Felucca's tempo delay, beside the track's own send. It's taken straight from the slice, before the track's DIST and INSERT |
 | **PLAY mode** | ReCycle style. A note plays the whole loop from its slice, and each slice starts at its place in the loop, scaled to the tempo. Changing the tempo moves the slices, not the pitch. BARS: AUTO (from the sample's tempo), 1, 2, 4 or 8 |
 | **Tempo** | SHARD finds a rhythmic sample's tempo when the slot is loaded (60–200 BPM; a loop cut on the beat gets its exact tempo). You can set it instead on SLICE FX's BUS (BPM, 40–250; AUTO shows the one found). It's kept with the kit |
 | **Slices** | DIV: 2, 4, 6, 8, 12, 16 or 32 equal slices, AUTO (one per hit) or MAN (set by hand). SENS on SLICE FX's BUS sets how readily AUTO finds hits in a user sample (0 fewer, 127 more; 64 is SLICE's). The BREAK and PIANO slices are fixed |
-| **Four channels** | Ohmnicide style, per track. A slice routes DIRECT to the track, into MULTI (split into the low, mid and high channels), or straight into one channel: LOW, MID, HIGH or FULL. FULL is full-range and starts clean (shaper OFF, level 127). Each channel has its own shaper, drive, gate and level. MULTI (E7) is the bus's wet mix; DRIVE (E8) offsets every channel's drive |
+| **Deck mode** | Tracks 1 and 2 are decks A and B, mixed by a crossfader. Each deck has its own 3-band isolator (LO, MID, HI from KILL to +6 dB, at XLO and XHI), one shaper (TYPE, DRIVE), a DJ filter (FILT) and feedback per band. Tracks 3 and 4 play straight into the mix. See DECK MODE below |
 | **USR4** | A fourth sample slot (80 KB, up to 7.4 s), in the flash that FM6's voice bank used, plus the spare area Felucca keeps for a firmware's own data (0xE7000..0xFAFFF). SHARD's SRC lists it after PIANO; SAMPLE's SET and GRAIN's SRC after USR3 |
 | **BOUNCE** | SAVE > BOUNCE renders the sequence into a slot: BARS (1, 2, 4, 8), FROM (MIX, or one track), TO (USR1..4), OCT+. The audio goes quiet while it renders, faster than real time, with a progress bar. It plays the bars once unheard, then records them a second time, so delay and reverb tails wrap round and the slot loops seamlessly. Mono, 22.05 kHz, up to 7.0 s (longer bounces are cut). SHARD slices it, and its kit gets the song's tempo as BPM. It won't overwrite a slot that one of the rendered tracks plays |
 | **The kit** | A source's per-slice settings and bus settings. A user slot's kit is saved with its sample, in the same sector as SLICE's hand-set slices. The BREAK and PIANO kits last until power-off |
@@ -29,7 +29,7 @@ has ratchets, chance, swing, conditions and parameter locks. SHARD adds the foll
 
 - **PRESETS:** SHARD, SAMPLE, GRAIN. SHARD's presets are RECYCLE (PLAY), CHOP KIT (ONE) and SHRED (GATE, 32nds). At power-on tracks 1–3 play SHARD's three presets and track 4 GRAIN.
 - **EDIT 1 (SHRD):** SRC, DIV, START, PTCH. This is the same layout as SLICE; DIV adds 2, 6 and 12.
-- **EDIT 2 (PLAY):** MODE, BARS, MULTI, DRIVE.
+- **EDIT 2 (PLAY):** MODE, BARS, MULTI, DRIVE. On a deck, MULTI mixes dry and the isolator (127: all through it) and DRIVE adds to the deck's DRIVE.
 - **SLICES:** set the slices by hand, as with SLICE.
 - **SLICE FX:**
 
@@ -40,7 +40,7 @@ has ratchets, chance, swing, conditions and parameter locks. SHARD adds the foll
   | KNOB 3 | Sets the value for the picked slice |
   | KNOB 4 | Moves every slice's value by the same amount |
 
-  On BUS the parameters are BPM, SENS, XLOW, XHIGH, then TYPE, DRV, GATE and LVL for each channel (L, M, H, F). Turning BPM up from AUTO starts at the tempo that was found. SENS re-slices the sample once the knob rests; voices playing it stop.
+  On BUS the parameters are BPM, SENS, DETECT and the track's GRAIN (SIZE, DENS, JITTER). Turning BPM up from AUTO starts at the tempo that was found. SENS re-slices the sample once the knob rests; voices playing it stop. (ROUTE, PRESS, the split points and the four channels moved to the decks: DECK MODE.)
 
   The kit is saved when you leave the page, once the transport is stopped ("KIT SAVED").
 
@@ -177,7 +177,41 @@ GRAIN plays a slice as grains so that its pitch and its length are separate. A h
 - **Storage:** the kit record is now SHF3 (each slice 20 bytes; the bus's 4 spare bytes hold the track's GRAIN). SHF2 kits load with GRAIN set to TRACK and the bus set to OFF.
 - **The GRAIN engine stays** for synth-style granular work on SAMPLE zones.
 
-## FDBK (SLICE FX: BUS, per channel)
+## DECK MODE (2026-11-17)
+
+Tracks 1 and 2 are decks A and B. Each deck runs through its own isolator after its engine (any engine: SHARD, GRAIN or SAMPLE), then the crossfader mixes them. Tracks 3 and 4 play straight into the mix, as DIRECT did.
+
+| Page | Where | KNOB 1 | KNOB 2 | KNOB 3 | KNOB 4 |
+|---|---|---|---|---|---|
+| MIX | HOME's first page (decks only) | XFADE | A LVL | B LVL | CURVE |
+| ISOLATE | EDIT, after EDIT 2 | LO | MID | HI | DRIVE |
+| ISOLATE 2 | EDIT | XLO | XHI | TYPE | FILT |
+| FEEDBACK | FX, after FX | FB LO | FBMID | FB HI | PITCH |
+| DECK | FX | PRESS | | | |
+
+- **The split:** 12 dB/octave Linkwitz-Riley crossovers at XLO and XHI (40 Hz to 12 kHz), built from trapezoidal one-poles. The three bands add back up flat (only the phase turns). At KILL a band is gone 12 dB/octave beyond its crossover: about −24 dB an octave and a half below XLO or above XHI, about −13 dB in the middle of MID with the default crossovers.
+- **LO, MID, HI:** KILL, then −40 dB to 0 dB at the centre (64), up to +6 dB.
+- **TYPE, DRIVE:** one of SHARD's shapers over the sum. TYPE OFF: no shaper.
+- **FILT:** left of OFF a low-pass closing, right a high-pass opening (SHARD's state-variable filter at 2×, a little resonance).
+- **FEEDBACK:** each band's output band-passed at its own pitch (150 Hz, 900 Hz, 4 kHz; PITCH moves them ±24 semitones, ARP's PITCH too) and fed back, held by a soft clip. From about 64 a band holds itself after the slices stop. ARP's FDBK SWELL, PRESS and PANIC work on it as they did on the bus.
+- **The crossfader:** XFADE −100 % is all deck A, +100 % all deck B. CURVE: SMOOTH (both at full in the middle), DJ (equal power: −3 dB in the middle), CUT (a scratch curve: full until the last sixteenth of the travel). It sets each deck's level everywhere: its dry, its sends, the slices' DELAY sends and the FX layer's THROW.
+- **Untouched** (every band 0 dB, TYPE OFF, FILT OFF, no feedback) a deck is its input bit for bit and costs nothing.
+- **Where the values live:** the 20 FM operator values every track stores (`core.h` `P_DK_*`), which no engine of the mangler reads. Projects, user presets, the editor and the motion recorder carry them. A sound load keeps them: they belong to the deck, not the sound. XFADE and CURVE are track 1's.
+- **Old projects:** a project from before deck mode has the FM defaults there. At its load every track gets the deck defaults, and a deck on SHARD takes its sample kit's crossovers, FDBK and PRESS. The kit's per-channel shapers, gates and levels are not carried over.
+- **Cost (host, instructions per sample at the worst moment, the owner's project with track 2's key hits):** all slices DIRECT 1,960; the old bus with every slice on MULTI 3,040; deck mode with both decks untouched 1,925, both isolators on 2,200, both decks with everything on (isolator, TUBE, feedback, filter) 2,600.
+- **The pictures:** ISOLATE shows a 20-band analyzer (the input as ghost bars with falling peaks, the output on them, a killed band's bars red) with the crossovers as red lines; ISOLATE 2 draws them solid. MIX shows both decks' meters and the crossfader. FEEDBACK shows each band's setting with how loud it rings now (red while it holds itself).
+
+## Overload (2026-11-17)
+
+When the audio runs late (two halves in a row over 85 %), a voice is dropped: first the quietest released voice older than about 46 ms, then a held extra note, and a just-started released voice only when nothing else is left. The header's track icon turns red for 0.7 s each time.
+
+## Complete backups (2026-11-17)
+
+The editor's complete backup holds 16 objects: ids 10–12 are each user slot's SLICE FX kit and MAN slices. A restore writes them after the samples, onto the sample they were made for only. Older backups (13 objects) still restore; older firmware skips the new ids.
+
+## FDBK (before DECK MODE: SLICE FX's BUS, per channel)
+
+In the mangler this is now each deck's FEEDBACK page (DECK MODE). What follows describes the bus as Felucca's full build keeps it.
 
 Each BUS channel (LOW, MID, HIGH, FULL) has an FDBK setting, listed between DRV and GATE. It feeds the channel's shaper output back into its own input, the way a no-input mixer is played.
 

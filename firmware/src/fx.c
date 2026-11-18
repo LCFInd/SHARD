@@ -227,6 +227,24 @@ static uint32_t div_samples(uint32_t div)
     return div < 6u ? quarter / DIV_DEN[div] : div < 10u ? quarter << (div - 5u) : quarter / DIV_DEN[div % 6u];
 }
 
+#if FELUCCA_MANGLER
+/* DECK MODE's crossfader: deck d's gain (Q15) from track 1's XFADE and CURVE (shard_tables.h DECK_XF_Q15), eased over
+ * a few blocks (a knob's detent is no click); set once a block in mix_part, read by every level of the part (its
+ * dry, SPREAD's, the slices' DELAY send, the FX layer's THROW) through deck_lvl */
+static int32_t deck_xg[NDECK] = {32767, 32767};
+static void deck_xfade(uint32_t d)
+{
+    const int16_t *p = trk[0].p;
+    uint32_t c = (uint32_t)clamp(p[P_DK_CURVE], 0, 2), i = (uint32_t)clamp(p[P_DK_XFADE] + 64, 0, 127);
+    int32_t want = DECK_XF_Q15[c * 128u + (d ? 127u - i : i)];
+    deck_xg[d] += (want - deck_xg[d]) / 4 + (want > deck_xg[d] ? 1 : want < deck_xg[d] ? -1 : 0);
+    if ((want - deck_xg[d]) * (want - deck_xg[d]) < 4)
+        deck_xg[d] = want;
+}
+#define deck_lvl(t, l) (deck_of(t) ? (int32_t)(((int64_t)(l) * deck_xg[(uint32_t)((t) - trk)]) >> 15) : (l))
+#else
+#define deck_lvl(t, l) (l)
+#endif
 #include "perform.c"                                 /* the FX hold layer's effects (the master) */
 #include "click.c"                                   /* the metronome's click (after the master: audio.c) */
 
@@ -826,7 +844,7 @@ static __attribute__((noinline)) void mix_spread(track_t *t, int32_t *b, uint32_
 {
     int32_t *d = SPREAD_BUF(t);
     uint32_t i;
-    int32_t lvl = LEVEL_Q12[t->p[P_LEVEL] & 127], pan = t->p[P_PAN], s = (t->p[P_SPRD] + 1) >> 1;
+    int32_t lvl = deck_lvl(t, LEVEL_Q12[t->p[P_LEVEL] & 127]), pan = t->p[P_PAN], s = (t->p[P_SPRD] + 1) >> 1;
     int32_t pa = clamp(pan - s, -64, 63), pb = clamp(pan + s, -64, 63);
     int32_t gla = 4096 - (pa > 0 ? pa * 64 : 0), gra = 4096 + (pa < 0 ? pa * 64 : 0);
     int32_t glb = 4096 - (pb > 0 ? pb * 64 : 0), grb = 4096 + (pb < 0 ? pb * 64 : 0);
@@ -895,7 +913,7 @@ static void shard_send(track_t *t, int32_t *sd, uint32_t n)
     mem = shd_mem(t);
     if (!mem->dused)
         return;
-    lvl = LEVEL_Q12[t->p[P_LEVEL] & 127];
+    lvl = deck_lvl(t, LEVEL_Q12[t->p[P_LEVEL] & 127]);
     for (i = 0; i < n; i++)
         sd[i] += ((clamp(mem->dsend[i], -(1 << 19), 1 << 19) >> 2) * lvl) >> 10;
 }
@@ -911,6 +929,10 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
     uint32_t nr;
 #endif
     mod_begin(t);                                       /* the matrix's per-block values into t->p (mod.c) */
+#if FELUCCA_MANGLER
+    if (deck_of(t))
+        deck_xfade((uint32_t)(t - trk));                /* DECK MODE: this block's crossfader gain */
+#endif
     T_SPREAD(t) = t->p[P_SPRD] > 0 && (trk_vmode(t) == V_POLY || trk_vmode(t) == V_UNISON);   /* (SPREAD, mix_spread) */
 #if FELUCCA_CPU2
     nr = track_render(t, b, n);
@@ -942,6 +964,7 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
     if (!T_SPREAD(t)) {                                /* (the mix's values read after the calls: none is held over
                                                          * them, no spill in the loop: the ISR's cost as before 1.5) */
         int32_t lvl = LEVEL_Q12[t->p[P_LEVEL] & 127], pan = t->p[P_PAN];
+        lvl = deck_lvl(t, lvl);                         /* DECK MODE: the crossfader (else as it was) */
         int32_t gl = 4096 - (pan > 0 ? pan * 64 : 0), gr = 4096 + (pan < 0 ? pan * 64 : 0);
         int32_t c = t->p[P_CHOR] * 258, d = t->p[P_DLY] * 258, r = t->p[P_REV] * 258, pk = t->peak;
         int32_t xmax = c > d ? c : d;

@@ -837,8 +837,25 @@ function fmtValue(d, v) {
     case F.NOTE: return [NOTE_NAMES[((v % 12) + 12) % 12], ""];
     case F.ONOFF: return [v ? "ON" : "OFF", ""];
     case F.STEPS: return [String(v), "STEP"];
-    default: return [String(v), d.unit || ""];
+    default: {
+      const dk = deckFmt(d, v);                  /* (SHARD DECK MODE: the isolators' values, as params.c shows them) */
+      return dk || [String(v), d.unit || ""];
+    }
   }
+}
+/* SHARD's DECK MODE (firmware/src/core.h P_DK_*, ids 61..80 of a mangler build): LO MID HI as KILL / dB, the crossovers
+   in Hz, FILT as LP / OFF / HP (tools/gen_shard_tables.py) */
+function deckFmt(d, v) {
+  if (d.fmt !== F.INT || !["LO", "MID", "HI", "FILT", "XLO", "XHI"].includes(d.label)) return null;
+  if (d.label === "FILT") return v ? [String(Math.abs(v)), v < 0 ? "LP" : "HP"] : ["OFF", ""];
+  if (d.label === "XLO" || d.label === "XHI") {
+    const h = 40 * Math.pow(300, (v & 127) / 127);
+    return h < 1000 ? [String(Math.round(h)), "Hz"] : [(Math.trunc(h / 100) / 10).toFixed(1), "kHz"];
+  }
+  if (v <= 0) return ["KILL", ""];
+  const db = Math.round(10 * (v <= 64 ? -40 * (64 - v) / 63 : 6 * (v - 64) / 63)), a = Math.abs(db);
+  if (!db) return ["0", "dB"];
+  return [(db < 0 ? "-" : "+") + (a >= 100 ? String(Math.round(a / 10)) : (a / 10).toFixed(1)), "dB"];
 }
 
 /* ---------------------------------------------------------- user samples --- */
@@ -2907,7 +2924,7 @@ const EXPECT = { pcount: 91, gcount: 27, pe0: 83 };
 /* the same layout without the chord keys (P_COUNT 89, P_E0 81), the FM operator ENVs too (69, 61) or the matrix
    (firmware 1.0: 57, 49) */
 const knownLayout = (info) => info.gcount === EXPECT.gcount &&
-  [[99, 91], [91, 83], [89, 81], [69, 61], [57, 49]].some(([c, e]) => info.pcount === c && info.pe0 === e);
+  [[114, 106], [99, 91], [91, 83], [89, 81], [69, 61], [57, 49]].some(([c, e]) => info.pcount === c && info.pe0 === e);   /* (114: 1.8) */
 const P = { LEVEL: 0, SLEN: 29 };
 const LAYOUT = (pe0) => [
   { t: "ENV", pages: [["ENV", 0, [1, 2, 3, 4]], ["ENV DEST", 0, [5, 6, 7, 8]]] },
@@ -2919,6 +2936,8 @@ const LAYOUT = (pe0) => [
                                                     FELUCCA_FM4=1 firmware only: DIGITAL retired, its engine is "-") */
     ...[0, 1, 2, 3].map((k) => [`OP${k + 1}`, 0, [61 + 5 * k, 62 + 5 * k, 63 + 5 * k, 64 + 5 * k]]),
     ["OP LVL", 0, [65, 70, 75, 80]]] }] : []),
+  ...(deckOn() ? [{ t: "DECK", pages: [["ISOLATE", 0, [61, 62, 63, 65]], ["ISOLATE 2", 0, [67, 68, 64, 66]],
+    ["FEEDBACK", 0, [69, 70, 71, 72]], ["DECK", 0, [73]], ...((dev.sel || 0) === 0 ? [["MIX", 0, [74, 75]]] : [])] }] : []),
   { t: "VOICE", pages: [["LEVEL", 0, [0]], ["VOICE", 0, [37, 38, 41, 42]], ["VOICE 2", 0, [43, 44, 39, 40]]] },
   { t: "FX", pages: [["FX", 0, [33, 34, 35, 36]], ["SLICER", 0, [45, 46, 47, 48]], ["DLY", 1, [4, 5, 6, 7]], ["REVERB", 1, [24, 8, 9]], ["CHORUS", 1, [10, 11]]] },   /* G_RTYPE 24: ROOM / SPRING / HALL */
   { t: "SCL", pages: [["SCL", 0, [25, 26, 27, 28]], ...(pe0 >= 83 ? [["CHORD", 0, P_CHORD]] : [])] },   /* CHRD VOIC 81, 82 */
@@ -2931,6 +2950,8 @@ const LAYOUT = (pe0) => [
 const G_SKIP = new Set(["SLOT", "NAME", "LOAD", "SAVE", "ENG", "SET", "CLRSQ", "INIT", "MIDI", "SYNC", "CPU", "CLK"]);
 const key = (s, id) => s + ":" + id;
 const engName = () => (dev && dev.info && dev.dump ? dev.info.engines[dev.dump.engine] : "");
+/* a SHARD build with DECK MODE (id 61 is LO), on deck A or B */
+const deckOn = () => !!(dev && dev.pdesc && dev.pdesc[61] && dev.pdesc[61].label === "LO" && (dev.sel || 0) < 2);
 const gEng = () => { const i = dev.gdesc.findIndex((d) => d && d.label === "ENG"); return i >= 0 ? i : 20; };
 const pSlen = () => { const i = dev.pdesc.findIndex((d) => d && d.fmt === F.STEPS); return i >= 0 ? i : P.SLEN; };
 /* mixer ids by DESC label (core.h: P_PAN 39, P_MUTE 40) */

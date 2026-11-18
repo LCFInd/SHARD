@@ -1123,6 +1123,21 @@ static void draw_columns(void)
             draw_act_column(c, c == 1u && ui.tl_clean && act_col() == 2u ? "CLEAN" : labels[c], VAL(c), icons[c]);
         return;
     }
+#if FELUCCA_MANGLER
+    if (cur_page()->scope == SC_DECK) {                /* DECK MODE's MIX: XFADE A LVL B LVL CURVE (ui_input.c) */
+        static const char *const LB[4] = {"XFADE", "A LVL", "B LVL", "CURVE"};
+        for (c = 0; c < 4u; c++) {
+            track_t *t = &trk[DECK_MIX[c].trk];
+            const param_desc_t *d = &TP[DECK_MIX[c].id];
+            int32_t v = t->p[DECK_MIX[c].id];
+            param_format(d, v, val, &unit);
+            card_mot_of(&t->p[DECK_MIX[c].id]);
+            card_span_of(d);
+            draw_column(c, LB[c], val, unit, VAL(c), RATIO(d, enum_rank(d, v)), param_icon(d, v));
+        }
+        return;
+    }
+#endif
     if (cur_page()->scope == SC_TRK) {                 /* LEVEL PAN REV MUTE of the selected track */
         const track_t *t = TSEL;
         uint32_t lvl = trk_level(song.sel);

@@ -3,7 +3,7 @@
  *   1. untouched: the part bit for bit; one band 0.1 dB off: flat (the split's bands add up through all-passes)
  *   2. KILL: LO at 100 Hz, HI at 10 kHz, MID at 1 kHz gone (12 dB/oct), the other bands kept
  *   3. the DJ filter: LP closes the top, HP the bottom; every TYPE at full DRIVE bounded
- *   4. tracks 3 and 4 never go through a deck
+ *   4. tracks 3 and 4 never go through a deck; the crossfader: XFADE at either end, each CURVE in the middle
  *   5. a project of before (the FM operators' defaults there) converts: the deck defaults, decks on SHARD with
  *      their kit's crossovers, FDBK and PRESS; idempotent
  * Run by tests/run_host_tests.sh (the mangler's flags). */
@@ -156,6 +156,30 @@ int main(void)
             ok &= (uint32_t)deck_of(&trk[k]) == (k < 2u);
         check("decks: tracks 1 and 2 only", ok, 0, 0, 0);
     }
+    {   /* the crossfader (fx.c deck_xfade): XFADE -64 all A; SMOOTH both full in the middle, DJ -3 dB, CUT full */
+        static const int16_t POS[] = {-64, 0, 0, 0, 63};
+        static const int16_t CRV[] = {0, 0, 1, 2, 2};
+        int32_t ga[5], gb[5];
+        for (k = 0; k < 5u; k++) {
+            trk[0].p[P_DK_XFADE] = POS[k];
+            trk[0].p[P_DK_CURVE] = CRV[k];
+            for (i = 0; i < 64u; i++) {
+                deck_xfade(0);
+                deck_xfade(1);
+            }
+            ga[k] = deck_lvl(&trk[0], 32767);
+            gb[k] = deck_lvl(&trk[1], 32767);
+        }
+        check("XFADE -64: deck A full, deck B silent", ga[0] > 32700 && gb[0] == 0, "%.0f, %.0f", ga[0], gb[0]);
+        check("in the middle: SMOOTH both full, DJ both -3 dB, CUT both full",
+              ga[1] > 32700 && gb[1] > 32700 && abs(ga[2] - 23170) < 200 && abs(gb[2] - 23170) < 200 &&
+              ga[3] > 32700 && gb[3] > 32700, "DJ %.0f, %.0f", ga[2], gb[2]);
+        check("XFADE +63 (CUT): deck A silent, deck B full", ga[4] == 0 && gb[4] > 32700, "%.0f, %.0f", ga[4], gb[4]);
+        check("tracks 3 and 4: no crossfader", deck_lvl(&trk[2], 1000) == 1000 && deck_lvl(&trk[3], 1000) == 1000, 0, 0, 0);
+        trk[0].p[P_DK_XFADE] = 0;
+        trk[0].p[P_DK_CURVE] = 0;
+    }
+
     /* 5 */
     {
         static project_t q;
