@@ -543,8 +543,9 @@ static void tracks_edit(uint32_t slot, int32_t steps)
 /* DECK MODE's MIX (params.c DECK_MIX): each knob's value recorded as automation on the track it belongs to */
 static void deck_mix_edit(uint32_t slot, int32_t steps)
 {
-    track_t *t = &trk[DECK_MIX[slot & 3u].trk];
-    uint32_t id = DECK_MIX[slot & 3u].id;
+    uint32_t e = cur_page()->id[slot & 3u] & 7u;
+    track_t *t = &trk[DECK_MIX[e].trk];
+    uint32_t id = DECK_MIX[e].id;
     const param_desc_t *d = &TP[id];
     t->p[id] = (int16_t)param_turn(d, t->p[id], accel(EN_K1 + slot, steps, d->fmt == F_ENUM ? 0 : d->max - d->min));
     motion_capture(t, id, t->p[id]);

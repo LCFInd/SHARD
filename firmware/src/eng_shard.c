@@ -237,6 +237,9 @@ typedef struct {
     uint8_t stage;                                  /* the slice's envelope: 0 attack, 1 decay, 2 sustain, 3 release */
     uint8_t first, idle, choked;                    /* PLAY: the note's slice; waiting for the next slice; choked */
     uint8_t pinged;                                 /* DIR PING: turned at least once */
+#if SMP_CR4
+    int16_t xm1, x2;                                /* smp_cr4's neighbours of s[2] .. s[3] (one sample later) */
+#endif
 } shd_vx_t;
 typedef struct {
     int16_t rb[NVOICE][SLC_RB];                     /* reverse windows (as SLICE's) */
@@ -1190,6 +1193,48 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
                 continue;
             }
         } else {
+#if SMP_CR4
+            if (!v->s[6]) {                             /* prime the interpolator: the slice's first two samples */
+                int32_t x1;
+                if (!(rev ? slc_rev(s, v, rb, 0, &xin) : slc_fwd(s, v, &d, 0, &xin))) {
+                    x->idle = 1;
+                    continue;
+                }
+                x1 = xin;
+                if (!(rev ? slc_rev(s, v, rb, 0, &xin) : slc_fwd(s, v, &d, 0, &xin)))
+                    xin = 0;
+                x->xm1 = (int16_t)v->s[2];
+                v->s[3] = x1;
+                x->x2 = (int16_t)xin;
+                v->s[6] = 1;
+            }
+            frac += stepq;
+            while (frac >= 65536u) {
+                int loop = mode == SHD_M_LOOP && v->gate, ping = sl->rev == SHD_PING;
+                frac -= 65536u;
+                x->xm1 = (int16_t)v->s[2];
+                v->s[2] = v->s[3];
+                v->s[3] = x->x2;
+                if (!(rev ? slc_rev(s, v, rb, loop && !ping, &xin) : slc_fwd(s, v, &d, loop && !ping, &xin))) {
+                    int ok = 0;
+                    if (ping && (loop || (!rev && !x->pinged))) {   /* PING: back (once), or to and fro (LOOP) */
+                        rev ^= 1u;
+                        x->pinged = 1;
+                        shd_turn(s, v, &d, rev);
+                        ok = rev ? slc_rev(s, v, rb, 0, &xin) : slc_fwd(s, v, &d, 0, &xin);
+                    }
+                    if (!ok) {
+                        x->idle = 1;                    /* the slice ended */
+                        v->s[3] = x->x2 = 0;
+                        break;
+                    }
+                }
+                x->x2 = (int16_t)xin;
+            }
+            if (x->idle)
+                continue;
+            y = smp_cr4(x->xm1, v->s[2], v->s[3], x->x2, frac);
+#else
             if (!v->s[6]) {                             /* prime the interpolator */
                 if (!(rev ? slc_rev(s, v, rb, 0, &xin) : slc_fwd(s, v, &d, 0, &xin))) {
                     x->idle = 1;
@@ -1222,6 +1267,7 @@ static void shard_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
             if (x->idle)
                 continue;
             y = v->s[2] + (((v->s[3] - v->s[2]) * (int32_t)(frac >> 1)) >> 15);
+#endif
         }
         if (shd_pre_on && i < SHD_PRE_N) {         /* ARP PRE: RING and NOISE here, before the slice's own effects */
             int32_t w = shd_pre_w[i];

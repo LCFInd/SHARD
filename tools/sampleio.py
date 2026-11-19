@@ -127,6 +127,87 @@ def resample(x, sr, to):
     return out
 
 
+
+# resample_hq (2026-11-19, SHARD): user slots (fm1_sample_upload.py; the editor's resampleHq gives the same bytes).
+# A Kaiser-windowed sinc (80 dB, flat to 0.9 of the lower Nyquist), then at 22050 Hz an 11-tap filter that makes up
+# what the FM-1's 4-point interpolation (eng_sample.c smp_cr4) takes off: flat to 9.9 kHz on the device.
+# Only + - * / and sqrt, in the same order as the JS: no libm sin() (Python's and the browser's may differ).
+_HQ_PI = 3.141592653589793
+_HQ_BETA = 7.857
+_HQ_COMP = [1.182624, -0.141465, 0.070005, -0.028953, 0.013049, -0.005283]   # taps 0, +-1 .. +-5
+
+
+def _hq_sin(v):
+    k = math.floor(v / _HQ_PI + 0.5)
+    r = v - k * _HQ_PI
+    r2 = r * r
+    y = r * (1 + r2 * (-1 / 6 + r2 * (1 / 120 + r2 * (-1 / 5040 + r2 * (1 / 362880 + r2 * (-1 / 39916800
+                                                                                              + r2 * (1 / 6227020800)))))))
+    return -y if abs(k) % 2 == 1 else y
+
+
+def _hq_i0(v):
+    t, acc, h = 1.0, 1.0, v / 2
+    for k in range(1, 41):
+        t = t * h / k
+        acc = acc + t * t
+    return acc
+
+
+def _hq_kernel(fr, rr, fcn):
+    """taps j = -rr .. rr at d = j - fr input samples"""
+    i0b, out = _hq_i0(_HQ_BETA), []
+    for j in range(-rr, rr + 1):
+        d = j - fr
+        u = d / rr
+        if u <= -1 or u >= 1:
+            out.append(0.0)
+            continue
+        w = _hq_i0(_HQ_BETA * math.sqrt(1 - u * u)) / i0b
+        if d == 0:
+            h = 2 * fcn
+        else:
+            h = _hq_sin(2 * _HQ_PI * fcn * d) / (_HQ_PI * d)
+        out.append(h * w)
+    return out
+
+
+def resample_hq(x, sr, to):
+    """x (floats at sr) -> floats at to: band-limited; at SLOT_RATE also the device's interpolation made up"""
+    n = len(x)
+    if sr != to and n:
+        lo = min(sr, to)
+        fcn = 0.475 * lo / sr
+        rr = math.ceil(50 * sr / lo)
+        kern, y = {}, []
+        for o in range((n * to) // sr):
+            q = o * sr
+            base = q // to
+            rem = q - base * to
+            k = kern.get(rem)
+            if k is None:
+                k = kern[rem] = _hq_kernel(rem / to, rr, fcn)
+            acc = ws = 0.0
+            for j in range(-rr, rr + 1):
+                i = base + j
+                if 0 <= i < n:
+                    acc = acc + x[i] * k[j + rr]
+                    ws = ws + k[j + rr]
+            y.append(acc / ws if ws > 0 else 0.0)
+        x = y
+    else:
+        x = list(x)
+    if to != SLOT_RATE:
+        return x
+    n, y = len(x), []
+    for o in range(n):
+        acc = 0.0
+        for j in range(-5, 6):
+            if 0 <= o + j < n:
+                acc = acc + x[o + j] * _HQ_COMP[abs(j)]
+        y.append(acc)
+    return y
+
 def _diff_py(w, W, hi):
     """d[tau] = sum((w[i] - w[i + tau]) ** 2 for i in range(W)), tau = 1..hi+1"""
     head, two = w[:W], [2] * W

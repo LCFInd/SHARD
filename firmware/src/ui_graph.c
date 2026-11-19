@@ -2669,6 +2669,28 @@ static void graph_deck_mix(uint16_t c)
         cv_text_on(PANEL_X0 + (PANEL_W - text_w(&AF_S, s)) / 2, 84 - AF_S_CAP_Y, &AF_S, s, T_DIM, T_SURF);
     }
 }
+/* EQ: the MASTER EQ's curve on the analyzer's scale (50 Hz .. 12 kHz), +-12 dB over +-33 px around a dim 0 dB line,
+ * MID F a dim tick; the curve in the accent while a band is on (shard_tables.h MEQ_SH_LO, MEQ_BELL, MEQ_SH_HI) */
+static void graph_meq(uint16_t c)
+{
+    const int16_t *p = trk[0].p;
+    int32_t x0 = PANEL_X0 + 2, w = PANEL_W - 4, yc = 46, xm = dk_fx(DECK_XO_HZ[clamp(p[P_MEQ_F], 0, 127)], x0, w);
+    int32_t lo = clamp(p[P_MEQ_LO], -12, 12), mid = clamp(p[P_MEQ_MID], -12, 12), hi = clamp(p[P_MEQ_HI], -12, 12);
+    int32_t um = (xm - x0) * 63 / w, x, py = yc;
+    for (x = x0; x < x0 + w; x += 4)                 /* 0 dB */
+        cv_rect(x, yc, 2, 1, T_RAISE);
+    for (x = 12; x < 82; x += 6)                     /* MID F */
+        cv_rect(xm, x, 1, 3, T_RAISE);
+    for (x = x0; x < x0 + w; x++) {
+        int32_t u = (x - x0) * 63 / w, d = u > um ? u - um : um - u;
+        int32_t db8 = lo * MEQ_SH_LO[u] + mid * MEQ_BELL[d > 63 ? 63 : d] + hi * MEQ_SH_HI[u];   /* dB x 256 */
+        int32_t y = yc - db8 * 33 / (12 * 256), a = y < py ? y : py, b = y < py ? py : y;
+        if (x == x0)
+            a = b = y;
+        cv_rect(x, a, 1, b - a + 2, lo | mid | hi ? c : T_MID);
+        py = y;
+    }
+}
 /* LOW, MID, HIGH: a bar per band, as high as its FB, and in it how loud the band rings now (red while it holds
  * itself); the page's own band named in TEXT */
 static void graph_deck_fb(const track_t *t, uint16_t c)
@@ -2836,6 +2858,10 @@ static void draw_graph(void)
         case GR_DKFB:
             cv_oy = 0;
             graph_deck_fb(t, c);
+            break;
+        case GR_MEQ:
+            cv_oy = 0;
+            graph_meq(c);
             break;
 #endif
         case GR_FMENV:

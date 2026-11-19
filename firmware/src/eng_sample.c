@@ -241,6 +241,18 @@ static inline int32_t sample_next(const smp_zone_t *z, voice_t *v, int loop)
  * forth, REV a reverse one-shot, RLOOP a reverse loop. START (P_E5) 0..127 of the zone; LEN (P_E7) the length from
  * START on the ENV time scale, 127 (10 s) the rest of the zone; a stored 0 (a project or preset of before: the slot
  * was unused) is the rest of the zone too (LEN's minimum is 1). */
+/* 4-point interpolation (SMP_CR4, the mangler: SAMPLE and SHARD; 2026-11-19): Catmull-Rom between x0 and x1 at frac
+ * (Q16), its neighbours xm1 and x2. 10 kHz in a 22050 Hz sample comes out -4.4 dB (linear: -6.3), and the editor's
+ * upload filter (web/editor.html resampleHq, tools/sampleio.py resample_hq) makes up the rest: flat to 9.9 kHz.
+ * The phase in Q11 keeps every product in 32 bits for any int16 samples. */
+#ifndef SMP_CR4
+#define SMP_CR4 FELUCCA_MANGLER
+#endif
+static inline int32_t smp_cr4(int32_t xm1, int32_t x0, int32_t x1, int32_t x2, uint32_t frac)
+{
+    int32_t f = (int32_t)(frac >> 5), a = 3 * (x0 - x1) + x2 - xm1, b = 2 * xm1 - 5 * x0 + 4 * x1 - x2, c = x1 - xm1;
+    return x0 + (((((((a * f) >> 11) + b) * f) >> 11) + c) * f >> 12);
+}
 enum { SX_ONE, SX_SMPL, SX_LOOP, SX_PONG, SX_REV, SX_RLOOP };
 static const char *const SX_PLAY_NAMES[] = {"ONE", "SMPL", "LOOP", "PONG", "REV", "RLOOP"};
 #define SX_SEG_LOG2 8
@@ -257,6 +269,10 @@ typedef struct {
     uint8_t src;                    /* SET + 1 the index holds, 0 = none */
     uint8_t nz;
     uint8_t want;                   /* a voice waits for an entry: build faster */
+#if SMP_CR4
+    int16_t hx[NVOICE][2];          /* each voice's x[-1] and x[2] around s[2], s[3] (smp_cr4: one sample later) */
+    uint8_t tail[NVOICE];           /* zeros fed past a one-shot's end */
+#endif
 } sx_part_t;
 ENG_MEM_FITS("SAMPLE", sizeof(sx_part_t));
 static sx_part_t *sx_of(const track_t *t) { return (sx_part_t *)ENG_MEM((uint32_t)(t - trk) % NPART); }
@@ -487,6 +503,14 @@ static void sample_note_on(track_t *t, voice_t *v)
     v->s[1] = 0;
     v->s[2] = v->s[3] = 0;
     v->s[5] = (int32_t)((uint32_t)(v - t->v) % NVOICE) << 8;   /* forward; its buffers */
+#if SMP_CR4
+    {
+        sx_part_t *P = sx_of(t);
+        uint32_t vi = (uint32_t)(v - t->v) % NVOICE;
+        P->hx[vi][0] = P->hx[vi][1] = 0;
+        P->tail[vi] = 0;
+    }
+#endif
     v->s[6] = zi == 0xFFFFu;     /* 1 = sample ended (one-shot); a kit key with no sound stays silent */
     v->s[7] = 0;                 /* lo-pass state */
     if (smp_set_missing(si))
@@ -529,6 +553,44 @@ static void sample_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, cons
     }
     sx_check(P, si);
     zl = sx_zl(si, (uint32_t)v->s[4]);
+#if SMP_CR4
+    {   /* (one source sample later than the linear one: s[2] .. s[3] between hx[0] and hx[1]) */
+        uint32_t vi = (uint32_t)(v - t->v) % NVOICE;
+        int16_t *h = P->hx[vi];
+        if (v->ph[0] < z->n && v->ph[1] == 0 && v->s[3] == 0 && v->s[2] == 0 && !(v->s[5] & 2)) {
+            int32_t x = sx_next(P, v, z, zl, p);      /* prime the interpolator */
+            if (x == SX_WAIT)
+                return;                               /* (its segment not indexed yet: a block later) */
+            h[1] = (int16_t)x;
+            v->s[5] |= 2;
+        }
+        for (i = 0; i < n; i++) {
+            int32_t s;
+            frac += stepq;
+            while (frac >= 65536u) {
+                int32_t x = 0;
+                if (v->ph[0] >= z->n) {               /* a one-shot's end: zeros in, then it stops at the last */
+                    if (++P->tail[vi] >= 3u) {
+                        v->s[6] = 1;
+                        frac &= 65535u;
+                        break;
+                    }
+                } else {
+                    x = sx_next(P, v, z, zl, p);
+                    if (x == SX_WAIT) {               /* (a segment not indexed yet: hold this sample) */
+                        frac = 65535u;
+                        break;
+                    }
+                }
+                frac -= 65536u;
+                h[0] = (int16_t)v->s[2];
+                v->s[2] = v->s[3];
+                v->s[3] = h[1];
+                h[1] = (int16_t)x;
+            }
+            s = v->s[6] ? 0 : smp_cr4(h[0], v->s[2], v->s[3], h[1], frac);
+#else
+    {
     if (v->ph[0] < z->n && v->ph[1] == 0 && v->s[3] == 0 && v->s[2] == 0 && !(v->s[5] & 2)) {
         int32_t x = sx_next(P, v, z, zl, p);          /* prime the interpolator */
         if (x == SX_WAIT)
@@ -562,6 +624,7 @@ static void sample_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, cons
             v->s[3] = x;
         }
         s = v->s[2] + (((v->s[3] - v->s[2]) * (int32_t)(frac >> 1)) >> 15);
+#endif
         if (sh)                                       /* BITS: 0 = clean, up to 12 bits removed */
             s = (s >> sh) << sh;
         if (drv)
@@ -570,6 +633,7 @@ static void sample_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, cons
         out[i] += voice_amp(v->s[7], m, i) << 1;
         if (v->s[6])
             break;
+    }
     }
     v->ph[1] = frac;
 }

@@ -974,6 +974,63 @@ function resample(x, sr, to) {
   while (p < x.length - 1) { const i = Math.floor(p), f = p - i; out.push(x[i] * (1 - f) + x[i + 1] * f); p += step; }
   return out;
 }
+/* sampleio.resample_hq (2026-11-19, SHARD; the same bytes): a Kaiser-windowed sinc (80 dB, flat to 0.9 of the lower
+ * Nyquist), then at 22050 Hz an 11-tap filter making up what the FM-1's 4-point interpolation (eng_sample.c smp_cr4)
+ * takes off: flat to 9.9 kHz on the device. Only + - * / and sqrt, in Python's order: no Math.sin. */
+const HQ = { PI: 3.141592653589793, BETA: 7.857, COMP: [1.182624, -0.141465, 0.070005, -0.028953, 0.013049, -0.005283] };
+function hqSin(v) {
+  const k = Math.floor(v / HQ.PI + 0.5), r = v - k * HQ.PI, r2 = r * r;
+  const y = r * (1 + r2 * (-1 / 6 + r2 * (1 / 120 + r2 * (-1 / 5040 + r2 * (1 / 362880 + r2 * (-1 / 39916800
+    + r2 * (1 / 6227020800)))))));
+  return Math.abs(k) % 2 === 1 ? -y : y;
+}
+function hqI0(v) {
+  let t = 1.0, acc = 1.0;
+  const h = v / 2;
+  for (let k = 1; k < 41; k++) { t = t * h / k; acc = acc + t * t; }
+  return acc;
+}
+function hqKernel(fr, rr, fcn) {
+  const i0b = hqI0(HQ.BETA), out = [];
+  for (let j = -rr; j <= rr; j++) {
+    const d = j - fr, u = d / rr;
+    if (u <= -1 || u >= 1) { out.push(0.0); continue; }
+    const w = hqI0(HQ.BETA * Math.sqrt(1 - u * u)) / i0b;
+    const h = d === 0 ? 2 * fcn : hqSin(2 * HQ.PI * fcn * d) / (HQ.PI * d);
+    out.push(h * w);
+  }
+  return out;
+}
+function resampleHq(x, sr, to) {
+  let n = x.length, y;
+  if (sr !== to && n) {
+    const lo = Math.min(sr, to), fcn = 0.475 * lo / sr, rr = Math.ceil(50 * sr / lo), kern = new Map();
+    y = [];
+    const nout = Math.floor(n * to / sr);
+    for (let o = 0; o < nout; o++) {
+      const q = o * sr, base = Math.floor(q / to), rem = q - base * to;
+      let k = kern.get(rem);
+      if (!k) { k = hqKernel(rem / to, rr, fcn); kern.set(rem, k); }
+      let acc = 0.0, ws = 0.0;
+      for (let j = -rr; j <= rr; j++) {
+        const i = base + j;
+        if (i >= 0 && i < n) { acc = acc + x[i] * k[j + rr]; ws = ws + k[j + rr]; }
+      }
+      y.push(ws > 0 ? acc / ws : 0.0);
+    }
+    x = y;
+  } else x = Array.from(x);
+  if (to !== SMP.RATE) return x;
+  n = x.length;
+  y = new Array(n);
+  for (let o = 0; o < n; o++) {
+    let acc = 0.0;
+    for (let j = -5; j <= 5; j++)
+      if (o + j >= 0 && o + j < n) acc = acc + x[o + j] * HQ.COMP[Math.abs(j)];
+    y[o] = acc;
+  }
+  return y;
+}
 function pyRound(v) { const f = Math.floor(v), r = v - f; return r > 0.5 ? f + 1 : r < 0.5 ? f : (f % 2 ? f + 1 : f); }
 
 /* mono float -> int16, peak normalised to 30000 */
@@ -3722,12 +3779,13 @@ async function decodeFile(f) {
   let x;
   try {
     const w = parseWav(buf);
-    x = resample(w.x, w.sr, SMP.RATE);
+    x = resampleHq(w.x, w.sr, SMP.RATE);
   } catch (e) {                                     /* not a plain WAV: let the browser decode it */
     const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     const ab = await new Ctx(1, 1, SMP.RATE).decodeAudioData(buf.slice(0));
     x = new Float64Array(ab.length);
     for (let c = 0; c < ab.numberOfChannels; c++) { const d = ab.getChannelData(c); for (let i = 0; i < d.length; i++) x[i] += d[i] / ab.numberOfChannels; }
+    x = resampleHq(x, SMP.RATE, SMP.RATE);         /* (at the rate already: the device's interpolation made up) */
   }
   if (!x.length) throw new Error("no audio");
   const raw = Float64Array.from(x);                 /* kept for trimming: s is raw[a, b) (takeSample) */
@@ -3833,7 +3891,7 @@ async function recStop() {
     x.set(c.subarray(0, n), o);
     o += n;
   }
-  const raw = Float64Array.from(resample(x, r.ctx.sampleRate, SMP.RATE));
+  const raw = Float64Array.from(resampleHq(x, r.ctx.sampleRate, SMP.RATE));
   const d = smpDraft[r.k];
   let pk = 0;
   for (const v of raw) pk = Math.max(pk, Math.abs(v));

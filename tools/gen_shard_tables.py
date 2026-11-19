@@ -78,6 +78,33 @@ table("uint16_t", "DECK_HANN", [round(32767 * 0.5 * (1 - math.cos(2 * math.pi * 
 # g = tan(pi f / fs) (Q15)
 table("int32_t", "DECK_TPT_G", [round(32768 * math.tan(math.pi * xo(i) / FS) / (1 + math.tan(math.pi * xo(i) / FS)))
                                for i in range(128)])
+# MASTER EQ (fx.c meq): -12 .. +12 dB -> A^2 - 1 (Q14; A = 10^(dB/40)). The shelves: TPT one-poles (Q15), a cut the
+# exact inverse of the boost (its corner moved by the gain: 150 Hz x, 5 kHz / 10^(|dB|/20)). The bell at MID F (the
+# crossovers' 40 Hz .. 12 kHz, DECK_XO_HZ): a TPT state-variable filter, Q 0.9, constant-Q in dB both ways (k = 1 /
+# (Q A)): tan(pi f / FS) (Q16) here, k (Q16) by the gain; a1 .. a3 each block (meq_block)
+table("int32_t", "MEQ_A_Q14", [round(16384 * (10 ** (db / 20) - 1)) for db in range(-12, 13)])
+G1 = lambda f: math.tan(math.pi * f / FS) / (1 + math.tan(math.pi * f / FS))
+B = lambda db: 10 ** (abs(db) / 20)
+table("int32_t", "MEQ_LO_G", [round(32768 * G1(150 * (B(db) if db < 0 else 1))) for db in range(-12, 13)])
+table("int32_t", "MEQ_HI_G", [round(32768 * G1(5000 / (B(db) if db < 0 else 1))) for db in range(-12, 13)])
+MEQ_Q = 0.9
+table("int32_t", "MEQ_G16", [round(65536 * math.tan(math.pi * xo(i) / FS)) for i in range(128)])
+table("int32_t", "MEQ_K16", [round(65536 / (MEQ_Q * 10 ** (db / 40))) for db in range(-12, 13)])
+# .. its picture (ui_graph.c graph_meq): each band's share of its gain in dB (Q8) on the analyzer's scale (8 a
+# octave from 50 Hz, 64 steps): the shelves by position, the bell by its distance from MID F
+def db(h): return 20 * math.log10(abs(h))
+def shelf(f, fc, lo):
+    s = 1j * f / fc
+    return (1 / (1 + s)) if lo else (s / (1 + s))
+fx = lambda u: 50 * 2 ** (u / 8)
+A4 = 10 ** (12 / 20)                               # (the share at +12 dB, as the device does it)
+table("int16_t", "MEQ_SH_LO", [round(256 * db(1 + (A4 - 1) * shelf(fx(u), 150, 1)) / 12) for u in range(64)])
+table("int16_t", "MEQ_SH_HI", [round(256 * db(1 + (A4 - 1) * shelf(fx(u), 5000, 0)) / 12) for u in range(64)])
+def bell(d):
+    r, a = 2 ** (d / 8), 10 ** (12 / 40)
+    bp = 1 / (1 + 1j * MEQ_Q * a * (r - 1 / r))      # (k = 1 / (Q A): the band-pass, 1 at MID F)
+    return round(256 * db(1 + (A4 - 1) * bp) / 12)
+table("int16_t", "MEQ_BELL", [bell(d) for d in range(64)])
 out.append("#endif")
 path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "firmware", "src", "shard_tables.h")
 open(path, "w").write("\n".join(out) + "\n")

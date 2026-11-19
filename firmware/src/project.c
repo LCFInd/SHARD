@@ -379,6 +379,16 @@ static void proj_deck(project_t *q)
 {
 #if FELUCCA_MANGLER
     uint32_t k, i, hit = 0;
+    {   /* the MASTER EQ (track 1's DRUM lanes until 2026-11-19: 0 .. 127, 127 by default): out of its range, flat */
+        proj_trk_t *d = &q->t[0];
+        for (i = P_MEQ_LO; i <= P_MEQ_F && d->p[i] >= TP[i].min && d->p[i] <= TP[i].max; i++)
+            ;
+        if (i <= P_MEQ_F) {
+            for (i = P_MEQ_LO; i <= P_MEQ_F; i++)
+                d->p[i] = TP[i].def;
+            hit = 1;
+        }
+    }
     for (k = 0; k < NTRK; k++) {
         proj_trk_t *d = &q->t[k];
         if (d->p[P_DK_CURVE] >= 0 && d->p[P_DK_CURVE] <= 2)

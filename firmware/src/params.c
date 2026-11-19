@@ -97,6 +97,7 @@ static const char *const N_SLOT[] = {"A", "B", "C", "D", 0};   /* G_SLOT 1..4 (F
 static const char *const DECK_DB_NAMES[] = {0};      /* markers for param_format: KILL / dB, LP / OFF / HP, Hz */
 static const char *const DECK_FILT_NAMES[] = {0};
 static const char *const DECK_HZ_NAMES[] = {0};
+static const char *const MEQ_DB_NAMES[] = {0};       /* (the MASTER EQ's bands: -12 .. +12 dB) */
 static const char *const N_DK_CURVE[] = {"SMOOTH", "DJ", "CUT"};
 #endif
 static const param_desc_t TP[P_COUNT] = {
@@ -193,7 +194,14 @@ static const param_desc_t TP[P_COUNT] = {
     [P_VOIC] = PE("VOIC", N_VOIC, 0),
 /* the DRUM engine's lane levels (eng_drum.c, #97): 100 % = the kit as designed (the sound before 1.1) */
 #define LANE(k, l) [P_LN0 + (k)] = PD(l, F_PCT, 0, 127, 127)
+#if FELUCCA_MANGLER                                   /* (no DRUM: the first four are the MASTER EQ, track 1's) */
+    [P_MEQ_LO] = {"LOW", F_INT, -12, 12, 0, MEQ_DB_NAMES, 0},
+    [P_MEQ_MID] = {"MID", F_INT, -12, 12, 0, MEQ_DB_NAMES, 0},
+    [P_MEQ_HI] = {"HIGH", F_INT, -12, 12, 0, MEQ_DB_NAMES, 0},
+    [P_MEQ_F] = {"MID F", F_INT, 0, 127, MEQ_F_DEF, DECK_HZ_NAMES, 0},
+#else
     LANE(0, "KICK"), LANE(1, "SNARE"), LANE(2, "CLAP"), LANE(3, "HATCL"),
+#endif
     LANE(4, "HATOP"), LANE(5, "TOM"), LANE(6, "RIM"), LANE(7, "BELL"),
 #undef LANE
     [P_LSYNC] = PE("SYNC", N_LSYNC, 0),
@@ -418,6 +426,13 @@ static void param_format(const param_desc_t *d, int32_t v, char *val, const char
         *unit = "dB";
         return;
     }
+    if (d->names == MEQ_DB_NAMES) {                   /* the MASTER EQ: +n / 0 / -n dB */
+        fmt_int(val + (v > 0), v);
+        if (v > 0)
+            val[0] = '+';
+        *unit = "dB";
+        return;
+    }
     if (d->names == DECK_FILT_NAMES) {                /* the DJ filter: LP n (left), OFF, HP n (right) */
         fmt_named = !v;
         if (!v) {
@@ -552,7 +567,7 @@ enum { SC_TRACK, SC_GLOBAL, SC_ENGINE, SC_STEP, SC_TRK, SC_DECK };   /* SC_TRK: 
 enum { GR_NONE, GR_ADSR, GR_LFO, GR_STEPS, GR_ARP, GR_SCALE, GR_FX, GR_ROLL, GR_BROWSE, GR_SLOTS, GR_USER, GR_TRK,
        GR_SLCR, GR_MOD, GR_PATS, GR_SONG, GR_TOOLS, GR_CHORD, GR_SLICES, GR_EVENTS,
        GR_FMOP, GR_FMOP2, GR_FMENV, GR_INS, GR_SHFX, GR_BOUNCE, GR_LOOP, GR_LIVE,
-       GR_DKISO, GR_DKMIX, GR_DKFB };   /* (DECK MODE: ISOLATE's analyzer, MIX, FEEDBACK: ui_graph.c) */   /* GR_SHFX: SHARD's SLICE FX (ui_slice.c); GR_BOUNCE: SAVE > BOUNCE (bounce.c) */   /* (GR_STEPS: SEQ TOOLS' knobs; GR_FMOP..: FM6's operator pages, ui_fm6op.c) */
+       GR_DKISO, GR_DKMIX, GR_DKFB, GR_MEQ };   /* (DECK MODE: ISOLATE's analyzer, MIX, FEEDBACK: ui_graph.c) */   /* GR_SHFX: SHARD's SLICE FX (ui_slice.c); GR_BOUNCE: SAVE > BOUNCE (bounce.c) */   /* (GR_STEPS: SEQ TOOLS' knobs; GR_FMOP..: FM6's operator pages, ui_fm6op.c) */
 
 typedef struct {
     const char *title;
@@ -629,16 +644,20 @@ static const page_t PAGES[] = {
     /* HOME's pages (1.2): HOME tapped on HOME the MIXER (up to 1.1.5 GLO's; LEVEL PAN REV MUTE), again CLOCK (up to 1.1.5
      * GLO > GLOBAL; its TUNE is MENU > AUDIO's now), again HOME (ui.c home_tap) */
 #if FELUCCA_MANGLER
-    {"MIX", FAM_TRK, SC_DECK, GR_DKMIX, {0, 1, 2, 3}},   /* DECK MODE (decks A and B only): XFADE A LVL B LVL CURVE */
+    {"MIX", FAM_TRK, SC_DECK, GR_DKMIX, {0, 1, 2, 3}},
+    {"EQ", FAM_TRK, SC_DECK, GR_MEQ, {4, 5, 6, 7}},      /* the MASTER EQ (fx.c meq): LOW MID HIGH MID F, on every track */   /* DECK MODE (decks A and B only): XFADE A LVL B LVL CURVE */
 #endif
     {"MIXER", FAM_TRK, SC_TRK, GR_TRK, {0, 1, 2, 3}},
     {"CLOCK", FAM_TRK, SC_GLOBAL, GR_NONE, {G_BPM, G_SWING, G_CLOCK, 0xFF}},
 };
 #define NPAGES (sizeof(PAGES) / sizeof(PAGES[0]))
 #if FELUCCA_MANGLER
-/* DECK MODE's MIX (decks A and B): KNOB 1 XFADE and KNOB 4 CURVE, track 1's; KNOB 2 A LVL, KNOB 3 B LVL, the decks'
- * LEVELs (ui_input.c deck_mix_edit, ui_draw.c) */
-static const struct { uint8_t trk, id; } DECK_MIX[4] = {{0, P_DK_XFADE}, {0, P_LEVEL}, {1, P_LEVEL}, {0, P_DK_CURVE}};
+/* the SC_DECK pages' knobs (a page's id[k]: an entry here; ui_input.c deck_mix_edit, ui_draw.c): DECK MODE's MIX (decks
+ * A and B): KNOB 1 XFADE and KNOB 4 CURVE, track 1's; KNOB 2 A LVL, KNOB 3 B LVL, the decks' LEVELs. EQ: the MASTER
+ * EQ, track 1's */
+static const struct { uint8_t trk, id; const char *label; } DECK_MIX[8] = {
+    {0, P_DK_XFADE, "XFADE"}, {0, P_LEVEL, "A LVL"}, {1, P_LEVEL, "B LVL"}, {0, P_DK_CURVE, "CURVE"},
+    {0, P_MEQ_LO, "LOW"}, {0, P_MEQ_MID, "MID"}, {0, P_MEQ_HI, "HIGH"}, {0, P_MEQ_F, "MID F"}};
 #endif
 static uint8_t mod_ui_slot;      /* the MOD page: the matrix slot (0..3) KNOB 2..4 edit */
 

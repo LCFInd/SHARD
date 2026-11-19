@@ -809,7 +809,7 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
 #if FELUCCA_MANGLER
        S_ARP_PEEK, S_ARP_HELD, S_ARP_KNOBS, S_ARP_PRE, S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY, S_LIVE_OFF, S_LIVE_PLAY, S_LIVE_LAYER,
        S_EDIT_GRAIN_PLAY, S_THEME_LOOP, S_THEME_SLICES, S_SAMPLE_TRIM,
-       S_DECK_ISO, S_DECK_ISO2, S_DECK_MIX, S_DECK_FB, S_DECK_FB_RING,
+       S_DECK_ISO, S_DECK_ISO2, S_DECK_MIX, S_DECK_FB, S_DECK_FB_RING, S_MEQ, S_MEQ_FLAT,
 #endif
        S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
@@ -848,7 +848,7 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
 #if FELUCCA_MANGLER
     "arp_layer", "arp_layer_held", "arp_layer_knobs", "arp_layer_pre", "bounce", "bounce_used", "bounce_busy", "live_off", "live_playing", "live_layer",
     "edit_grain_playing", "theme_custom_loop", "theme_custom_slices", "sample_trim_playing",
-    "deck_isolate", "deck_isolate2", "deck_mix", "deck_feedback", "deck_feedback_ring",
+    "deck_isolate", "deck_isolate2", "deck_mix", "deck_feedback", "deck_feedback_ring", "master_eq", "master_eq_flat",
 #endif
 };
 
@@ -1797,6 +1797,14 @@ static void setup(int s)
         ui.msg_t = 0;
         break;
     }
+    case S_MEQ:                                  /* the MASTER EQ (track 1's, shown on track 3): LOW +6, MID -4 at
+                                                  * 2.5 kHz, HIGH +8; flat */
+    case S_MEQ_FLAT:
+        song.sel = 2;
+        if (s == S_MEQ) { trk[0].p[P_MEQ_LO] = 6; trk[0].p[P_MEQ_MID] = -4; trk[0].p[P_MEQ_F] = 94; trk[0].p[P_MEQ_HI] = 8; }
+        go_title_page("EQ");
+        ui.msg_t = 0;
+        break;
     case S_THEME_LOOP:                           /* (SHARD) CUSTOM over SWISS: a dark blue, amber main, a coral red */
     case S_THEME_SLICES:
         ux_cust.c1 = RGB(16, 22, 40); ux_cust.c2 = RGB(255, 176, 48); ux_cust.c3 = RGB(232, 236, 245);

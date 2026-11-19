@@ -184,11 +184,73 @@ static inline int32_t spk_bass(int32_t m)
     return sb_hl + (sb_hl >> 1);      /* x1.5 (#180: x3 peaked at 1.5 .. 3.5 x a full-scale kick, the limiter */
 }                                     /* pulled the mix down up to 16 dB on each hit and the buzz took over) */
 
+#if FELUCCA_MANGLER
+/* MASTER EQ (2026-11-19; the EQ page, track 1's P_MEQ_*: core.h): a low shelf at 150 Hz, a bell at MID F (Q 0.9) and a
+ * high shelf at 5 kHz in a row, -12 .. +12 dB each (shard_tables.h MEQ_*: a cut the exact inverse of the boost), after
+ * the DC blocker, before LOWCUT / BASS+ and the limiter. A band at 0 dB costs nothing (its state cleared); each band's
+ * gain eased over a few blocks */
+typedef struct { int32_t lo, hi, b1, b2; } meq_ch_t;   /* the filters' states, x 64 */
+static meq_ch_t meq_ch[2];
+static int32_t meq_g[3], meq_lg, meq_hg;              /* gains now (A^2 - 1, Q14); the shelves' one-poles (Q15) */
+static int32_t meq_kg, meq_a1, meq_a2, meq_g16;       /* the bell: k (A^2 - 1) (Q14), a1 a2 (Q30), g (Q16) */
+static void meq_block(void)                           /* (mix_block, each block) */
+{
+    const int16_t *p = trk[0].p;
+    uint32_t b, f = (uint32_t)clamp(p[P_MEQ_F], 0, 127), m = (uint32_t)(clamp(p[P_MEQ_MID], -12, 12) + 12), a1;
+    int32_t g16 = MEQ_G16[f], den;
+    for (b = 0; b < 3u; b++) {
+        int32_t want = MEQ_A_Q14[clamp(p[P_MEQ_LO + b], -12, 12) + 12], dg = want - meq_g[b];
+        meq_g[b] = dg > -8 && dg < 8 ? want : meq_g[b] + dg / 4;
+    }
+    meq_lg = MEQ_LO_G[clamp(p[P_MEQ_LO], -12, 12) + 12];
+    meq_hg = MEQ_HI_G[clamp(p[P_MEQ_HI], -12, 12) + 12];
+    den = 65536 + (int32_t)(((int64_t)g16 * (g16 + MEQ_K16[m])) >> 16);   /* 1 + g (g + k), Q16 */
+    a1 = (1u << 31) / (uint32_t)den;                  /* Q15 (a 32-bit divide, once a block) */
+    meq_a1 = (int32_t)(a1 << 15);
+    meq_a2 = (int32_t)(((int64_t)g16 * a1) >> 1);
+    meq_g16 = g16;
+    meq_kg = (int32_t)(((int64_t)MEQ_K16[m] * meq_g[1]) >> 16);
+}
+static inline int32_t meq(int32_t x, meq_ch_t *c)
+{
+    int32_t s = clamp(x, -(1 << 20), 1 << 20) * 64, v, y;   /* (x 64: +12 dB thrice of 32x full scale fits) */
+    if (meq_g[0]) {                                   /* LOW: x + (A - 1) lowpass */
+        v = (int32_t)(((int64_t)(s - c->lo) * meq_lg) >> 15);
+        y = v + c->lo;
+        c->lo = y + v;
+        s += (int32_t)(((int64_t)y * meq_g[0]) >> 14);
+    } else
+        c->lo = 0;
+    if (meq_g[1]) {                                   /* MID: x + (A - 1) k bandpass (TPT state-variable) */
+        int32_t v3 = s - c->b2, v1, v2;
+        v1 = (int32_t)(((int64_t)meq_a1 * c->b1 + (int64_t)meq_a2 * v3) >> 30);
+        v2 = c->b2 + (int32_t)(((int64_t)meq_g16 * v1) >> 16);   /* (= b2 + a2 b1 + a3 v3) */
+        c->b1 = 2 * v1 - c->b1;
+        c->b2 = 2 * v2 - c->b2;
+        s += (int32_t)(((int64_t)v1 * meq_kg) >> 14);
+    } else
+        c->b1 = c->b2 = 0;
+    if (meq_g[2]) {                                   /* HIGH: x + (A - 1) (x - lowpass) */
+        v = (int32_t)(((int64_t)(s - c->hi) * meq_hg) >> 15);
+        y = v + c->hi;
+        c->hi = y + v;
+        s += (int32_t)(((int64_t)(s - y) * meq_g[2]) >> 14);
+    } else
+        c->hi = 0;
+    return s >> 6;
+}
+#endif
 static inline void master_out(int32_t *l, int32_t *r)
 {
     int32_t al, ar, a;
     *l = dc_block(*l, &dc_l, &dce_l);
     *r = dc_block(*r, &dc_r, &dce_r);
+#if FELUCCA_MANGLER
+    if (meq_g[0] | meq_g[1] | meq_g[2]) {
+        *l = meq(*l, &meq_ch[0]);
+        *r = meq(*r, &meq_ch[1]);
+    }
+#endif
     if (fx_lowcut) {                  /* two one-pole high-passes, error feedback as dc_block (the */
         uint32_t sh = fx_lowcut == 2u ? 5u : 6u;    /* rounded step stopped at |x - lc| < 32: an offset) */
         int32_t b = fx_lowcut == 2u ? spk_bass((*l + *r) >> 1) : 0;
@@ -1094,6 +1156,9 @@ static void mix_block(int32_t *out, uint32_t n)
     int32_t mg = fx_usb_fixed ? MASTER_FULL : (int32_t)song.master_q12;   /* (USB LEVEL FIXED: MASTER after) */
     for (i = 0; i < n; i++)
         send_c[i] = send_d[i] = send_r[i] = mix_l[i] = mix_r[i] = 0;
+#if FELUCCA_MANGLER
+    meq_block();
+#endif
     events_block(n);
     perf = perf_begin(n);                               /* the FX hold layer at work (perform.c) */
 #if FELUCCA_CPU2

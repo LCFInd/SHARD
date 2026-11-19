@@ -1314,7 +1314,8 @@ static int param_kept(uint32_t i)
 {
     return i == P_LEVEL || i == P_PAN || i == P_MUTE || (i >= P_AMODE && i <= P_SGATE) ||
            (i >= P_SLCR && i <= P_SLDEPTH) || i == P_CHRD || i == P_VOIC || i == P_SQNT ||
-           (FELUCCA_MANGLER && i >= P_FM1_ATK && i <= P_FM4_LEVEL);   /* (DECK MODE's values: the deck's) */
+           (FELUCCA_MANGLER && i >= P_FM1_ATK && i <= P_FM4_LEVEL) ||   /* (DECK MODE's values: the deck's) */
+           (FELUCCA_MANGLER && i >= P_MEQ_LO && i <= P_MEQ_F);         /* (the MASTER EQ: the mix's) */
 }
 
 /* a retired preset kept as an alias, so stored preset numbers stay valid: SAMPLE 1, once TRANH, is PIANO

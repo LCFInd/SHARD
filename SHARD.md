@@ -211,6 +211,32 @@ ISOLATE and XOVER draw each band's LEVEL as a red line across its part of the an
 
 The EDIT menu of a SAMPLE, GRAIN or SHARD track no longer shows FM's OP1..OP4 ENV and OP LEVEL pages: DECK MODE's values share those parameter slots, and the pages were let through on every track. Only the deck pages (ISOLATE, XOVER, LOW, MID, HIGH, MIX) show, on tracks 1 and 2. `tests/ui_render.c` fails on any OP page in the mangler.
 
+## Brighter samples: 4-point interpolation and the upload filter (2026-11-19)
+
+A sample is stored at 22,050 Hz, so it holds nothing above 11 kHz. Below that, two things used to take the top off: the
+editor's conversion (a 2-sample average: -2.4 dB at 10 kHz, and 12 kHz folded back to 10 kHz nearly untouched) and the
+device's linear interpolation (-6.3 dB at 10 kHz): -8.7 dB at 10 kHz, -5.4 dB at 8 kHz.
+
+- SAMPLE and SHARD play with 4-point (Catmull-Rom) interpolation (`eng_sample.c smp_cr4`, `SMP_CR4`, the mangler only):
+  10 kHz -4.4 dB. It costs about 5 % more on a busy project (peak 1,743 -> 1,831 host instructions a sample).
+  GRAIN stays linear (its many grains would multiply that); with the upload filter its 10 kHz is about -1.9 dB.
+- The editor (`resampleHq`) and `tools/fm1_sample_upload.py` (`sampleio.resample_hq`, the same bytes) convert with a
+  Kaiser-windowed sinc (80 dB: 12 kHz now lands 96 dB down), then an 11-tap filter that makes up what the 4-point
+  interpolation takes off. On the device: flat within -0.2 / +0.1 dB to 9.9 kHz. The droop of an interpolator is fixed
+  in the sample's own frequencies, so this holds at any pitch.
+- Samples already in the slots keep the old conversion: upload them again to get the new top end. BOUNCE renders on
+  the device without the make-up filter.
+
+## MASTER EQ (2026-11-19)
+
+The EQ page (after MIX; on every track) is a 3-band EQ at the end of the mix: LOW (a shelf at 150 Hz), MID (a bell,
+Q 0.9, at MID F: 40 Hz .. 12 kHz) and HIGH (a shelf at 5 kHz), -12 .. +12 dB each, in a row after the DC blocker and
+before LOWCUT / BASS+ and the limiter (`fx.c meq`). A cut is the exact inverse of the same boost. The page draws the
+curve. At 0 dB the EQ is out of the path; on, it costs about 8 % (peak +148 host instructions a sample). It is the
+project's (track 1's, like XFADE): stored in track 1's DRUM lane levels, which no engine of the mangler reads. A project
+of before holds the lanes' 127 there and loads flat (`project.c proj_deck`). Sound loads keep it. BOUNCE FROM MIX
+takes it.
+
 ## Overload (2026-11-17)
 
 When the audio runs late (two halves in a row over 85 %), a voice is dropped: first the quietest released voice older than about 46 ms, then a held extra note, and a just-started released voice only when nothing else is left. The header's track icon turns red for 0.7 s each time.

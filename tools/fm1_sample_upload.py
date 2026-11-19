@@ -96,7 +96,7 @@ def build(name, specs):
         root = int(parts[1]) if len(parts) > 1 and parts[1] else sio.note_from_name(path.stem)
         lo, hi = (int(v) for v in parts[2].split("-")) if len(parts) > 2 else (None, None)
         sr, x = sio.read_any_wav(path)
-        x = sio.resample(x, sr, sio.SLOT_RATE)
+        x = sio.resample_hq(x, sr, sio.SLOT_RATE)
         if not x:
             raise ValueError(f"{path}: no audio")
         zones.append((sio.to_int16(x), root, lo, hi))

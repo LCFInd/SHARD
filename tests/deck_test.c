@@ -280,6 +280,121 @@ int main(void)
         check(".. another, empty, its slot's name", !strcmp(b, "USR2"), 0, 0, 0);
     }
 
+    /* 7: the MASTER EQ (fx.c meq): each band's gain where it acts, flat at 0 dB (bit-exact, no state), old projects */
+    {
+        static const struct { int lo, mid, hi, f; double hz, want, tol; const char *what; } C[] = {
+            {12, 0, 0, MEQ_F_DEF, 40, 12, 1.0, "LOW +12 dB: 40 Hz +12"},
+            {12, 0, 0, MEQ_F_DEF, 4000, 0, 0.5, "LOW +12 dB: 4 kHz untouched"},
+            {-12, 0, 0, MEQ_F_DEF, 40, -12, 1.0, "LOW -12 dB: 40 Hz -12"},
+            {-12, 0, 0, MEQ_F_DEF, 4000, 0, 0.5, "LOW -12 dB: 4 kHz untouched"},
+            {0, 12, 0, 20, 98, 12, 0.3, "MID +12 dB at MID F (98 Hz): +12"},
+            {0, 6, 0, MEQ_F_DEF, 1040, 6, 0.3, "MID +6 dB at MID F (1.04 kHz): +6"},
+            {0, -9, 0, 100, 3569, -9, 0.3, "MID -9 dB at MID F (3.6 kHz): -9"},
+            {0, 6, 0, MEQ_F_DEF, 100, 0, 0.6, "MID +6 dB: 100 Hz near untouched"},
+            {0, 0, 6, MEQ_F_DEF, 10000, 6, 1.0, "HIGH +6 dB: 10 kHz about +6"},
+            {0, 0, 6, MEQ_F_DEF, 200, 0, 0.3, "HIGH +6 dB: 200 Hz untouched"},
+            {0, 0, -12, MEQ_F_DEF, 12000, -12, 1.5, "HIGH -12 dB: 12 kHz about -12"},
+            {0, 0, -12, MEQ_F_DEF, 200, 0, 0.3, "HIGH -12 dB: 200 Hz untouched"},
+        };
+        uint32_t c, i, b;
+        for (c = 0; c < sizeof C / sizeof C[0]; c++) {
+            double e = 0, r = 0;
+            trk[0].p[P_MEQ_LO] = (int16_t)C[c].lo;
+            trk[0].p[P_MEQ_MID] = (int16_t)C[c].mid;
+            trk[0].p[P_MEQ_HI] = (int16_t)C[c].hi;
+            trk[0].p[P_MEQ_F] = (int16_t)C[c].f;
+            memset(meq_ch, 0, sizeof meq_ch);
+            for (b = 0; b < 40u; b++)
+                meq_block();
+            for (i = 0; i < 44100u; i++) {
+                int32_t x = (int32_t)lrint(8000 * sin(2 * M_PI * C[c].hz * i / 44100.0)), y = meq(x, &meq_ch[0]);
+                if (i >= 22050u) {
+                    e += (double)y * y;
+                    r += (double)x * x;
+                }
+            }
+            e = 10 * log10(e / r);
+            check(C[c].what, fabs(e - C[c].want) <= C[c].tol, "%.2f dB (want %.0f)", e, C[c].want);
+        }
+        {   /* the worst case for 32 bits: 12 kHz at the input's clamp (32x full scale), the bell there and both shelves
+             * at +12 dB (the bell and HIGH both lift it: about +24 dB): the gain as in the small, nothing wrapped */
+            double e, r, g0 = 0;
+            trk[0].p[P_MEQ_LO] = trk[0].p[P_MEQ_MID] = trk[0].p[P_MEQ_HI] = 12;
+            trk[0].p[P_MEQ_F] = 127;
+            for (k = 0; k < 2u; k++) {
+                int32_t amp = k ? 1 << 20 : 1000;
+                double gk;
+                e = r = 0;
+                memset(meq_ch, 0, sizeof meq_ch);
+                for (b = 0; b < 40u; b++)
+                    meq_block();
+                for (i = 0; i < 44100u; i++) {
+                    int32_t x = (int32_t)lrint(amp * sin(2 * M_PI * 12000.0 * i / 44100.0)), y = meq(x, &meq_ch[0]);
+                    if (i >= 22050u) {
+                        e += (double)y * y;
+                        r += (double)x * x;
+                    }
+                }
+                gk = 10 * log10(e / r);
+                if (!k)
+                    g0 = gk;
+                else
+                    check("all at +12 dB, 12 kHz at 32x full scale: the gain of a quiet one (no wrap-around)",
+                          fabs(gk - g0) < 0.2 && gk > 22, "%.2f dB, %.2f dB", gk, g0);
+            }
+        }
+        {   /* all three at 0: master_out does not call it, and the eased gains reach exact 0 */
+            int ok = 1;
+            trk[0].p[P_MEQ_LO] = trk[0].p[P_MEQ_MID] = trk[0].p[P_MEQ_HI] = 0;
+            for (b = 0; b < 40u; b++)
+                meq_block();
+            ok = !meq_g[0] && !meq_g[1] && !meq_g[2];
+            check("all at 0 dB: the EQ is out of the path", ok, 0, 0, 0);
+        }
+        {
+            static project_t q;
+            int ok;
+            memset(&q, 0, sizeof q);
+            q.magic = PROJ_MAGIC;
+            q.size = sizeof q;
+            for (i = 0; i < 8u; i++)
+                q.t[0].p[P_LN0 + i] = 127;                 /* the DRUM lanes' 100 % */
+            q.t[0].p[P_DK_CURVE] = 0;
+            q.sum = proj_sum(&q);
+            proj_deck(&q);
+            ok = q.t[0].p[P_MEQ_LO] == 0 && q.t[0].p[P_MEQ_MID] == 0 && q.t[0].p[P_MEQ_HI] == 0 &&
+                 q.t[0].p[P_MEQ_F] == MEQ_F_DEF && q.sum == proj_sum(&q);
+            q.t[0].p[P_MEQ_HI] = 5;
+            q.sum = proj_sum(&q);
+            proj_deck(&q);
+            check("a project of before (the DRUM lanes' 127) loads flat; a set EQ stays", ok && q.t[0].p[P_MEQ_HI] == 5, 0, 0, 0);
+        }
+        trk[0].p[P_MEQ_F] = MEQ_F_DEF;
+    }
+
+    /* 8: SAMPLE's and SHARD's 4-point interpolation (eng_sample.c smp_cr4): a 22050 Hz sample played at 44.1 kHz loses
+     * what Catmull-Rom does (5 kHz -0.4 dB, 10 kHz -4.4: the upload filter makes it up), the linear lost 1.5 and 6.3 */
+    {
+        static const double HZ[3] = {1000, 5000, 10000}, WANT[3] = {0, -0.4, -4.4};
+        static int16_t x[30000];
+        uint32_t f, i;
+        for (f = 0; f < 3u; f++) {
+            uint64_t ph = 65536u * 4u;
+            double sc = 0, ss = 0;
+            for (i = 0; i < 30000u; i++)
+                x[i] = (int16_t)lrint(30000 * sin(2 * M_PI * HZ[f] * i / 22050.0));
+            while ((ph >> 16) < 29990u) {
+                uint32_t n = (uint32_t)(ph >> 16), fr = (uint32_t)(ph & 65535u);
+                double ref = 30000 * sin(2 * M_PI * HZ[f] * ((double)ph / 65536.0) / 22050.0);
+                sc += smp_cr4(x[n - 1], x[n], x[n + 1], x[n + 2], fr) * ref;
+                ss += ref * ref;
+                ph += 32768u;                           /* (22050 / 44100) */
+            }
+            check(f == 0 ? "4-point interpolation: 1 kHz flat" : f == 1 ? ".. 5 kHz -0.4 dB" : ".. 10 kHz -4.4 dB",
+                  fabs(20 * log10(sc / ss) - WANT[f]) < 0.15, "%.2f dB", 20 * log10(sc / ss), 0);
+        }
+    }
+
     printf(fails ? "deck test FAILED (%d)\n" : "deck test passed\n", fails);
     return fails ? 1 : 0;
 }

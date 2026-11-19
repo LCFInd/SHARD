@@ -1132,16 +1132,16 @@ static void draw_columns(void)
         return;
     }
 #if FELUCCA_MANGLER
-    if (cur_page()->scope == SC_DECK) {                /* DECK MODE's MIX: XFADE A LVL B LVL CURVE (ui_input.c) */
-        static const char *const LB[4] = {"XFADE", "A LVL", "B LVL", "CURVE"};
+    if (cur_page()->scope == SC_DECK) {                /* DECK MODE's MIX, the MASTER EQ (params.c DECK_MIX) */
         for (c = 0; c < 4u; c++) {
-            track_t *t = &trk[DECK_MIX[c].trk];
-            const param_desc_t *d = &TP[DECK_MIX[c].id];
-            int32_t v = t->p[DECK_MIX[c].id];
+            uint32_t e = cur_page()->id[c] & 7u;
+            track_t *t = &trk[DECK_MIX[e].trk];
+            const param_desc_t *d = &TP[DECK_MIX[e].id];
+            int32_t v = t->p[DECK_MIX[e].id];
             param_format(d, v, val, &unit);
-            card_mot_of(&t->p[DECK_MIX[c].id]);
+            card_mot_of(&t->p[DECK_MIX[e].id]);
             card_span_of(d);
-            draw_column(c, LB[c], val, unit, VAL(c), RATIO(d, enum_rank(d, v)), param_icon(d, v));
+            draw_column(c, DECK_MIX[e].label, val, unit, VAL(c), RATIO(d, enum_rank(d, v)), param_icon(d, v));
         }
         return;
     }
