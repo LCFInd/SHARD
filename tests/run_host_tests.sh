@@ -556,6 +556,17 @@ if $MCC -UFELUCCA_BUILTIN -O2 -w -Ibuild/gen -o "$OUT/deck_test" tests/deck_test
 else
     echo "the mangler: deck_test does not build"; fail=1
 fi
+# 2ND CORE SPLIT (fx.c mix_pipe): the voices here, each part's rest on a thread as core 1, bit for bit (TSAN=1: under
+# ThreadSanitizer too)
+if $MCC -O2 -w -Ibuild/gen -Itests -pthread -o "$OUT/split_test" tests/split_test.c -lm; then
+    run "the mangler's 2ND CORE SPLIT: decks, MENV, STRUM, INSERT, SLICER on two cores, and core 1 failing: bit for bit" "$OUT/split_test"
+else
+    echo "the mangler: split_test does not build"; fail=1
+fi
+if [ -n "$TSAN" ]; then
+    ${CC%% *} -O1 -g -w -Ifirmware/hal -Ifirmware/bsp/chip -Ifirmware/bsp/boards/fm1 -Ifirmware/src -DFELUCCA_BUILTIN=1 -Ibuild/gen -Itests -fsanitize=thread -pthread -o "$OUT/split_tsan" tests/split_test.c -lm &&
+        run "the mangler's 2ND CORE SPLIT under ThreadSanitizer" env TSAN_OPTIONS=halt_on_error=1 "$OUT/split_tsan"
+fi
 if $MCC -O2 -w -Ibuild/gen -o "$OUT/shard_test_m" tests/shard_test.c -lm; then
     run "the mangler: SHARD, SAMPLE and GRAIN only (shard_test)" "$OUT/shard_test_m" build/slice_demo/loop build/shard_demo_m
 else

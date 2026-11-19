@@ -983,13 +983,12 @@ static void shard_send(track_t *t, int32_t *sd, uint32_t n)
 
 /* one synth part into the dry mix and the sends of sm (mx[0]; mx[1] on the second core); a part with no voice sounding costs
  * the LFO tick and a cleared buffer only (after the DIST tail has run out) */
-static void mix_part(track_t *t, uint32_t n SM_DECL)
+/* a part's block in two halves (2026-11-19, the mangler's 2ND CORE SPLIT, mix_block): mix_part_a its voices (the
+ * matrix's values into t->p, the engine reading its samples), mix_part_b the rest (DECK MODE's isolators, DIST, INSERT,
+ * the SLICER, the level, pan and sends, the matrix's values back). One core: one after the other (mix_part) */
+static uint32_t mix_part_a(track_t *t, int32_t *b, uint32_t n)
 {
-    int32_t *b = SM(b);
-    uint32_t i;
-#if FELUCCA_CPU2
     uint32_t nr;
-#endif
     mod_begin(t);                                       /* the matrix's per-block values into t->p (mod.c) */
 #if FELUCCA_MANGLER
     if (deck_of(t))
@@ -997,13 +996,21 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
 #endif
     T_SPREAD(t) = t->p[P_SPRD] > 0 && (trk_vmode(t) == V_POLY || trk_vmode(t) == V_UNISON ||
                                        trk_vmode(t) == V_STRUM);   /* (SPREAD, mix_spread; STRUM: the fifth one side) */
-#if FELUCCA_CPU2
     nr = track_render(t, b, n);
+#if FELUCCA_CPU2
     part_cost[(uint32_t)(t - trk) % NTRK] = (uint16_t)(nr * ENG_VCOST[t->engine % NENGINES] + (nr || t->tail ? 60u : 0u));
-    if (nr)
-#else
-    if (track_render(t, b, n))
 #endif
+    return nr;
+}
+
+static void mix_part_b(track_t *t, int32_t *b, uint32_t n, uint32_t nr SM_DECL)
+{
+    uint32_t i;
+#if FELUCCA_MANGLER
+    if (deck_of(t))                                     /* DECK MODE: tracks 1 and 2 through their isolators (deck.c) */
+        nr += deck_post(t, b, n, nr);
+#endif
+    if (nr)
         t->tail = t->p[P_ITYPE] ? 64 : 16;              /* blocks of DIST / INSERT state to run out after the last
                                                          * voice (the INSERT's: 46 ms, a flanger's feedback) */
     else if ((!t->tail || !(t->p[P_DIST] | t->p[P_ITYPE]) || !--t->tail) && !slicer_busy(t)) {
@@ -1055,6 +1062,12 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
         perf_throw(t, b, SM(d), SM(v), n);              /* perform.c: REV / ECHO THROW (1.5.1), the sends towards full */
     if (MOD(t).on)
         mod_end(t);                                     /* the stored values back */
+}
+
+static void mix_part(track_t *t, uint32_t n SM_DECL)
+{
+    int32_t *b = SM(b);
+    mix_part_b(t, b, n, mix_part_a(t, b, n) SM_ARG(sm));
 }
 
 /* the HOME oscilloscope (ui_graph.c graph_scope): every other sample of the left channel. MENU > DISPLAY > SCOPE (1.2,
@@ -1146,6 +1159,42 @@ static uint32_t mix_split(void)
 }
 #endif
 
+#if FELUCCA_CPU2 && FELUCCA_MANGLER
+/* 2ND CORE in the mangler (2026-11-19): SPLIT. Splitting whole parts between the cores (mix_split) made SHARD slower
+ * on the device (the CPU from 70 % to 90 %): both cores then read samples from the flash through the one cache they
+ * share. SPLIT keeps every part's voices on this core (mix_part_a: the samples) and hands each part's rest to the
+ * second (mix_part_b: DECK MODE's isolators, DIST, INSERT, the SLICER, the sends: work on the block in RAM), one part
+ * behind: part k's rest there while this core renders part k + 1's voices. In the same block, no latency. The block
+ * of voices each half reads: pipe_buf[k & 1] (part k - 2's rest is done before part k's voices are rendered). The
+ * second core adds into mx[1]; one that stops answering: its part's rest here (the job dropped, never run twice) */
+static int32_t pipe_buf[2][CTL] __attribute__((section(".pool")));
+static void c1_post(uint32_t arg)                       /* arg: the part | n << 8 | the voices << 16 */
+{
+    uint32_t k = arg & 0xFFu;
+    mix_part_b(&trk[k % NPART], pipe_buf[k & 1u], arg >> 8 & 0xFFu, arg >> 16, &mx[1]);
+}
+static void mix_pipe(uint32_t n)
+{
+    uint32_t k, i, held = NPART, nr[NPART];
+    mixsum_t *sm = &mx[1];
+    for (i = 0; i < n; i++)
+        sm->l[i] = sm->r[i] = sm->c[i] = sm->d[i] = sm->v[i] = 0;
+    for (k = 0; k < NPART; k++) {
+        nr[k] = mix_part_a(&trk[k], pipe_buf[k & 1u], n);
+        if (held < NPART && C1_WAIT())                  /* (it stopped answering: that part's rest here) */
+            mix_part_b(&trk[held], pipe_buf[held & 1u], n, nr[held], sm);
+        held = NPART;
+        if (C1_RUN(c1_post, k | n << 8 | nr[k] << 16))
+            held = k;
+        else
+            mix_part_b(&trk[k], pipe_buf[k & 1u], n, nr[k], sm);
+    }
+    if (held < NPART && C1_WAIT())
+        mix_part_b(&trk[held], pipe_buf[held & 1u], n, nr[held], sm);
+    c1_blocks++;
+}
+#endif
+
 #if FELUCCA_MANGLER
 static volatile uint8_t bnc_on;                          /* bounce.c renders (mix_block from the main loop): the audio
                                                           * interrupt plays silence and mixes nothing (audio.c) */
@@ -1163,6 +1212,15 @@ static void mix_block(int32_t *out, uint32_t n)
     events_block(n);
     perf = perf_begin(n);                               /* the FX hold layer at work (perform.c) */
 #if FELUCCA_CPU2
+#if FELUCCA_MANGLER
+    uint32_t m = 0;
+    if (C1_ON()) {                                      /* SPLIT: the voices here, the rest there (mix_pipe) */
+        mix_pipe(n);
+        m = 1;
+    } else
+        for (i = 0; i < NPART; i++)
+            mix_part(&trk[i], n, &mx[0]);
+#else
     uint32_t m = C1_ON() ? C1_SPLIT() & ((1u << NPART) - 1u) : 0u;
     if (m && !C1_RUN(c1_parts, m | n << 8))
         m = 0;
@@ -1170,10 +1228,13 @@ static void mix_block(int32_t *out, uint32_t n)
     for (i = 0; i < NPART; i++)
         if (!(m >> i & 1u))
             mix_part(&trk[i], n, &mx[0]);
+#endif
     if (m) {
         const mixsum_t *sm = &mx[1];
+#if !FELUCCA_MANGLER                                    /* (SPLIT: mix_pipe has waited for its every job) */
         if (C1_WAIT())                                  /* it stopped answering (held from now on): its parts here */
             c1_parts(m | n << 8);
+#endif
         for (i = 0; i < n; i++) {
             mix_l[i] += sm->l[i];
             mix_r[i] += sm->r[i];
