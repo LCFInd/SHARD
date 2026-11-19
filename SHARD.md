@@ -207,6 +207,8 @@ Tracks 1 and 2 are decks A and B. Each deck runs through its own isolator after 
 
 The mangler build has no built-in samples (core.h `FELUCCA_BUILTIN`, 1 in the full build). SHARD's SRC, SAMPLE's SET and GRAIN's SRC offer USR1..USR4 only; the knobs skip the old values. A stored BREAK, PIANO, FLUTE or SAX (projects, presets, the editor) plays USR1. A user slot with a sample is named by the name it was uploaded with (upper case, 8 characters) on the knob, on the track's name in the header (unless the track plays a user preset, whose name wins) and in the editor's menus; an empty slot keeps USR1..USR4. The factory presets start on USR1. The built-in samples' 123 KB of flash are left free.
 
+ISOLATE and XOVER draw each band's LEVEL as a red line across its part of the analyzer: KILL on the floor, then -40 dB up to +6 dB at the top (0 dB at 87 % of the height).
+
 The EDIT menu of a SAMPLE, GRAIN or SHARD track no longer shows FM's OP1..OP4 ENV and OP LEVEL pages: DECK MODE's values share those parameter slots, and the pages were let through on every track. Only the deck pages (ISOLATE, XOVER, LOW, MID, HIGH, MIX) show, on tracks 1 and 2. `tests/ui_render.c` fails on any OP page in the mangler.
 
 ## Overload (2026-11-17)

@@ -2587,8 +2587,9 @@ static int32_t dk_band(const int16_t *s, uint32_t w0, uint32_t k, int32_t hmax)
     return clamp((v - 64) * hmax / 96, 0, hmax);     /* (72 dB under it, the floor) */
 }
 static uint8_t dk_peak[20];                          /* the input's peaks, falling */
-/* ISOLATE, ISOLATE 2: the deck's 20 bands, its input as RAISE ghost bars with their peaks, its output on them (the
- * accent; a band at KILL, red), the crossovers as red lines (solid on ISOLATE 2, where they are set), the band names */
+/* ISOLATE, XOVER: the deck's 20 bands, its input as RAISE ghost bars with their peaks, its output on them (the
+ * accent; a band at KILL, red), the crossovers as red lines (solid on XOVER, where they are set), each band's LEVEL
+ * as a red line across it, the band names */
 static void graph_deck_iso(const track_t *t, uint16_t c)
 {
     static const char *const BN[3] = {"LO", "MID", "HI"};
@@ -2622,6 +2623,14 @@ static void graph_deck_iso(const track_t *t, uint16_t c)
         else
             for (y = 8; y < yb; y += 6)
                 cv_rect(x, y, 1, 3, ux.env);
+    }
+    for (k = 0; k < 3u; k++) {                       /* each band's LEVEL: a red line across its part, KILL at the
+                                                      * floor, -40 dB .. +6 dB up to the top (0 dB at 87 %) */
+        int32_t a = k == 0u ? x0 : k == 1u ? xl : xh, b = k == 0u ? xl : k == 1u ? xh : x0 + w;
+        int32_t v = clamp(t->p[P_DK_LO + k], 0, 127), y;
+        y = v <= 0 ? yb - 2 : yb - 2 - (DECK_GAIN_DB10[v] + 400) * (hmax - 2) / 460;
+        if (b - a > 6)
+            cv_rect(a + 3, y, b - a - 6, 2, ux.env);
     }
     for (k = 0; k < 3u; k++) {                       /* the bands' names over them (KILL red) */
         int32_t a = k == 0u ? x0 : k == 1u ? xl : xh, b = k == 0u ? xl : k == 1u ? xh : x0 + w;
