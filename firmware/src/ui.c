@@ -442,9 +442,9 @@ static int page_visible(uint32_t i)
     if (PAGES[i].graph >= GR_FMOP && PAGES[i].graph <= GR_FMENV)
         return TSEL->eng_req % NENGINES == ENGI_FM6;
 #if FELUCCA_MANGLER
-    if ((PAGES[i].scope == SC_TRACK && PAGES[i].id[0] >= P_FM1_ATK && PAGES[i].id[0] <= P_FM4_LEVEL) ||
-        PAGES[i].scope == SC_DECK)
-        return song.sel < NDECK;                    /* DECK MODE's pages (ISOLATE, FEEDBACK ..): decks A and B */
+    if (PAGES[i].graph == GR_DKISO || PAGES[i].graph == GR_DKFB || PAGES[i].graph == GR_DKMIX)
+        return song.sel < NDECK;                    /* DECK MODE's pages (ISOLATE, XOVER, LOW ..): decks A and B
+                                                     * (FM's OP1 ENV .. OP LEVEL, on the same ids, stay hidden) */
     if (PAGES[i].graph == GR_SCALE || PAGES[i].graph == GR_CHORD)   /* (SCL is LIVE: no scales, no chords) */
         return 0;
     if (PAGES[i].fam == FAM_ARP || PAGES[i].graph == GR_MOD || PAGES[i].graph == GR_INS)   /* the mangler's trim: no ARP,

@@ -19,11 +19,12 @@ has ratchets, chance, swing, conditions and parameter locks. SHARD adds the foll
 | **DELAY** | A per-slice send into Felucca's tempo delay, beside the track's own send. It's taken straight from the slice, before the track's DIST and INSERT |
 | **PLAY mode** | ReCycle style. A note plays the whole loop from its slice, and each slice starts at its place in the loop, scaled to the tempo. Changing the tempo moves the slices, not the pitch. BARS: AUTO (from the sample's tempo), 1, 2, 4 or 8 |
 | **Tempo** | SHARD finds a rhythmic sample's tempo when the slot is loaded (60–200 BPM; a loop cut on the beat gets its exact tempo). You can set it instead on SLICE FX's BUS (BPM, 40–250; AUTO shows the one found). It's kept with the kit |
-| **Slices** | DIV: 2, 4, 6, 8, 12, 16 or 32 equal slices, AUTO (one per hit) or MAN (set by hand). SENS on SLICE FX's BUS sets how readily AUTO finds hits in a user sample (0 fewer, 127 more; 64 is SLICE's). The BREAK and PIANO slices are fixed |
+| **Slices** | DIV: 2, 4, 6, 8, 12, 16 or 32 equal slices, AUTO (one per hit) or MAN (set by hand). SENS on SLICE FX's BUS sets how readily AUTO finds hits in a user sample (0 fewer, 127 more; 64 is SLICE's) |
 | **Deck mode** | Tracks 1 and 2 are decks A and B, mixed by a crossfader. Each deck has its own 3-band isolator (LO, MID, HI from KILL to +6 dB, at XLO and XHI), a shaper on each band (TYPE, DRIVE, Ohmnicide style), feedback per band and a DJ filter (FILT). Tracks 3 and 4 play straight into the mix. See DECK MODE below |
-| **USR4** | A fourth sample slot (80 KB, up to 7.4 s), in the flash that FM6's voice bank used, plus the spare area Felucca keeps for a firmware's own data (0xE7000..0xFAFFF). SHARD's SRC lists it after PIANO; SAMPLE's SET and GRAIN's SRC after USR3 |
+| **USR4** | A fourth sample slot (80 KB, up to 7.4 s), in the flash that FM6's voice bank used, plus the spare area Felucca keeps for a firmware's own data (0xE7000..0xFAFFF). SHARD's SRC, SAMPLE's SET and GRAIN's SRC list it after USR3 |
 | **BOUNCE** | SAVE > BOUNCE renders the sequence into a slot: BARS (1, 2, 4, 8), FROM (MIX, or one track), TO (USR1..4), OCT+. The audio goes quiet while it renders, faster than real time, with a progress bar. It plays the bars once unheard, then records them a second time, so delay and reverb tails wrap round and the slot loops seamlessly. Mono, 22.05 kHz, up to 7.0 s (longer bounces are cut). SHARD slices it, and its kit gets the song's tempo as BPM. It won't overwrite a slot that one of the rendered tracks plays |
-| **The kit** | A source's per-slice settings and bus settings. A user slot's kit is saved with its sample, in the same sector as SLICE's hand-set slices. The BREAK and PIANO kits last until power-off |
+| **The kit** | A source's per-slice settings and bus settings. A user slot's kit is saved with its sample, in the same sector as SLICE's hand-set slices |
+| **Samples** | Only your own: the built-in BREAK, PIANO, FLUTE and SAX are gone (`FELUCCA_BUILTIN 0`; the flash they used stays free). A slot with a sample shows the name it was uploaded with, as SRC / SET and as the track's name on the main screen, unless the track plays a user preset |
 
 ## On the device
 
@@ -201,6 +202,12 @@ Tracks 1 and 2 are decks A and B. Each deck runs through its own isolator after 
 - **Old projects:** a project from before deck mode has the FM defaults there. At its load every track gets the deck defaults, and a deck on SHARD takes its sample kit's crossovers, FDBK and PRESS, and, when its slices went through the bus, the low, mid and high channels' shapers. The gates, levels and FULL are not carried over.
 - **Cost (host, instructions per sample at the worst moment, the owner's project with track 2's key hits):** all slices DIRECT 1,960; the old bus with every slice on MULTI 3,040; deck mode with both decks untouched 1,925, both isolators on 2,270, both with feedback and the filter too 2,580, and both with a TUBE shaper on every band as well 2,960 (each band's shaper is the expensive part, as on the old bus).
 - **The pictures:** ISOLATE shows a 20-band analyzer (the input as ghost bars with falling peaks, the output on them, a killed band's bars red) with the crossovers as red lines; XOVER draws them solid. MIX shows both decks' meters and the crossfader. LOW, MID and HIGH show each band's FDBK with how loud it rings now (red while it holds itself).
+
+## Your samples only (2026-11-19)
+
+The mangler build has no built-in samples (core.h `FELUCCA_BUILTIN`, 1 in the full build). SHARD's SRC, SAMPLE's SET and GRAIN's SRC offer USR1..USR4 only; the knobs skip the old values. A stored BREAK, PIANO, FLUTE or SAX (projects, presets, the editor) plays USR1. A user slot with a sample is named by the name it was uploaded with (upper case, 8 characters) on the knob, on the track's name in the header (unless the track plays a user preset, whose name wins) and in the editor's menus; an empty slot keeps USR1..USR4. The factory presets start on USR1. The built-in samples' 123 KB of flash are left free.
+
+The EDIT menu of a SAMPLE, GRAIN or SHARD track no longer shows FM's OP1..OP4 ENV and OP LEVEL pages: DECK MODE's values share those parameter slots, and the pages were let through on every track. Only the deck pages (ISOLATE, XOVER, LOW, MID, HIGH, MIX) show, on tracks 1 and 2. `tests/ui_render.c` fails on any OP page in the mangler.
 
 ## Overload (2026-11-17)
 

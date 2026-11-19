@@ -181,7 +181,7 @@ static uint8_t snd_said[NTRK];   /* per track: the code last said, 0 = none (a p
 static const char *snd_missing(const track_t *t, uint32_t *code)
 {
     const engine_t *e = ENGINES[eng_idx(t->eng_req)];
-    uint32_t si = (uint32_t)t->p[P_E0] % SMP_NALL;
+    uint32_t si = smp_si(t->p[P_E0]);
 #if FELUCCA_SLICE
     if (ENG_REF_IS(e, ENG_SLICE) || (FELUCCA_SHARD && t->eng_req % NENGINES == ENGI_SHARD)) {
         si = slc_src_of(t->p);

@@ -44,7 +44,7 @@ static uint32_t bnc_slot_of(const track_t *t)
     if (e == ENGI_SHARD)
         return slc_slot_of_src(slc_src_of(t->p));
     if (e == ENGI_SAMPLE || e == ENGI_GRAIN) {
-        si = (uint32_t)t->p[P_E0] % SMP_NALL;
+        si = smp_si(t->p[P_E0]);
         return si >= SMP_NSETS ? si - SMP_NSETS : (uint32_t)SMP_USER_SLOTS;
     }
     return SMP_USER_SLOTS;

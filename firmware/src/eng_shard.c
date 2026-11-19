@@ -1452,17 +1452,18 @@ static uint32_t shard_post(track_t *t, int32_t *out, uint32_t n)
 }
 
 /* three factory sounds on BREAK; the kit (per-slice settings) is the source's, edited on SLICE FX */
+#define SHD_SRC0 (FELUCCA_BUILTIN ? 0 : 1)              /* the presets' SRC: BREAK, or (no built-ins) USR1 */
 static const preset_t SHARD_PRESETS[] = {
-    {"RECYCLE", {0, SHD_DIV_AUTO, 0, 0, SHD_M_PLAY, 0, 127, 0}, {0, 127, 127, 20}, 0, 0, FX(0, 0, 0, 10), PAT(11)},
-    {"CHOP KIT", {0, SHD_DIV_AUTO, 0, 0, SHD_M_ONE, 0, 127, 0}, {0, 127, 127, 30}, 0, 0, FX(0, 0, 0, 12), PAT(9)},
-    {"SHRED", {0, 5, 0, 0, SHD_M_GATE, 0, 127, 24}, {0, 127, 127, 12}, 0, 0, FX(0, 0, 20, 10), PAT(10)},
+    {"RECYCLE", {SHD_SRC0, SHD_DIV_AUTO, 0, 0, SHD_M_PLAY, 0, 127, 0}, {0, 127, 127, 20}, 0, 0, FX(0, 0, 0, 10), PAT(11)},
+    {"CHOP KIT", {SHD_SRC0, SHD_DIV_AUTO, 0, 0, SHD_M_ONE, 0, 127, 0}, {0, 127, 127, 30}, 0, 0, FX(0, 0, 0, 12), PAT(9)},
+    {"SHRED", {SHD_SRC0, 5, 0, 0, SHD_M_GATE, 0, 127, 24}, {0, 127, 127, 12}, 0, 0, FX(0, 0, 20, 10), PAT(10)},
 };
 
 static const engine_t ENG_SHARD = {
     .name = "SHARD",
     .page_title = {"SHRD", "PLAY"},
     .edit = {
-        {"SRC", F_ENUM, 0, SLC_NSRC - 1, 0, N_SLC_SRC, 0},
+        {"SRC", F_ENUM, 0, SLC_NSRC - 1, SHD_SRC0, N_SLC_SRC, 0},
         {"DIV", F_ENUM, 0, SHD_NDIV - 1, SHD_DIV_AUTO, N_SHD_DIV, 0},
         {"START", F_INT, 0, 31, 0, 0, 0},
         {"PTCH", F_SEMI, -24, 24, 0, 0, 0},

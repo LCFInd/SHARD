@@ -17,7 +17,14 @@ typedef struct {
     const char *name;
     uint16_t z0, nz;
 } smp_set_t;
-#include "felucca_samples.h"
+#define SMP_DATA SMP_DATA_BUILTIN                       /* (the built-ins' bytes under their own name: */
+#include "felucca_samples.h"                            /*  without them, the compiler leaves them out) */
+#undef SMP_DATA
+#if FELUCCA_BUILTIN
+#define SMP_DATA SMP_DATA_BUILTIN
+#else
+static const uint8_t SMP_DATA[4];                       /* no built-in sample: the user slots' base, as before */
+#endif
 #if defined(SMP_PERC_SLOT) && SMP_PERC_SLOT != SMP_SET_PERC
 #error "tools/gen_samples.py PERC_SLOT != core.h SMP_SET_PERC"
 #endif
@@ -64,6 +71,12 @@ typedef struct {
     smp_zone_t zone[16];
 } smp_user_hdr_t;                                   /* 32 + 16 x 28 = 480 B, data at +512 */
 static smp_zone_t usr_zone[SMP_USER_SLOTS][16];     /* RAM copy, off rebased onto SMP_DATA */
+/* SET / SRC v as played: without the built-ins (FELUCCA_BUILTIN 0) one of theirs is USR1 */
+static inline uint32_t smp_si(int32_t v)
+{
+    uint32_t si = (uint32_t)v % SMP_NALL;
+    return FELUCCA_BUILTIN || si >= SMP_NSETS ? si : SMP_NSETS;
+}
 static uint8_t usr_nz[SMP_USER_SLOTS];
 #if FELUCCA_MANGLER
 static const char *const SMP_ALL_NAMES[SMP_NALL] = {SMP_SET_NAMES_INIT, "USR1", "USR2", "USR3", "USR4"};
@@ -105,6 +118,25 @@ static void smp_rec_guard(uint32_t off, uint8_t *buf, uint32_t n)
 #define SMP_USER_XIP(k) fm1_xip_ptr(smp_user_off(k))
 #endif
 static const uint8_t *smp_user_xip(uint32_t k) { return SMP_USER_XIP(k); }
+/* user slot k's sample name as given when it was loaded (upper case, trailing spaces off; b holds 9): 0 = empty slot
+ * or no name */
+static int usr_name(uint32_t k, char *b)
+{
+    const smp_user_hdr_t *h;
+    uint32_t i, n = 0;
+    b[0] = 0;
+    if (k >= SMP_USER_SLOTS || !usr_nz[k])
+        return 0;
+    h = (const smp_user_hdr_t *)smp_user_xip(k);
+    for (i = 0; i < 8u && h->name[i]; i++) {
+        char c = h->name[i];
+        b[i] = c >= 'a' && c <= 'z' ? (char)(c - 32) : c >= ' ' && c <= '~' ? c : ' ';
+        if (b[i] != ' ')
+            n = i + 1u;
+    }
+    b[n] = 0;
+    return n > 0;
+}
 #if FELUCCA_SLICE
 static void slc_user_scan(uint32_t k, int valid);   /* eng_slice.c: SLICE's slice table of the slot */
 #else
@@ -428,7 +460,7 @@ static void sx_start(const track_t *t, voice_t *v)
 
 static void sample_note_on(track_t *t, voice_t *v)
 {
-    uint32_t si = (uint32_t)t->p[P_E0] % SMP_NALL, i, zi = 0xFFFFu, width = 128u;
+    uint32_t si = smp_si(t->p[P_E0]), i, zi = 0xFFFFu, width = 128u;
     if (si < SMP_NSETS) {                           /* a built-in set: its zones split the keyboard */
         const smp_set_t *set = &SMP_SETS[si];
         for (i = 0; i < set->nz; i++)
@@ -467,7 +499,7 @@ static void sample_note_on(track_t *t, voice_t *v)
 static void sample_block(track_t *t)
 {
     sx_part_t *P = sx_of(t);
-    uint32_t si = (uint32_t)t->p[P_E0] % SMP_NALL, k, nb;
+    uint32_t si = smp_si(t->p[P_E0]), k, nb;
     if (smp_set_missing(si))
         return;
     sx_check(P, si);
@@ -481,7 +513,7 @@ static void sample_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, cons
 {
     const int16_t *p = t->p;
     const smp_zone_t *z = smp_zone((uint32_t)v->s[4]);
-    uint32_t i, frac = v->ph[1], si = (uint32_t)p[P_E0] % SMP_NALL, zl;
+    uint32_t i, frac = v->ph[1], si = smp_si(p[P_E0]), zl;
     int32_t d16 = clamp(m->pitch16 + p[P_E1] * 16 - z->root16, -1536, 576);   /* <= 3 octaves up: bounded decode load */
     uint32_t r = pow2_q16(d16), stepq = (r >> 8) * (z->rate >> 8);   /* Q16 samples per output */
     int32_t bits = p[P_E2], lp = 4000 + ((clamp((p[P_E4] << 8) + m->cutoff, 0, 127 << 8) * 28767) >> 15);
@@ -542,11 +574,20 @@ static void sample_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, cons
     v->ph[1] = frac;
 }
 
+#if !FELUCCA_BUILTIN
+static const preset_t SMP_USR_PRESETS[] = {
+    {"USR1", {SMP_NSETS, 0, 0, 1, 127, 0, 0, 127}, {0, 127, 127, 70}, 0, 0},
+    {"USR2", {SMP_NSETS + 1, 0, 0, 1, 127, 0, 0, 127}, {0, 127, 127, 70}, 0, 0},
+    {"USR3", {SMP_NSETS + 2, 0, 0, 1, 127, 0, 0, 127}, {0, 127, 127, 70}, 0, 0},
+    {"USR4", {SMP_NSETS + 3, 0, 0, 1, 127, 0, 0, 127}, {0, 127, 127, 70}, 0, 0},
+};
+_Static_assert(SMP_USER_SLOTS == 4, "SAMPLE's presets: one a user slot");
+#endif
 static const engine_t ENG_SAMPLE = {
     .name = "SAMPLE",
     .page_title = {"SET", "TRIM"},
     .edit = {
-        {"SET", F_ENUM, 0, SMP_NALL - 1, 0, SMP_ALL_NAMES, 0},
+        {"SET", F_ENUM, 0, SMP_NALL - 1, FELUCCA_BUILTIN ? 0 : SMP_NSETS, SMP_ALL_NAMES, 0},
         {"TUNE", F_SEMI, -24, 24, 0, 0, 0},
         {"BITS", F_INT, 0, 127, 0, 0, 0},
         {"PLAY", F_ENUM, 0, SX_RLOOP, SX_SMPL, SX_PLAY_NAMES, 0},   /* (SHARD; was LOOP OFF / ON = ONE / SMPL) */
@@ -555,8 +596,13 @@ static const engine_t ENG_SAMPLE = {
         {"DRV", F_PCT, 0, 127, 0, 0, 0},
         {"LEN", F_TIME, 1, 127, 127, 0, 0},                         /* (SHARD) 127: the rest of the zone */
     },
+#if FELUCCA_BUILTIN
     .presets = SMP_PRESET_TABLE,
     .npresets = SMP_NPRESETS,
+#else
+    .presets = SMP_USR_PRESETS,                     /* (the user slots, as PIANO's preset plays a set) */
+    .npresets = SMP_USER_SLOTS,
+#endif
     .note_on = sample_note_on,
     .render = sample_render,
     .knob = {P_E0, P_E4, P_ATK, P_REL},

@@ -505,7 +505,8 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
                 set_engine((uint32_t)clamp(ed_rv(a + 2), 0, NENGINES - 1));
                 ed_load_after(&b);
             } else if (d->max > d->min) {
-                *vp = (int16_t)enum_orig(d, clamp(ed_rv(a + 2), d->min, d->max));
+                int32_t w = enum_orig(d, clamp(ed_rv(a + 2), d->min, d->max));
+                *vp = (int16_t)(enum_builtin(d, w) ? param_fit(d, w) : w);   /* (no built-in samples: USR1) */
                 if (a[0] == 0) {
                     (void)motion_capture(TSEL, a[1], *vp);
                     load_extend(TSEL);                      /* (ui.c undo: an audition's values after G_ENGSEL) */
@@ -540,8 +541,17 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
         ed_str(d->label, 8);
         ed_str(d->unit, 8);
         if (d->fmt == F_ENUM && d->names)                  /* up to 24 (the matrix DST has 20) */
-            for (i = 0; i <= (uint32_t)(d->max - d->min) && i < 24u; i++)
-                ed_str(d->names[i], 8);
+            for (i = 0; i <= (uint32_t)(d->max - d->min) && i < 24u; i++) {
+                const char *s = d->names[i];
+#if FELUCCA_MANGLER
+                char nb[9];
+                if (src_name(d->names, d->min + (int32_t)i, nb))   /* a loaded user slot: its sample's name */
+                    s = nb;
+                else if (enum_builtin(d, d->min + (int32_t)i))     /* (none in this build) */
+                    s = "-";
+#endif
+                ed_str(s, 8);
+            }
         break;
     case ED_STEP_GET:
     case ED_STEP_SET: {

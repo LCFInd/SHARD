@@ -3276,7 +3276,9 @@ function paramRow(s, id) {
     for (const v of enumShown(d)) {                 /* (note divisions longest first: #48) */
       const [txt] = fmtValue(d, v);
       const name = d.fmt === F.ENUM && d.names[v - d.min] == null ? String(v) : modDst(d, txt);
-      const alias = d.fmt === F.ENUM && aliasOf(d.names, v - d.min) !== v - d.min;   /* shown when set, not offered */
+      const alias = d.fmt === F.ENUM && (aliasOf(d.names, v - d.min) !== v - d.min ||
+                                         d.names[v - d.min] === "-");   /* shown when set, not offered ("-": SHARD's
+                                                                         * removed built-in samples) */
       input.append(el("option", { value: v, ic: wave && WAVE_IC[name], hidden: alias }, name));
     }
     input.addEventListener("change", () => userSet(s, id, +input.value, true));

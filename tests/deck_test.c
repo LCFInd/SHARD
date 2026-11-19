@@ -5,8 +5,13 @@
  *   3. the DJ filter: LP closes the top, HP the bottom; every TYPE at full DRIVE bounded
  *   4. tracks 3 and 4 never go through a deck; the crossfader: XFADE at either end, each CURVE in the middle
  *   5. a project of before (the FM operators' defaults there) converts: the deck defaults, decks on SHARD with
- *      their kit's crossovers, FDBK and PRESS; idempotent
+ *      their kit's crossovers, FDBK, PRESS and band shapers; idempotent
+ *   6. no built-in samples (FELUCCA_BUILTIN 0, as the device): a stored BREAK / PIANO / SAMPLE set plays and loads
+ *      as USR1, the knobs skip them, the defaults and presets are on USR1, a loaded slot shows its sample's name
  * Run by tests/run_host_tests.sh (the mangler's flags). */
+#include <stdint.h>
+static uint32_t host_slots[4u * 0x14000u / 4u];          /* USR1..4 (zero: empty) */
+#define SMP_USER_XIP(k) ((const uint8_t *)host_slots + (k) * SMP_USER_SIZE)
 #define main hostsim_main
 #include "hostsim.c"
 #undef main
@@ -221,6 +226,58 @@ int main(void)
         proj_deck(&q);
         again = q.t[0].p[P_DK_XLO] == 7 && q.sum == proj_sum(&q);
         check("converted once: a later load leaves it (and its sum is right)", again, 0, 0, 0);
+    }
+
+    /* 6 */
+    {
+        const param_desc_t *src = &ENG_SHARD.edit[0], *set = &ENG_SAMPLE.edit[0], *gsrc = &ENG_GRAIN.edit[0];
+        int16_t pp[P_COUNT];
+        char b[16];
+        const char *u;
+        uint32_t k2, ok = 1;
+        smp_user_hdr_t *h = (smp_user_hdr_t *)host_slots;
+        check("no built-ins: the device build's default (FELUCCA_BUILTIN 0)", !FELUCCA_BUILTIN, 0, 0, 0);
+        check("a stored BREAK / PIANO loads as USR1; a stored SAMPLE set as USR1",
+              param_fit(src, 0) == 1 && param_fit(src, (int32_t)SLC_SRC_PIANO) == 1 && param_fit(src, 2) == 2 &&
+              param_fit(set, 0) == SMP_NSETS && param_fit(set, SMP_NSETS - 1) == SMP_NSETS &&
+              param_fit(set, SMP_NSETS + 2) == SMP_NSETS + 2, 0, 0, 0);
+        pp[P_E0] = 0;
+        check("a BREAK left in a sound plays USR1 (slc_src_of), a SAMPLE set too (smp_si)",
+              slc_src_of(pp) == 1u && smp_si(0) == SMP_NSETS && smp_si(SMP_NSETS + 3) == SMP_NSETS + 3u, 0, 0, 0);
+        check("SRC's knob: never BREAK (down from USR1), past PIANO (USR3 up: USR4)",
+              param_turn(src, 1, -1) == 1 && param_turn(src, 3, 1) == 5 && param_turn(src, 5, -1) == 3, 0, 0, 0);
+        check("SET's knob: never a built-in (down from USR1)", param_turn(set, SMP_NSETS, -3) == SMP_NSETS, 0, 0, 0);
+        for (k2 = 0; k2 < ENG_SHARD.npresets; k2++)
+            ok &= ENG_SHARD.presets[k2].e[0] == 1;
+        for (k2 = 0; k2 < ENG_GRAIN.npresets; k2++)
+            ok &= ENG_GRAIN.presets[k2].e[0] == SMP_NSETS;
+        for (k2 = 0; k2 < ENG_SAMPLE.npresets; k2++)
+            ok &= ENG_SAMPLE.presets[k2].e[0] == (int16_t)(SMP_NSETS + k2);
+        check("the defaults and every factory preset on a user slot (SAMPLE's: USR1..USR4)",
+              ok && src->def == 1 && set->def == SMP_NSETS && gsrc->def == SMP_NSETS && ENG_SAMPLE.npresets == 4u, 0, 0, 0);
+        param_format(src, 1, b, &u);
+        check("an empty slot shows as USR1", !strcmp(b, "USR1"), 0, 0, 0);
+        memset(h, 0, 1024);                         /* USR1: one zone, named "college" */
+        h->magic = SMP_USER_MAGIC;
+        h->version = 1;
+        h->nz = 1;
+        memcpy(h->name, "college ", 8);
+        h->data_len = 512;
+        h->zone[0].n = 1000;
+        h->zone[0].le = 999;
+        h->zone[0].rate = 32768u;
+        h->zone[0].root16 = 60 * 16;
+        h->zone[0].hi = 127;
+        smp_user_scan(0);
+        param_format(src, 1, b, &u);
+        {
+            char c[16];
+            param_format(set, SMP_NSETS, c, &u);
+            check("a loaded slot shows its sample's name (upper case): SHARD's SRC, SAMPLE's SET",
+                  !strcmp(b, "COLLEGE") && !strcmp(c, "COLLEGE"), 0, 0, 0);
+        }
+        param_format(src, 2, b, &u);
+        check(".. another, empty, its slot's name", !strcmp(b, "USR2"), 0, 0, 0);
     }
 
     printf(fails ? "deck test FAILED (%d)\n" : "deck test passed\n", fails);

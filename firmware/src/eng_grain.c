@@ -358,7 +358,7 @@ static void grain_note_on(track_t *t, voice_t *v)
 {
     gr_part_t *P = gr_of(t);
     uint32_t vi = (uint32_t)(v - t->v) % NVOICE, i;
-    v->s[0] = gr_find((uint32_t)t->p[P_E0] % SMP_NALL, v->note);
+    v->s[0] = gr_find(smp_si(t->p[P_E0]), v->note);
     v->s[1] = 0;                                    /* the first grain at once */
     v->ph[0] = 0;                                   /* (the sine's phase: no data) */
     if (!v->env) {                                  /* a fresh voice: no grains left from before */
@@ -374,7 +374,7 @@ static void grain_note_on(track_t *t, voice_t *v)
 static void grain_block(track_t *t)
 {
     gr_part_t *P = gr_of(t);
-    uint32_t src = (uint32_t)t->p[P_E0] % SMP_NALL, st = gr_stamp(src), i;
+    uint32_t src = smp_si(t->p[P_E0]), st = gr_stamp(src), i;
     if (!gr_rng[gr_part(t)])
         gr_rng[gr_part(t)] = 0x2545F491;
     if (P->src != src + 1u || P->stamp != st) {
@@ -402,7 +402,7 @@ static void grain_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
         smp_sine(out, n, m, p[P_E4] * 16, lp, &v->ph[0], &v->s[2]);
         return;
     }
-    if (zl < 0 || zl >= P->nz || P->src != (uint32_t)p[P_E0] % SMP_NALL + 1u) {
+    if (zl < 0 || zl >= P->nz || P->src != smp_si(p[P_E0]) + 1u) {
         if (zl < 0)
             v->active = 0;                          /* a user slot key with no zone: silent */
         return;
@@ -435,19 +435,21 @@ static void grain_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const
     v->s[2] = y;
 }
 
+/* a preset's SRC: without the built-ins (FELUCCA_BUILTIN 0) USR1 */
+#define GR_SRC(s) (FELUCCA_BUILTIN ? (s) : SMP_NSETS)
 static const preset_t GRAIN_PRESETS[] = {
     /* name, {SRC, POS, SIZE, DENS, PTCH, SPRD, RAND, TONE}, {A D S R}, fenv, mono */
-    {"CLOUD PAD", {2, 50, 92, 88, 0, 40, 14, 100}, {70, 90, 120, 90}, 0, 0, FX(0, 40, 25, 85), PAT(5)},
-    {"GLITCH", {3, 64, 24, 112, 0, 100, 90, 127}, {0, 70, 100, 30}, 0, 0, FX(10, 0, 50, 25), PAT(4)},
-    {"FROZEN", {0, 40, 108, 72, 0, 0, 10, 92}, {50, 100, 127, 100}, 0, 0, FX(0, 30, 20, 95), PAT(5)},
-    {"SHIMMER", {0, 30, 70, 100, 12, 30, 24, 110}, {30, 90, 110, 90}, 0, 0, FX(0, 50, 40, 90), PAT(7)},
+    {"CLOUD PAD", {GR_SRC(2), 50, 92, 88, 0, 40, 14, 100}, {70, 90, 120, 90}, 0, 0, FX(0, 40, 25, 85), PAT(5)},
+    {"GLITCH", {GR_SRC(3), 64, 24, 112, 0, 100, 90, 127}, {0, 70, 100, 30}, 0, 0, FX(10, 0, 50, 25), PAT(4)},
+    {"FROZEN", {GR_SRC(0), 40, 108, 72, 0, 0, 10, 92}, {50, 100, 127, 100}, 0, 0, FX(0, 30, 20, 95), PAT(5)},
+    {"SHIMMER", {GR_SRC(0), 30, 70, 100, 12, 30, 24, 110}, {30, 90, 110, 90}, 0, 0, FX(0, 50, 40, 90), PAT(7)},
 };
 
 static const engine_t ENG_GRAIN = {
     .name = "GRAIN",
     .page_title = {"GRAN", "SPRY"},
     .edit = {
-        {"SRC", F_ENUM, 0, SMP_NALL - 1, 0, SMP_ALL_NAMES, 0},
+        {"SRC", F_ENUM, 0, SMP_NALL - 1, GR_SRC(0), SMP_ALL_NAMES, 0},
         {"POS", F_PCT, 0, 127, 32, 0, 0},
         {"SIZE", F_PCT, 0, 127, 80, 0, 0},
         {"DENS", F_PCT, 0, 127, 80, 0, 0},

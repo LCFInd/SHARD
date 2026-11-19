@@ -568,7 +568,7 @@ static struct {
 
 static uint32_t sample_wave_zone(const track_t *t)
 {
-    uint32_t si = (uint32_t)t->p[P_E0] % SMP_NALL, i, zi = 0xFFFFu;
+    uint32_t si = smp_si(t->p[P_E0]), i, zi = 0xFFFFu;
     if (si < SMP_NSETS) {
         const smp_set_t *set = &SMP_SETS[si];
         for (i = 0; i < set->nz; i++)
@@ -684,7 +684,7 @@ static void graph_grain(const track_t *t)
 {
     const smp_zone_t *z = sample_wave.zone;
     const gr_part_t *P = gr_of(t);
-    uint32_t n, i, posq, sp, src = (uint32_t)t->p[P_E0] % SMP_NALL;
+    uint32_t n, i, posq, sp, src = smp_si(t->p[P_E0]);
     int32_t cx, x0, x1;
     if (!z || !z->n || smp_set_missing(src)) {      /* (an empty user slot: GRAIN plays its sine) */
         panel_alert(ICON_X_NOFILE, "SAMPLE NOT FOUND");
@@ -736,6 +736,18 @@ static uint32_t grain_sig(const track_t *t)
 /* SLICES (ui_slice.c): the waveform from the marker before the selected one to the one after it (the selected
  * slice tinted, its marker the accent, outside the slices DIM), under it the whole material with every marker and
  * the view; then the selected slice's length and the source */
+#if FELUCCA_SLICE || FELUCCA_SHARD
+/* SLICE / SHARD's SRC as shown: a loaded user slot by its sample's name (the mangler), else its own name */
+static const char *slc_src_label(uint32_t src)
+{
+    static char b[9];
+#if FELUCCA_MANGLER
+    if (src_name(N_SLC_SRC, (int32_t)src, b))
+        return b;
+#endif
+    return N_SLC_SRC[src % SLC_NSRC];
+}
+#endif
 static void graph_slices(void)
 {
     uint32_t a, b, len, n = slice_count(), j = slice_sel(), i, src, div, ma, mb;
@@ -794,7 +806,7 @@ static void graph_slices(void)
     }
 #endif
     cv_text(12, 104, &AF_M, t, T_MID);                  /* the slice's detail (M): its capitals rows 108 .. 118 */
-    cv_text_r(228, 104, &AF_M, N_SLC_SRC[src], slc_slot_of_src(src) < SMP_USER_SLOTS ? T_THEME : T_DIM, T_SURF);
+    cv_text_r(228, 104, &AF_M, slc_src_label(src), slc_slot_of_src(src) < SMP_USER_SLOTS ? T_THEME : T_DIM, T_SURF);
 }
 #if FELUCCA_SHARD
 /* LOOP (SHARD): the whole loop. The waveform (THEME) with every marker (MID), the slice picked (a key, or KNOB 1 on
@@ -915,7 +927,7 @@ static void graph_loop(void)
         str_cpy(t + str_len(t), "DIV ", sizeof t - str_len(t));
         str_cpy(t + str_len(t), N_SHD_DIV[clamp(p[P_E1], 0, SHD_NDIV - 1)], sizeof t - str_len(t));
         cv_text(12, 104, &AF_M, t, T_MID);
-        cv_text_r(228, 104, &AF_M, N_SLC_SRC[src], slc_slot_of_src(src) < SMP_USER_SLOTS ? T_THEME : T_DIM, T_SURF);
+        cv_text_r(228, 104, &AF_M, slc_src_label(src), slc_slot_of_src(src) < SMP_USER_SLOTS ? T_THEME : T_DIM, T_SURF);
     }
 }
 /* graph_signature: the voices' columns, so the playheads move */
@@ -2628,7 +2640,7 @@ static void graph_deck_mix(uint16_t c)
     for (d = 0; d < NDECK; d++) {
         track_t *t = &trk[d];
         int32_t y = 10 + (int32_t)d * 26, m = meter_px(t->peak) * 150 / (TS_MH - 2);
-        const char *nm = t->eng_req % NENGINES == ENGI_SHARD ? N_SLC_SRC[clamp(t->p[P_E0], 0, SLC_NSRC - 1)] :
+        const char *nm = t->eng_req % NENGINES == ENGI_SHARD ? slc_src_label(slc_src_of(t->p)) :
                          ENGINES[t->eng_req % NENGINES]->name;
         t->peak = 0;
         cv_text_on(PANEL_X0 + 2, y + 2 - AF_S_CAP_Y, &AF_S, d ? "B" : "A", T_TEXT, T_SURF);

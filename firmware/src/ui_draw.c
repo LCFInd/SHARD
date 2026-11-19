@@ -846,6 +846,14 @@ static void sound_name(const track_t *t, char *b)
                 return;
         }
     }
+#if FELUCCA_MANGLER
+    {   /* not a user preset: the sample the track plays, by its name (a loaded user slot) */
+        uint32_t en = t->eng_req % NENGINES;
+        if (en == ENGI_SHARD ? src_name(N_SLC_SRC, (int32_t)slc_src_of(t->p), b) :
+            (en == ENGI_SAMPLE || en == ENGI_GRAIN) && src_name(SMP_ALL_NAMES, (int32_t)smp_si(t->p[P_E0]), b))
+            return;
+    }
+#endif
     if (e->npresets)
         str_cpy(b, e->presets[t->preset % e->npresets].name, 16);
 }

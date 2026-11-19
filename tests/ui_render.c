@@ -2082,6 +2082,13 @@ static void sweep_columns(void)
             if (!page_visible(i)) continue;
             snprintf(name, sizeof name, "%s%s/%s%s", large_on ? "LARGE " : "", ENGINES[e]->name, PAGES[i].title,
                      esync_pass ? " ESYNC" : "");
+#if FELUCCA_MANGLER
+            if (PAGES[i].title[0] == 'O' && PAGES[i].title[1] == 'P' && e != ENGI_FM6) {   /* (2026-11-19: DECK MODE's
+                                                                 * values let FM's OP1 ENV .. OP LEVEL show on decks) */
+                if (rep) fprintf(rep, "FIND %-26s FM's page shows on track %u\n", name, song.sel + 1u);
+                nfind++;
+            }
+#endif
             cur_name = name;
             for (c = 0; c < 4u; c++) {
                 int16_t *vp;

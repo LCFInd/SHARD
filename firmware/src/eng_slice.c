@@ -108,7 +108,11 @@ static void (*slc_man_load)(uint32_t k);        /* slice_store.c: a slot was rea
 static uint8_t slc_man_save;                     /* bit k: slot k's slices changed, to flash (slice_store.c) */
 
 /* the SRC of a part's sound (0..4: a stored value out of range reads as the nearest) */
-static uint32_t slc_src_of(const int16_t *p) { return (uint32_t)clamp(p[P_E0], 0, SLC_NSRC - 1); }
+static uint32_t slc_src_of(const int16_t *p)
+{
+    uint32_t s = (uint32_t)clamp(p[P_E0], 0, SLC_NSRC - 1);
+    return FELUCCA_BUILTIN || (s && s != SLC_SRC_PIANO) ? s : 1u;   /* (no built-ins: BREAK and PIANO play USR1) */
+}
 /* source 0 = BREAK, 1..3 = USR1..3, 4 = PIANO, 5 = USR4 (the mangler); 0 = no material (an empty or erased slot, no
  * PIANO in the build) */
 static const slc_src_t *slc_get(uint32_t src)

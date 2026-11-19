@@ -298,6 +298,16 @@ static const param_desc_t *param_desc_of(uint32_t e, uint32_t id)
  * (tools/gen_samples.py SMP_SET_ORIG); DRUM KIT 1..3, once HAND CYM H+CYM, play 66 10 77 (eng_drum.c DK_PLAYS).
  * It shows the original's name; knobs step over it and the editor's SET lands on the original. -> the value v
  * stands for */
+#if !FELUCCA_BUILTIN
+/* a built-in sample (none in this build): SAMPLE / GRAIN's sets, SHARD's BREAK and PIANO */
+static int enum_builtin(const param_desc_t *d, int32_t v)
+{
+    return (d->names == SMP_ALL_NAMES && v >= 0 && v < SMP_NSETS) ||
+           (d->names == N_SLC_SRC && (v == 0 || v == (int32_t)SLC_SRC_PIANO));
+}
+#else
+#define enum_builtin(d, v) 0
+#endif
 static int32_t enum_orig(const param_desc_t *d, int32_t v)
 {
     if (d->names == N_DRUM_KIT)
@@ -312,6 +322,8 @@ static int32_t enum_orig(const param_desc_t *d, int32_t v)
 static int32_t param_fit(const param_desc_t *d, int32_t v)
 {
     v = clamp(v, d->min, d->max);
+    if (enum_builtin(d, v))                           /* (no built-in samples: USR1) */
+        return d->names == SMP_ALL_NAMES ? SMP_NSETS : 1;
     if (d->names == N_FM6_PATCH)
         return v > (int32_t)FM6_OWN ? (int32_t)FM6_OWN : v;
     return d->names == N_DRUM_KIT ? enum_orig(d, v) : v;
@@ -320,8 +332,17 @@ static int32_t param_fit(const param_desc_t *d, int32_t v)
 /* v is a value a knob passes over: an alias, or one of FM6's bank slots without a voice */
 static int enum_skip(const param_desc_t *d, int32_t v)
 {
-    return enum_orig(d, v) != v || (d->names == N_FM6_PATCH && !fm6_slot_ok(v));
+    return enum_orig(d, v) != v || (d->names == N_FM6_PATCH && !fm6_slot_ok(v)) || enum_builtin(d, v);
 }
+#if FELUCCA_MANGLER
+/* a SET / SRC value that is a user slot with a sample: its name (b holds 9), else 0 */
+static int src_name(const char *const *names, int32_t v, char *b)
+{
+    uint32_t k = names == SMP_ALL_NAMES ? (v >= SMP_NSETS ? (uint32_t)(v - SMP_NSETS) : 99u) :
+                 names == N_SLC_SRC ? slc_slot_of_src((uint32_t)clamp(v, 0, SLC_NSRC - 1)) : 99u;
+    return usr_name(k, b);
+}
+#endif
 /* a knob moved an F_ENUM from `from` to v: past any value it skips in that direction; with none left to the end, the
  * last one it does not skip on the way from `from` (else `from`) */
 static int32_t enum_step(const param_desc_t *d, int32_t from, int32_t v)
@@ -375,6 +396,8 @@ static void param_format(const param_desc_t *d, int32_t v, char *val, const char
     *unit = "";
     fmt_named = d->fmt == F_ENUM;
 #if FELUCCA_MANGLER
+    if (d->fmt == F_ENUM && src_name(d->names, v, val))   /* a loaded user slot: its sample's name */
+        return;
     if (d->names == DECK_DB_NAMES) {                  /* a deck's band: KILL, then dB (one decimal under 10) */
         int32_t db = DECK_GAIN_DB10[clamp(v, 0, 127)], a = db < 0 ? -db : db;
         fmt_named = v <= 0;

@@ -48,6 +48,14 @@
                                   * numbers stay reserved (silent, never offered), so stored sounds keep their places.
                                   * FELUCCA_MANGLER=0 builds Felucca's full set (the upstream tests use it) */
 #endif
+#ifndef FELUCCA_BUILTIN
+#define FELUCCA_BUILTIN (!FELUCCA_MANGLER)   /* the built-in samples (SAMPLE's PIANO FLUTE SAX, SHARD's BREAK and
+                                  * PIANO): 2026-11-19, gone from the mangler (only the user slots, USR1..4, each shown
+                                  * by its sample's name). Their numbers stay reserved: a stored one plays (and loads
+                                  * as) USR1 (eng_sample.c smp_si, eng_slice.c slc_src_of, params.c param_fit). The
+                                  * host tests of the mangler build them back in (-DFELUCCA_BUILTIN=1) for their
+                                  * material; deck_test does not */
+#endif
 #if FELUCCA_MANGLER && !FELUCCA_SHARD
 #error "FELUCCA_MANGLER needs FELUCCA_SHARD"
 #endif
