@@ -462,14 +462,15 @@ static void slc_scan(slc_src_t *s, uint32_t len, uint32_t sens, uint32_t det)
 {
     slc_dec_t d;
     uint32_t pos = 0, k = 0, gap = ((s->rate >> 4) * 44100u >> 12) / 20u, last = 0, h0 = 0, st0 = 0;
-    int32_t prev = 0, pkd = 0, pkr = 0, envd = 0, envr = 0, thd, thr, rise;
+    int32_t prev = 0, prev2 = 0, pkd = 0, pkr = 0, envd = 0, envr = 0, thd, thr, rise;
     slc_dec_at(&d, 0, 0);
     while (pos++ < len) {                               /* pass 1: the largest step and sample */
-        int32_t x = slc_dec_next(s, &d), a = x - prev;
+        int32_t x = slc_dec_next(s, &d), a = x - prev2;
         a = a < 0 ? -a : a;
         pkd = a > pkd ? a : pkd;
         a = x < 0 ? -x : x;
         pkr = a > pkr ? a : pkr;
+        prev2 = prev;
         prev = x;
     }
     {
@@ -483,7 +484,7 @@ static void slc_scan(slc_src_t *s, uint32_t len, uint32_t sens, uint32_t det)
     s->apos[0] = 0;
     s->ast[0] = 0;
     slc_dec_at(&d, 0, 0);
-    prev = 0;
+    prev = prev2 = 0;
     for (pos = 0; pos < len;) {                         /* pass 2: grid states, onsets */
         uint32_t hs = pos, hst = slc_dec_st(&d), e = len - pos > SLC_HOP ? pos + SLC_HOP : len;
         int32_t hd = 0, hr = 0;
@@ -492,14 +493,17 @@ static void slc_scan(slc_src_t *s, uint32_t len, uint32_t sens, uint32_t det)
             while (k < SLC_GRID && k * len / SLC_GRID == pos)
                 s->grid[k++] = slc_dec_st(&d);
             x = slc_dec_next(s, &d);
-            a = x - prev;
+            a = x - prev2;
             a = a < 0 ? -a : a;
             hd = a > hd ? a : hd;
             a = x < 0 ? -x : x;
             hr = a > hr ? a : hr;
+            prev2 = prev;
             prev = x;
         }
-        /* a rise of the high-passed peak (hats, snares, clicks) or of the peak (low hits: a slow
+        /* a rise of the high-passed peak (hats, snares, clicks: x - x[-2], most at a quarter of the rate and none at
+         * the top, 2026-11-19: the uploads keep their top octave now, and its noise in a hit's tail rose like a hit)
+         * or of the peak (low hits: a slow
          * follower, so a low tone's cycles do not look like rises) */
         if (hs && ((hd > thd && hd * 4 > envd * rise) || (hr > thr && hr * 4 > envr * rise)) && h0 >= last + gap &&
             s->nauto < SLC_AUTO) {
