@@ -159,14 +159,15 @@ enum {                          /* (each band's shaper: its TYPE and DRIVE, LO's
 #define DK_TYPE(b) ((b) == 0 ? P_DK_LTYPE : (b) == 1 ? P_DK_MTYPE : P_DK_HTYPE)   /* band b's shaper */
 #define DK_DRV(b) ((b) == 0 ? P_DK_LDRV : (b) == 1 ? P_DK_MDRV : P_DK_HDRV)
 _Static_assert((int)P_DK_R19 == (int)P_FM4_LEVEL, "DECK MODE: the 20 values of the FM operators");
-/* MASTER EQ (fx.c meq, 2026-11-19): track 1's DRUM lane levels, which no engine of the mangler reads: LOW MID HIGH
+#define NDECK 2u
+#define deck_of(t) ((uint32_t)((t) - trk) < NDECK)    /* tracks 1 and 2 */
+#endif
+/* MASTER EQ (fx.c meq, 2026-11-19): track 1's DRUM lane levels, which no engine of the mangler reads (the names in
+ * every build; only the mangler uses them): LOW MID HIGH
  * (-12 .. +12 dB, 0 = flat) and MID F (the crossovers' 40 Hz .. 12 kHz). A project of before holds the lanes'
  * 0 .. 127 (100 % = 127) there: its load sets the EQ flat (project.c proj_deck). Kept through sound loads */
 enum { P_MEQ_LO = P_LN0, P_MEQ_MID, P_MEQ_HI, P_MEQ_F };
 #define MEQ_F_DEF 72                                  /* (1.04 kHz) */
-#define NDECK 2u
-#define deck_of(t) ((uint32_t)((t) - trk) < NDECK)    /* tracks 1 and 2 */
-#endif
 
 enum {                          /* global parameters */
     G_BPM, G_SWING, G_CLOCK, G_TUNE,
