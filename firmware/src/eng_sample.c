@@ -23,7 +23,12 @@ typedef struct {
 #if FELUCCA_BUILTIN
 #define SMP_DATA SMP_DATA_BUILTIN
 #else
-static const uint8_t SMP_DATA[4];                       /* no built-in sample: the user slots' base, as before */
+/* no built-in sample: the user slots' base, as before, through a pointer the compiler cannot see into (2026-11-19: a
+ * zero `const uint8_t SMP_DATA[4]` let gcc and clang read every SMP_DATA[i] as its zero: the user slots played
+ * silence). One load a decoded byte */
+static const uint8_t smp_data_base[4];
+static const uint8_t *volatile smp_data_vp = smp_data_base;
+#define SMP_DATA (smp_data_vp)
 #endif
 #if defined(SMP_PERC_SLOT) && SMP_PERC_SLOT != SMP_SET_PERC
 #error "tools/gen_samples.py PERC_SLOT != core.h SMP_SET_PERC"

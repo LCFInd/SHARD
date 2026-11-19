@@ -570,8 +570,11 @@ fi
 # The suites above test Felucca's full set (HALI: FELUCCA_MANGLER=0); these, the mangler's own: SHARD's test (its
 # engine table, the power-on tracks) and the UI renders' lint and alignment over every page and value
 MCC="${CC%% *} -O1 -Wall -Wno-unused-function -Ifirmware/hal -Ifirmware/bsp/chip -Ifirmware/bsp/boards/fm1 -Ifirmware/src -DFELUCCA_BUILTIN=1"   # (the built-ins as test material; deck_test: without, as the device)
+mkdir -p build/deck_noise                              # (white noise through the upload tools: deck_test's 9)
+python3 -c "import random, struct, wave; r = random.Random(3); w = wave.open('build/deck_noise/noise.wav', 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100); w.writeframes(b''.join(struct.pack('<h', int(r.uniform(-1, 1) * 20000)) for _ in range(44100 * 6)))"
+python3 tools/fm1_sample_upload.py build NOISE build/deck_noise/slot build/deck_noise/noise.wav:60 >/dev/null
 if $MCC -UFELUCCA_BUILTIN -O2 -w -Ibuild/gen -o "$OUT/deck_test" tests/deck_test.c -lm; then
-    run "DECK MODE (the mangler): the isolators' bands, KILL, the DJ filter, the shapers bounded, old projects converted; no built-in samples; the MASTER EQ; 4-point interpolation" "$OUT/deck_test"
+    run "DECK MODE (the mangler): the isolators' bands, KILL, the DJ filter, the shapers bounded, old projects converted; no built-in samples; the MASTER EQ; 4-point interpolation; white noise from a user slot, flat" "$OUT/deck_test" build/deck_noise/slot
 else
     echo "the mangler: deck_test does not build"; fail=1
 fi

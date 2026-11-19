@@ -8,6 +8,8 @@
  *      their kit's crossovers, FDBK, PRESS and band shapers; idempotent
  *   6. no built-in samples (FELUCCA_BUILTIN 0, as the device): a stored BREAK / PIANO / SAMPLE set plays and loads
  *      as USR1, the knobs skip them, the defaults and presets are on USR1, a loaded slot shows its sample's name
+ *   7. the MASTER EQ; 8. the 4-point interpolation's response; 9. (argv[1]: an uploaded slot of white noise) heard and
+ *      flat through SAMPLE, the mix and the master
  * Run by tests/run_host_tests.sh (the mangler's flags). */
 #include <stdint.h>
 static uint32_t host_slots[4u * 0x14000u / 4u];          /* USR1..4 (zero: empty) */
@@ -66,7 +68,18 @@ static double deck_db(double hz, double amp)
     return 10 * log10((eo + 1e-9) / (ei + 1e-9));
 }
 
-int main(void)
+static long load(const char *p, void *b, long max)
+{
+    FILE *f = fopen(p, "rb");
+    long n;
+    if (!f)
+        return -1;
+    n = (long)fread(b, 1, (size_t)max, f);
+    fclose(f);
+    return n;
+}
+
+int main(int argc, char **argv)
 {
     uint32_t i, k;
     host_tracks_init();
@@ -393,6 +406,72 @@ int main(void)
             check(f == 0 ? "4-point interpolation: 1 kHz flat" : f == 1 ? ".. 5 kHz -0.4 dB" : ".. 10 kHz -4.4 dB",
                   fabs(20 * log10(sc / ss) - WANT[f]) < 0.15, "%.2f dB", 20 * log10(sc / ss), 0);
         }
+    }
+
+    /* 9: white noise uploaded (argv[1].hdr / .bin: tests/run_host_tests.sh, fm1_sample_upload.py) and played by SAMPLE
+     * on track 3 through the mix and the master, as the device builds it (no built-ins: 2026-11-19, a zero base array
+     * let the compilers play every user slot as silence): heard, and flat from 40 Hz to 8 kHz (the band's power
+     * against 1 kHz's, Hann windows of 4096 averaged over 3 s and 7 bins each) */
+    if (argc > 1) {
+        static int16_t y[44100u * 3u];
+        static const double HZ[6] = {40, 100, 250, 1000, 4000, 8000};
+        char path[256];
+        static int32_t o[2u * CTL];
+        double pw[6], rms = 0;
+        uint32_t b, t = 2u, f, n = 0;
+        snprintf(path, sizeof path, "%s.hdr", argv[1]);
+        load(path, host_slots, SMP_USER_DATA);
+        snprintf(path, sizeof path, "%s.bin", argv[1]);
+        load(path, (uint8_t *)host_slots + SMP_USER_DATA, SMP_USER_SIZE - SMP_USER_DATA);
+        smp_user_scan(0);
+        song.master_q12 = MASTER_FULL;
+        fx_lowcut = 0;
+        for (k = 0; k < NTRK; k++) {
+            trk[k].p[P_MUTE] = 1;
+            for (i = 0; i < NVOICE; i++)
+                trk[k].v[i].active = 0;
+        }
+        trk[0].p[P_MEQ_LO] = trk[0].p[P_MEQ_MID] = trk[0].p[P_MEQ_HI] = 0;
+        host_preset(&trk[t], ENGI_SAMPLE, 0);
+        trk[t].p[P_MUTE] = 0;
+        trk[t].p[P_E0] = SMP_NSETS;                     /* USR1 */
+        for (b = 0; b < 64u; b++)
+            mix_block(o, CTL);
+        trk_note_on(&trk[t], 60, 127);
+        for (b = 0; b < 44100u / CTL; b++)              /* (the attack, the index) */
+            mix_block(o, CTL);
+        while (n + CTL <= sizeof y / sizeof y[0]) {
+            mix_block(o, CTL);
+            for (i = 0; i < CTL; i++, n++) {
+                y[n] = (int16_t)o[2u * i];
+                rms += (double)y[n] * y[n];
+            }
+        }
+        rms = sqrt(rms / n);
+        for (f = 0; f < 6u; f++) {
+            double acc = 0;
+            uint32_t w0, j;
+            int d;
+            for (w0 = 0; w0 + 4096u <= n; w0 += 2048u)
+                for (d = -3; d <= 3; d++) {
+                    double fr = (round(HZ[f] * 4096 / 44100.0) + d) / 4096, c = 2 * cos(2 * M_PI * fr), s1 = 0, s2 = 0, s0;
+                    for (j = 0; j < 4096u; j++) {
+                        s0 = y[w0 + j] * (0.5 - 0.5 * cos(2 * M_PI * j / 4096)) + c * s1 - s2;
+                        s2 = s1;
+                        s1 = s0;
+                    }
+                    acc += s1 * s1 + s2 * s2 - c * s1 * s2;
+                }
+            pw[f] = acc;
+        }
+        check("white noise from a user slot (no built-ins, as the device): heard", rms > 2000, "rms %.0f", rms, 0);
+        for (f = 0; f < 6u; f++)
+            if (f != 3u) {
+                double dB = 10 * log10(pw[f] / pw[3]);
+                char what[80];
+                snprintf(what, sizeof what, ".. %.0f Hz against 1 kHz: flat (within 1.5 dB)", HZ[f]);
+                check(what, fabs(dB) < 1.5, "%+.2f dB", dB, 0);
+            }
     }
 
     printf(fails ? "deck test FAILED (%d)\n" : "deck test passed\n", fails);

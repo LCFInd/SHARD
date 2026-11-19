@@ -227,6 +227,19 @@ device's linear interpolation (-6.3 dB at 10 kHz): -8.7 dB at 10 kHz, -5.4 dB at
 - Samples already in the slots keep the old conversion: upload them again to get the new top end. BOUNCE renders on
   the device without the make-up filter.
 
+### A user slot played silence (fixed 2026-11-19)
+
+Without the built-in samples (1d1e949 on), the user slots' data was addressed from a 4-byte array of zeros. gcc and
+clang may read any byte of an all-zero constant array as 0, and both do at -O2 (and likely at -Os, the device's):
+SAMPLE, SHARD and GRAIN could play silence from every user slot, in the emulator too. The base is now read through a
+pointer the compiler cannot see into (`eng_sample.c smp_data_vp`). `tests/deck_test.c` 9 uploads white noise with
+`fm1_sample_upload.py`, plays it on SAMPLE through the mix and the master as the device builds it, and checks it is
+heard and flat from 40 Hz to 8 kHz (within 0.9 dB: nothing in the chain cuts the bass).
+
+What a spectrum shows of a white-noise sample: flat to about 9.9 kHz, a notch at 11 kHz (half the stored rate: the
+upload filter leaves nothing just below it, so nothing mirrors just above it), and above 11 kHz the interpolation's
+images: mirrored copies of 9 .. 11 kHz (about -8 dB at 12.5 kHz, -20 dB at 16 kHz), not real highs.
+
 ## MASTER EQ (2026-11-19)
 
 The EQ page (after MIX; on every track) is a 3-band EQ at the end of the mix: LOW (a shelf at 150 Hz), MID (a bell,
