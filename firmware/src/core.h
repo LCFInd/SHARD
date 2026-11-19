@@ -243,7 +243,7 @@ static int drum_from_perc(uint32_t engine, int16_t *e)
 }
 
 /* ------------------------------------------------- voices, engines --- */
-enum { V_POLY, V_MONO, V_LEGATO, V_UNISON };   /* P_VOICE */
+enum { V_POLY, V_MONO, V_LEGATO, V_UNISON, V_STRUM };   /* P_VOICE (V_STRUM: the mangler's, voice.c mono_play) */
 /* voice_t, vmod_t, preset_t, engine_t: felucca_engine.h (above) */
 
 /* ------------------------------------------------- tracks, the song --- */

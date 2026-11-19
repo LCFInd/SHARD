@@ -416,7 +416,7 @@ static void graph_chord(const track_t *t, uint16_t c)
         cap = "ON ROOT";
     }
     if (trk_vmode(t) != V_POLY)
-        cap = "ROOT ONLY";                              /* MONO / LEGATO / UNISON */
+        cap = "ROOT ONLY";                              /* MONO / LEGATO / UNISON / STRUM */
     chord_name(b, (uint32_t)r, mask);
     cv_text_on(14, 8, &AF_M, b, T_TEXT, T_SURF);
     GFX_HOOK_ALIGN(0, 0, 0, 8 + AF_M.asc, AL_B, "chord caption on the name's baseline");

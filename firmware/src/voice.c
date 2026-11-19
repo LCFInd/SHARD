@@ -341,22 +341,40 @@ static void voice_start(track_t *t, voice_t *v, uint32_t note, uint32_t vel, int
     }
 }
 
-/* MONO / LEGATO / UNISON: one note on one voice (eight for UNISON, or the
- * engine's voice cap, spread by DETUNE over the same width) */
+/* the voices of one mono note: UNISON's (eight, or the engine's cap), STRUM's three (the root, a fifth and an octave
+ * above: the mangler's power chord, 2026-11-19), else one */
+static uint32_t mono_nv(const track_t *t, uint32_t mode)
+{
+    if (mode == V_UNISON)
+        return trk_nvoice(t);
+#if FELUCCA_MANGLER
+    if (mode == V_STRUM)
+        return trk_nvoice(t) < 3u ? trk_nvoice(t) : 3u;
+#endif
+    return 1u;
+}
+
+/* MONO / LEGATO / UNISON / STRUM: one note on one voice (eight for UNISON, or the engine's voice cap, spread by DETUNE
+ * over the same width; STRUM: three, the note, a fifth and an octave above, MONO's retrigger and glide) */
 static void mono_play(track_t *t, uint32_t note, uint32_t vel, int retrig, int glide)
 {
-    uint32_t mode = (uint32_t)t->p[P_VOICE], nv = mode == V_UNISON ? trk_nvoice(t) : 1u, i;
+    uint32_t mode = (uint32_t)t->p[P_VOICE], nv = mono_nv(t, mode), i, uni = mode == V_UNISON;
+    static const uint8_t STRUM_UP[3] = {0, 7, 12};
     for (i = 0; i < nv; i++) {
         voice_t *v = &t->v[i];
         int32_t k = 2 * (int32_t)i - (int32_t)(nv - 1u);   /* -7 .. 7 */
+        uint32_t vn = uni ? note : note + STRUM_UP[i % 3u];
+        if (vn > 127u)
+            vn -= 12u;                                      /* (STRUM at the top: an octave down) */
         if (nv > 1u && nv < NVOICE)
             k = k * (NVOICE - 1) / (int32_t)(nv - 1u);      /* fewer voices: the outer ones as wide */
-        v->fine = nv > 1u ? k * t->p[P_DETUNE] * 56 / 889 : 0;   /* up to ~±40 cents */
+        v->fine = nv > 1u && uni ? k * t->p[P_DETUNE] * 56 / 889 : 0;   /* up to ~±40 cents */
         if (retrig || !v->active || !v->gate) {
             if ((!v->active || v->stage == 4u) && !voice_room(t, i > 0))
                 continue;                                   /* no room for this extra UNISON voice */
             /* level: about the same sum for 8 or 4 voices at random phases */
-            voice_start(t, v, note, nv >= NVOICE ? vel * 36u / 100u : nv > 1u ? vel / 2u : vel, glide);
+            voice_start(t, v, vn, nv >= NVOICE ? vel * 36u / 100u : !uni && nv > 1u ? vel * 3u / 5u :   /* (STRUM's */
+                        nv > 1u ? vel / 2u : vel, glide);   /* three: about one note's loudness) */
             v->side = (uint8_t)(i & 1u);                    /* SPREAD: the detuned voices alternate */
             if (nv > 1u && i && !ENGINES[t->engine]->sampled) {   /* random start phases: */
                 static uint32_t seed = 0x1234567u;          /* in phase they stack, evenly spread they cancel */
@@ -364,8 +382,8 @@ static void mono_play(track_t *t, uint32_t note, uint32_t vel, int retrig, int g
                 v->ph[0] += seed;
             }
         } else {                                            /* legato: new pitch, same envelope */
-            v->note = (uint8_t)note;
-            v->pitch16 = (int32_t)note * 16;
+            v->note = (uint8_t)vn;
+            v->pitch16 = (int32_t)vn * 16;
             v->mvel = t->m_vel;
             v->mrnd = t->m_rnd;
             if (vel > v->vel && nv == 1u)
@@ -444,7 +462,7 @@ static void trk_note_on(track_t *t, uint32_t note, uint32_t vel)
         want = mono_pick(t);
         if (sounding && want == t->mono_note)
             return;                                     /* LOW / HIGH priority: this key does not win */
-        if (mode == V_MONO)                             /* MONO: always retrigger, glide when GLIDE is set */
+        if (mode == V_MONO || mode == V_STRUM)          /* MONO, STRUM: always retrigger, glide when GLIDE is set */
             mono_play(t, want, vel, 1, t->p[P_GLIDE] != 0 || t->slide_glide);
         else                                            /* LEGATO / UNISON: glide only between held notes */
             mono_play(t, want, vel, !sounding, sounding && (t->p[P_GLIDE] != 0 || t->slide_glide));
@@ -462,7 +480,7 @@ static void trk_note_off(track_t *t, uint32_t note)
     t->xp_n = (uint8_t)k;
     mono_remove(t, note);                              /* a mode change must not retain a released key */
     if (mode != V_POLY) {
-        uint32_t nv = mode == V_UNISON ? trk_nvoice(t) : 1u;
+        uint32_t nv = mono_nv(t, mode);
         if (t->mono_note == note) {
             uint32_t next = mono_pick(t);
             if (next) {                                 /* fall back to a held note, legato */

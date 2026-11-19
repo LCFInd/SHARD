@@ -244,6 +244,16 @@ The values live in every track's DRUM lane levels 5..8 (unused in the mangler; c
 before holds 127 in all four and loads the defaults (ATK 0, DEC 60, SUS 0, REL 40: a decaying blip). Cost: the
 envelope's tick, one per voice per block; the matrix costs nothing while no slot is active.
 
+## STRUM (2026-11-19)
+
+VOICE's VCE has a fifth mode, STRUM (after UNI; the mangler only): MONO with a power chord. Each note plays three
+voices, the key, a fifth (+7) and an octave (+12) above it, each at about 60 % of the velocity so the chord is about
+as loud as one note. It behaves as MONO: one chord at a time, a new key retriggers all three (gliding with GLIDE),
+letting go falls back to a held key (PRIO), and the last key let go releases the chord. DETUNE does nothing here;
+SPREAD puts the fifth on the other side. A voice past note 127 drops an octave. It takes three of the eight shared
+voices, and under overload the fifth and the octave go first. The three start together; a strummed delay between
+them is not there yet.
+
 ### A user slot played silence (fixed 2026-11-19)
 
 Without the built-in samples (1d1e949 on), the user slots' data was addressed from a 4-byte array of zeros. gcc and

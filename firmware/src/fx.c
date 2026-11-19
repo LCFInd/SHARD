@@ -995,7 +995,8 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
     if (deck_of(t))
         deck_xfade((uint32_t)(t - trk));                /* DECK MODE: this block's crossfader gain */
 #endif
-    T_SPREAD(t) = t->p[P_SPRD] > 0 && (trk_vmode(t) == V_POLY || trk_vmode(t) == V_UNISON);   /* (SPREAD, mix_spread) */
+    T_SPREAD(t) = t->p[P_SPRD] > 0 && (trk_vmode(t) == V_POLY || trk_vmode(t) == V_UNISON ||
+                                       trk_vmode(t) == V_STRUM);   /* (SPREAD, mix_spread; STRUM: the fifth one side) */
 #if FELUCCA_CPU2
     nr = track_render(t, b, n);
     part_cost[(uint32_t)(t - trk) % NTRK] = (uint16_t)(nr * ENG_VCOST[t->engine % NENGINES] + (nr || t->tail ? 60u : 0u));

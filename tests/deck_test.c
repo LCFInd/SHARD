@@ -9,7 +9,8 @@
  *   6. no built-in samples (FELUCCA_BUILTIN 0, as the device): a stored BREAK / PIANO / SAMPLE set plays and loads
  *      as USR1, the knobs skip them, the defaults and presets are on USR1, a loaded slot shows its sample's name
  *   7. the MASTER EQ; 8. the 4-point interpolation's response; 9. (argv[1]: an uploaded slot of white noise) heard and
- *      flat through SAMPLE, the mix and the master; 10. the MOD ENV: its shape, MENV -> XLO / DRIVE, old projects
+ *      flat through SAMPLE, the mix and the master; 10. the MOD ENV: its shape, MENV -> XLO / DRIVE, old projects;
+ *   11. STRUM: MONO with a fifth and an octave
  * Run by tests/run_host_tests.sh (the mangler's flags). */
 #include <stdint.h>
 static uint32_t host_slots[4u * 0x14000u / 4u];          /* USR1..4 (zero: empty) */
@@ -483,6 +484,46 @@ int main(int argc, char **argv)
                   q.t[0].p[P_MENV_A] == TP[P_MENV_A].def && q.t[3].p[P_MENV_S] == TP[P_MENV_S].def &&
                   q.t[2].p[P_MENV_D] == 90 && q.t[2].p[P_MENV_A] == 127 && q.sum == proj_sum(&q), 0, 0, 0);
         }
+    }
+
+    /* 11: STRUM (VOICE's 5th mode, voice.c mono_play): MONO with a fifth and an octave above, on three voices */
+    {
+        track_t *T = &trk[2];
+        static int32_t o[2u * CTL];
+        uint32_t b;
+        int ok;
+        for (k = 0; k < NTRK; k++)
+            for (i = 0; i < NVOICE; i++)
+                trk[k].v[i].active = 0;
+        host_preset(T, ENGI_SAMPLE, 0);
+        T->p[P_MUTE] = 0;
+        T->p[P_VOICE] = V_STRUM;
+        check("STRUM: the VOICE menu's fifth entry", TP[P_VOICE].max == V_STRUM && !strcmp(TP[P_VOICE].names[V_STRUM], "STRUM"),
+              0, 0, 0);
+        trk_note_on(T, 48, 100);
+        mix_block(o, CTL);
+        ok = T->v[0].active && T->v[1].active && T->v[2].active && !T->v[3].active && T->v[0].note == 48 &&
+             T->v[1].note == 55 && T->v[2].note == 60 && T->v[0].gate && T->v[2].gate;
+        check("STRUM: a key plays it, a fifth and an octave above (C3: C3 G3 C4)", ok, 0, 0, 0);
+        trk_note_on(T, 50, 100);
+        ok = T->v[0].stage == 1 && T->v[2].stage == 1;  /* (the envelopes restarted) */
+        mix_block(o, CTL);
+        ok &= T->v[0].note == 50 && T->v[1].note == 57 && T->v[2].note == 62 && !T->v[3].active;
+        check("STRUM: a second key retriggers the three on it (as MONO), no fourth voice", ok, 0, 0, 0);
+        trk_note_off(T, 50);
+        mix_block(o, CTL);
+        ok = T->v[0].note == 48 && T->v[1].note == 55 && T->v[2].note == 60 && T->v[0].gate && T->v[2].gate;
+        check("STRUM: let go, back to the held key's chord", ok, 0, 0, 0);
+        trk_note_off(T, 48);
+        for (b = 0; b < 4u; b++)
+            mix_block(o, CTL);
+        ok = !T->v[0].gate && !T->v[1].gate && !T->v[2].gate;
+        check("STRUM: the last key let go releases all three", ok, 0, 0, 0);
+        trk_note_on(T, 122, 100);
+        ok = T->v[0].note == 122 && T->v[1].note == 129 - 12 && T->v[2].note == 122;
+        check("STRUM: past 127 a voice drops an octave", ok, 0, 0, 0);
+        trk_all_off(T);
+        T->p[P_VOICE] = V_POLY;
     }
 
     /* 9: white noise uploaded (argv[1].hdr / .bin: tests/run_host_tests.sh, fm1_sample_upload.py) and played by SAMPLE
