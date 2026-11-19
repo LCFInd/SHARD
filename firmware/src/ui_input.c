@@ -1569,9 +1569,6 @@ static void mangler_trim(void)
             t->p[P_AMODE] = 0;
         if (t->p[P_ITYPE])
             t->p[P_ITYPE] = 0;
-        for (m = 0; m < 4u; m++)
-            if (t->p[P_M1AMT + 3u * m])
-                t->p[P_M1AMT + 3u * m] = 0;
         if (k < NDECK && t->p[P_DK_CURVE] > 2)          /* DECK MODE: a deck's values of before (the FM defaults) */
             for (m = P_FM1_ATK; m <= P_FM4_LEVEL; m++)  /* (project.c proj_deck converts a project at its load) */
                 t->p[m] = TP[m].def;
@@ -1600,7 +1597,7 @@ static void ui_input(void)
     shd_sens_poll();                                    /* SHARD's SENS: a user slot's AUTO slices again */
 #endif
 #if FELUCCA_MANGLER
-    mangler_trim();                                     /* (no ARP, INSERT, MOD matrix in this build) */
+    mangler_trim();                                     /* (no ARP, INSERT in this build; the MOD matrix since 2026-11-19) */
 #endif
 #if !FELUCCA_FM4
     for (k = 0; k < NTRK; k++)                          /* a DIGITAL sound any other way (the paths convert it */

@@ -435,7 +435,7 @@ static uint32_t layer_btn(void);
  * track's (its patch's operators, ui_fm6op.c) */
 static int page_visible(uint32_t i)
 {
-    if (PAGES[i].scope == SC_TRACK && PAGES[i].id[0] >= P_LN0 && PAGES[i].id[0] <= P_LN7)
+    if (PAGES[i].scope == SC_TRACK && PAGES[i].id[0] >= P_LN0 && PAGES[i].id[0] <= P_LN7 && PAGES[i].graph != GR_ADSR)
         return TSEL->eng_req % NENGINES == ENGI_DRUM;
     if (PAGES[i].id[0] == P_FTYPE)                    /* FILTER (1.5, #104): ANALOG's */
         return ENG_REF_IS(ENGINES[TSEL->eng_req % NENGINES], ENG_ANALOG);
@@ -447,8 +447,8 @@ static int page_visible(uint32_t i)
                                                      * (FM's OP1 ENV .. OP LEVEL, on the same ids, stay hidden) */
     if (PAGES[i].graph == GR_SCALE || PAGES[i].graph == GR_CHORD)   /* (SCL is LIVE: no scales, no chords) */
         return 0;
-    if (PAGES[i].fam == FAM_ARP || PAGES[i].graph == GR_MOD || PAGES[i].graph == GR_INS)   /* the mangler's trim: no ARP,
-                                                     * no INSERT, no MOD matrix (mangler_trim keeps them off) */
+    if (PAGES[i].fam == FAM_ARP || PAGES[i].graph == GR_INS)   /* the mangler's trim: no ARP, no INSERT (mangler_trim
+                                                     * keeps them off; the MOD matrix is back since 2026-11-19: MENV) */
         return 0;
     if (PAGES[i].fam == FAM_EDIT && (PAGES[i].id[0] == P_VOICE || PAGES[i].id[0] == P_ALLOC || PAGES[i].id[0] == P_SPRD) &&
         TSEL->eng_req % NENGINES == ENGI_SHARD)       /* SHARD: no VOICE pages (EDIT: EDIT 1 .. SLICE FX) */
@@ -460,7 +460,8 @@ static int page_visible(uint32_t i)
 #if FELUCCA_SHARD
     if (PAGES[i].graph == GR_SHFX || PAGES[i].graph == GR_LOOP)
         return TSEL->eng_req % NENGINES == ENGI_SHARD;
-    if (PAGES[i].fam == FAM_ENV && PAGES[i].graph == GR_ADSR)   /* SHARD: its ATK DEC SUS REL are on LOOP */
+    if (PAGES[i].fam == FAM_ENV && PAGES[i].graph == GR_ADSR && PAGES[i].id[0] != P_MENV_A)   /* SHARD: its ATK DEC SUS
+                                                                                         * REL are on LOOP (MOD ENV: shown) */
         return TSEL->eng_req % NENGINES != ENGI_SHARD;
 #else
     if (PAGES[i].graph == GR_SHFX || PAGES[i].graph == GR_LOOP)

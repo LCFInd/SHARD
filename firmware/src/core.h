@@ -168,6 +168,10 @@ _Static_assert((int)P_DK_R19 == (int)P_FM4_LEVEL, "DECK MODE: the 20 values of t
  * 0 .. 127 (100 % = 127) there: its load sets the EQ flat (project.c proj_deck). Kept through sound loads */
 enum { P_MEQ_LO = P_LN0, P_MEQ_MID, P_MEQ_HI, P_MEQ_F };
 #define MEQ_F_DEF 72                                  /* (1.04 kHz) */
+/* MOD ENV (mod.c MS_MENV, voice.c menv_tick, 2026-11-19): a second ADSR per voice, a source of the MOD matrix, in every
+ * track's DRUM lane levels 5 .. 8 (the mangler's; the names in every build). A project of before (the lanes' 127 in all
+ * four) gets the defaults at its load (project.c proj_deck) */
+enum { P_MENV_A = P_LN4, P_MENV_D, P_MENV_S, P_MENV_R };
 
 enum {                          /* global parameters */
     G_BPM, G_SWING, G_CLOCK, G_TUNE,

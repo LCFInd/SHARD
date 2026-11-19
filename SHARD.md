@@ -227,6 +227,23 @@ device's linear interpolation (-6.3 dB at 10 kHz): -8.7 dB at 10 kHz, -5.4 dB at
 - Samples already in the slots keep the old conversion: upload them again to get the new top end. BOUNCE renders on
   the device without the make-up filter.
 
+## MOD ENV and the MOD matrix (2026-11-19)
+
+Each track has a second envelope, the MOD ENV (ENV > MOD ENV: ATK DEC SUS REL, on the same time scale as the AMP ENV,
+drawn the same way). It is a source of the MOD matrix, MENV: per voice like ENV (each note starts it from 0, the key's
+release starts its REL), 0..1, and it never ends a voice. Route it on the MOD page (LFO > MOD: four slots of SRC, DST,
+AMT) to PITCH, CUT, AMP, the engine's E1..E8 (SAMPLE's START is E6), the sends, and three new destinations: XLO and XHI
+(a deck's crossovers) and DRIVE (a deck's three band DRIVEs together). AMT 64 at a full envelope moves a per-block
+destination over its whole range; on tracks 3 and 4 the deck destinations do nothing.
+
+The mangler had the MOD matrix switched off (its page hidden, every AMT zeroed on each frame: `ui_input.c
+mangler_trim`). It is back: the page shows, and slots keep their AMT. ARP and INSERT stay off. The AMP ENV page (the
+track's ADSR, as before) is titled AMP ENV in the mangler. SHARD shows MOD ENV next to its LOOP page.
+
+The values live in every track's DRUM lane levels 5..8 (unused in the mangler; core.h `P_MENV_*`); a project of
+before holds 127 in all four and loads the defaults (ATK 0, DEC 60, SUS 0, REL 40: a decaying blip). Cost: the
+envelope's tick, one per voice per block; the matrix costs nothing while no slot is active.
+
 ### A user slot played silence (fixed 2026-11-19)
 
 Without the built-in samples (1d1e949 on), the user slots' data was addressed from a 4-byte array of zeros. gcc and

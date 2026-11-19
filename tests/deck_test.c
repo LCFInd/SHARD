@@ -9,7 +9,7 @@
  *   6. no built-in samples (FELUCCA_BUILTIN 0, as the device): a stored BREAK / PIANO / SAMPLE set plays and loads
  *      as USR1, the knobs skip them, the defaults and presets are on USR1, a loaded slot shows its sample's name
  *   7. the MASTER EQ; 8. the 4-point interpolation's response; 9. (argv[1]: an uploaded slot of white noise) heard and
- *      flat through SAMPLE, the mix and the master
+ *      flat through SAMPLE, the mix and the master; 10. the MOD ENV: its shape, MENV -> XLO / DRIVE, old projects
  * Run by tests/run_host_tests.sh (the mangler's flags). */
 #include <stdint.h>
 static uint32_t host_slots[4u * 0x14000u / 4u];          /* USR1..4 (zero: empty) */
@@ -405,6 +405,83 @@ int main(int argc, char **argv)
             }
             check(f == 0 ? "4-point interpolation: 1 kHz flat" : f == 1 ? ".. 5 kHz -0.4 dB" : ".. 10 kHz -4.4 dB",
                   fabs(20 * log10(sc / ss) - WANT[f]) < 0.15, "%.2f dB", 20 * log10(sc / ss), 0);
+        }
+    }
+
+    /* 10: the MOD ENV (MENV, mod.c / voice.c menv_tick): its own times, a source per voice (PITCH) and per block (XLO,
+     * DRIVE on a deck), its release at the key's; old projects */
+    {
+        track_t *T = &trk[0];
+        voice_t *v;
+        static int32_t o[2u * CTL];
+        uint32_t b, ok = 1, peak_b = 0;
+        int32_t pk = 0, xl0, x_hi, x_lo;
+        for (k = 0; k < NTRK; k++)
+            for (i = 0; i < NVOICE; i++)
+                trk[k].v[i].active = 0;
+        host_preset(T, ENGI_GRAIN, 0);
+        T->p[P_MENV_A] = 40;                            /* (a few hundred ms) */
+        T->p[P_MENV_D] = 50;
+        T->p[P_MENV_S] = 32;                            /* 25 % */
+        T->p[P_MENV_R] = 30;
+        T->p[P_M1SRC] = MS_MENV;
+        T->p[P_M1DST] = MD_XLO;
+        T->p[P_M1AMT] = 32;                             /* half the range at the top */
+        T->p[P_M2SRC] = MS_MENV;
+        T->p[P_M2DST] = MD_BDRV;
+        T->p[P_M2AMT] = 64;
+        T->p[P_DK_XLO] = 20;
+        for (i = 0; i < 3u; i++)                        /* (3 left them at full DRIVE) */
+            T->p[DK_DRV(i)] = TP[DK_DRV(i)].def;
+        xl0 = T->p[P_DK_XLO];
+        for (b = 0; b < 8u; b++)
+            mix_block(o, CTL);
+        trk_note_on(T, 60, 100);
+        v = &T->v[T->m_vi];
+        for (b = 0; b < 3000u; b++) {                   /* ~2.2 s held */
+            int32_t e = MENV_Q15(T, v);
+            if (e > pk) {
+                pk = e;
+                peak_b = b;
+            }
+            mix_block(o, CTL);
+        }
+        x_hi = MENV_Q15(T, v);
+        ok = pk > 32000 && peak_b > 10u && abs(x_hi - 8192) < 600;
+        check("MENV: rises over ATK to full, settles at SUS (25 %)", ok, "peak at block %.0f, sustain %.0f", peak_b, x_hi);
+        check("MENV: its slots leave XLO and DRIVE stored as set (the matrix moves them in the block only)",
+              T->p[P_DK_XLO] == xl0 && T->p[P_DK_LDRV] == TP[P_DK_LDRV].def, 0, 0, 0);
+        {   /* within the block: XLO up by AMT 32 x 25 %, DRIVE by 25 % of its range */
+            int on = mod_begin(T);
+            int32_t xl = T->p[P_DK_XLO], dl = T->p[P_DK_LDRV], dm = T->p[P_DK_MDRV], dh = T->p[P_DK_HDRV];
+            if (on)
+                mod_end(T);
+            check("MENV -> XLO and -> DRIVE: moved in the block (all three bands' DRIVE)",
+                  on && abs(xl - (xl0 + 16)) <= 2 && abs(dl - (TP[P_DK_LDRV].def + 32)) <= 2 && dl == dm && dm == dh,
+                  "XLO %.0f, DRIVE %.0f", xl, dl);
+        }
+        trk_note_off(T, 60);
+        for (b = 0; b < 3000u; b++)
+            mix_block(o, CTL);
+        x_lo = MENV_Q15(T, v);
+        check("MENV: released with the key, back to 0", x_lo == 0 && menv_st[0][v - T->v] == 0, "%.0f", x_lo, 0);
+        T->p[P_M1SRC] = T->p[P_M2SRC] = 0;
+        T->p[P_M1DST] = T->p[P_M2DST] = 0;
+        T->p[P_M1AMT] = T->p[P_M2AMT] = 0;
+        {
+            static project_t q;
+            memset(&q, 0, sizeof q);
+            q.magic = PROJ_MAGIC;
+            q.size = sizeof q;
+            for (k = 0; k < NTRK; k++)
+                for (i = 0; i < 8u; i++)
+                    q.t[k].p[P_LN0 + i] = 127;
+            q.t[2].p[P_MENV_D] = 90;                    /* (set: kept) */
+            q.sum = proj_sum(&q);
+            proj_deck(&q);
+            check("a project of before: MOD ENV defaults where the lanes' 127 were, a set one kept",
+                  q.t[0].p[P_MENV_A] == TP[P_MENV_A].def && q.t[3].p[P_MENV_S] == TP[P_MENV_S].def &&
+                  q.t[2].p[P_MENV_D] == 90 && q.t[2].p[P_MENV_A] == 127 && q.sum == proj_sum(&q), 0, 0, 0);
         }
     }
 

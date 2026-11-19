@@ -50,15 +50,38 @@
  * presets read and write t->p from the main loop, which the ISR preempts; TIMER5 only fills the MIDI rings),
  * and the engines read t->p as before. An engine reads its parameters in note_on (events_block) unmodulated.
  * Nothing active (every slot with SRC, DST or AMT at 0): no work, and the sound is bit-identical. */
-enum { MS_OFF, MS_LFO, MS_ENV, MS_VEL, MS_KEY, MS_RAND, MS_MODW, MS_AT, MS_EXPR, MS_SH, MS_SLEW, MS_N };
+/* SHARD (the mangler, 2026-11-19): MENV, the MOD ENV (a second ADSR per voice: P_MENV_*, voice.c menv_tick), per
+ * voice and 0..1 as ENV; XLO, XHI (DECK MODE's crossovers) and DRIVE (its three bands' DRIVE together), per block as
+ * E1..E8: AMT 64 at a full source = the whole range. A deck reads them in the part's block (deck.c), so they move as
+ * the matrix's other per-block destinations; on tracks 3 and 4 nothing reads them */
+enum { MS_OFF, MS_LFO, MS_ENV, MS_VEL, MS_KEY, MS_RAND, MS_MODW, MS_AT, MS_EXPR, MS_SH, MS_SLEW,
+#if FELUCCA_MANGLER
+       MS_MENV,
+#endif
+       MS_N };
 enum { MD_OFF, MD_PITCH, MD_CUT, MD_SHP, MD_AMP, MD_PAN, MD_DIST, MD_CHO, MD_DLY, MD_REV, MD_RATE, MD_VIB, MD_E1,
-       MD_DEPTH = MD_E1 + 8, MD_VEL, MD_TIME, MD_N };   /* (append-only: the stored values keep their meaning) */
+       MD_DEPTH = MD_E1 + 8, MD_VEL, MD_TIME,
+#if FELUCCA_MANGLER
+       MD_XLO, MD_XHI, MD_BDRV,
+#endif
+       MD_N };   /* (append-only: the stored values keep their meaning) */
 _Static_assert(NELEM(N_MSRC) == MS_N && NELEM(N_MDST) == MD_N, "N_MSRC / N_MDST == MS_* / MD_*");
 _Static_assert(P_M2SRC == P_M1SRC + 3 && P_M4AMT == P_M1SRC + 11 && P_M4AMT + 1 == P_FM1_ATK, "matrix slots: 3 ids each");
 #define NMSLOT 4u
 #define NMSLOT_ALL (NMSLOT + 1u)  /* + 1.8's AFTERTOUCH (VOICE 3): a slot of its own, its source AT (P_ATDST, P_ATAMT) */
+#if FELUCCA_MANGLER
+#define MS_VOICE(s) (((s) >= MS_ENV && (s) <= MS_RAND) || (s) == MS_MENV)   /* a value per voice */
+#define MD_DECK(d) ((d) >= MD_XLO && (d) <= MD_BDRV)
+/* each voice's MOD ENV (voice.c menv_tick): its level (Q24, as v->env) and stage (0 off, 1 ATK, 2 DEC / SUS, 3 REL) */
+static int32_t menv_e[NTRK][NVOICE] __attribute__((section(".pool")));
+static uint8_t menv_st[NTRK][NVOICE] __attribute__((section(".pool")));
+#define MENV_Q15(tk, vc) (menv_e[(uint32_t)((tk) - trk) % NTRK][(uint32_t)((vc) - (tk)->v) % NVOICE] >> 9)
+#else
 #define MS_VOICE(s) ((s) >= MS_ENV && (s) <= MS_RAND)             /* a value per voice */
-#define MS_BIPOLAR(s) ((s) == MS_LFO || (s) == MS_KEY || (s) == MS_RAND || (s) >= MS_SH)
+#define MD_DECK(d) 0
+#endif
+#define MS_BIPOLAR(s) ((s) == MS_LFO || (s) == MS_KEY || (s) == MS_RAND || (s) == MS_SH || (s) == MS_SLEW)
+#define MD_PERBLOCK(d) ((d) > MD_AMP && ((d) < MD_DEPTH || MD_DECK(d)))   /* (mod_slot's offsets into t->p) */
 #define MD_ENGINE(d) ((d) >= MD_E1 && (d) < MD_E1 + 8)           /* E1..E8: P_E0..P_E7 */
 
 /* slot k's source, destination, amount (k == NMSLOT: AFTERTOUCH's) */
@@ -68,13 +91,25 @@ static inline int32_t ms_amt(const int16_t *p, uint32_t k) { return k < NMSLOT ?
 /* the slots to look at: AFTERTOUCH's only while it routes (the matrix's own loops as before otherwise) */
 static inline uint32_t ms_n(const int16_t *p) { return NMSLOT + (p[P_ATDST] && p[P_ATAMT]); }
 
-/* the track parameter of a per-block destination */
-static uint32_t mod_param(uint32_t d)
+/* the track parameter of a per-block destination (k: DRIVE's band 0..2, the others 0) */
+static uint32_t mod_param(uint32_t d, uint32_t k)
 {
     static const uint8_t ID[MD_E1] = {[MD_PAN] = P_PAN, [MD_DIST] = P_DIST, [MD_CHO] = P_CHOR, [MD_DLY] = P_DLY,
                                       [MD_REV] = P_REV, [MD_RATE] = P_LRATE, [MD_VIB] = P_LD_PIT};
+#if FELUCCA_MANGLER
+    if (MD_DECK(d))
+        return d == MD_XLO ? P_DK_XLO : d == MD_XHI ? P_DK_XHI : (uint32_t)DK_DRV(k);
+#else
+    (void)k;
+#endif
     return MD_ENGINE(d) ? P_E0 + d - MD_E1 : ID[d];
 }
+#if FELUCCA_MANGLER
+#define MD_DECK_DRV MD_BDRV
+#else
+#define MD_DECK_DRV MD_N
+#endif
+#define MOD_NK (NMSLOT_ALL + 2u)                        /* per-block parameters held: a slot each, DRIVE's three */
 
 typedef struct {                 /* a part's, while mix_part renders it (one per part: two cores render at once, fx.c mix_block) */
     uint8_t on;                  /* a slot is active: track_render calls mod_voice */
@@ -84,8 +119,8 @@ typedef struct {                 /* a part's, while mix_part renders it (one per
     int32_t ldep;                /* DEPTH: the track LFO's gain (Q15; 32767 = none, track_render leaves it alone) */
     uint8_t vsrc[NMSLOT_ALL], vdst[NMSLOT_ALL];
     int8_t vamt[NMSLOT_ALL];
-    uint8_t kid[NMSLOT_ALL];     /* per-block: the parameter, its stored value */
-    int16_t keep[NMSLOT_ALL];
+    uint8_t kid[MOD_NK];         /* per-block: the parameter, its stored value */
+    int16_t keep[MOD_NK];
 } modw_t;
 #if FELUCCA_CPU2
 static modw_t mod_w[NTRK];
@@ -128,6 +163,10 @@ static int32_t mod_tsrc(const track_t *t, uint32_t s, int32_t lfo)
         return mod_key(t->m_key);
     case MS_RAND:
         return t->m_rnd;
+#if FELUCCA_MANGLER
+    case MS_MENV:                                       /* (the latest note's: 0 when it has ended) */
+        return t->v[t->m_vi % NVOICE].active ? MENV_Q15(t, &t->v[t->m_vi % NVOICE]) : 0;
+#endif
     case MS_MODW:
         return t->mw * 258;
     case MS_AT:
@@ -183,7 +222,7 @@ static inline __attribute__((always_inline)) void mod_slot(track_t *t, modw_t *m
 {
     const int16_t *p = t->p;
     uint32_t j;
-    if (!s || !d || !a || s >= MS_N || d >= MD_DEPTH)
+    if (!s || !d || !a || s >= MS_N || d >= MD_N || !(d <= MD_AMP || MD_PERBLOCK(d)))
         return;
     if (d <= MD_AMP) {                                  /* per voice */
         mw->amp |= d == MD_AMP;
@@ -198,18 +237,23 @@ static inline __attribute__((always_inline)) void mod_slot(track_t *t, modw_t *m
         return;
     }
     {                                                   /* per block: AMT 64 = the whole range */
-        uint32_t id = mod_param(d);
-        const param_desc_t *pd = id >= P_E0 ? &ENGINES[t->engine]->edit[id - P_E0] : &TP[id];
         int32_t x = mod_tsrc(t, s, lfo);
-        for (j = 0; j < mw->nk && mw->kid[j] != id; j++)
-            ;
-        if (j == mw->nk) {
-            mw->kid[j] = (uint8_t)id;
-            mw->keep[j] = p[id];
-            off[j] = 0;
-            mw->nk++;
+        uint32_t b, nb = d == MD_DECK_DRV ? 3u : 1u;   /* (DRIVE: the three bands' each) */
+        for (b = 0; b < nb; b++) {
+            uint32_t id = mod_param(d, b);
+            const param_desc_t *pd = id >= P_E0 && id < P_E0 + 8u ? &ENGINES[t->engine]->edit[id - P_E0] : &TP[id];
+            for (j = 0; j < mw->nk && mw->kid[j] != id; j++)
+                ;
+            if (j == MOD_NK)
+                return;
+            if (j == mw->nk) {
+                mw->kid[j] = (uint8_t)id;
+                mw->keep[j] = p[id];
+                off[j] = 0;
+                mw->nk++;
+            }
+            off[j] += (((x * a) >> 6) * (pd->max - pd->min)) >> 15;
         }
-        off[j] += (((x * a) >> 6) * (pd->max - pd->min)) >> 15;
     }
 }
 
@@ -218,12 +262,13 @@ static inline __attribute__((always_inline)) void mod_slot(track_t *t, modw_t *m
 static __attribute__((noinline)) int mod_begin(track_t *t)
 {
     const int16_t *p = t->p;
-    int32_t lfo, off[NMSLOT_ALL];
-    uint32_t k, j, at = p[P_ATDST] && p[P_ATAMT] && p[P_ATDST] < MD_VEL;
+    int32_t lfo, off[MOD_NK];
+    uint32_t k, j, at = p[P_ATDST] && p[P_ATAMT] && p[P_ATDST] != MD_VEL && p[P_ATDST] != MD_TIME;
     modw_t *mw = &MOD(t);
     mw->on = 0;
     for (k = 0; k < NMSLOT; k++)                        /* (VEL and TIME: at the notes, not here) */
-        if (p[P_M1SRC + 3u * k] && p[P_M1DST + 3u * k] && p[P_M1AMT + 3u * k] && p[P_M1DST + 3u * k] < MD_VEL)
+        if (p[P_M1SRC + 3u * k] && p[P_M1DST + 3u * k] && p[P_M1AMT + 3u * k] && p[P_M1DST + 3u * k] != MD_VEL &&
+            p[P_M1DST + 3u * k] != MD_TIME)
             break;
     if (k == NMSLOT && !at)
         return 0;
@@ -242,7 +287,7 @@ static __attribute__((noinline)) int mod_begin(track_t *t)
         mod_slot(t, mw, off, lfo, MS_AT, (uint32_t)p[P_ATDST], p[P_ATAMT]);
     for (j = 0; j < mw->nk; j++) {
         uint32_t id = mw->kid[j];
-        const param_desc_t *pd = id >= P_E0 ? &ENGINES[t->engine]->edit[id - P_E0] : &TP[id];
+        const param_desc_t *pd = id >= P_E0 && id < P_E0 + 8u ? &ENGINES[t->engine]->edit[id - P_E0] : &TP[id];
         t->p[id] = (int16_t)clamp(mw->keep[j] + off[j], pd->min, pd->max);
     }
     return 1;
@@ -270,7 +315,11 @@ static __attribute__((noinline)) void mod_voice(track_t *t, voice_t *v, vmod_t *
         t->m_env = env;                                 /* ENV of the latest note, for per-block destinations */
     for (k = 0; k < mw->nv; k++) {
         uint32_t s = mw->vsrc[k];
-        int32_t x = s == MS_ENV ? env : s == MS_VEL ? v->mvel * 258 : s == MS_KEY ? mod_key(v->note) : v->mrnd;
+        int32_t x = s == MS_ENV ? env : s == MS_VEL ? v->mvel * 258 : s == MS_KEY ? mod_key(v->note) :
+#if FELUCCA_MANGLER
+                    s == MS_MENV ? MENV_Q15(t, v) :
+#endif
+                    v->mrnd;
         mod_voice_add(s, mw->vdst[k], x, mw->vamt[k], &pit, &cut, &shp, &gain);
     }
     if (pit) {

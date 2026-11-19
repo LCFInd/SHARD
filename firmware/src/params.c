@@ -68,9 +68,18 @@ static const char *const N_IRATE[] = {"689", "919", "1.1k", "1.4k", "1.8k", "2.2
 /* modulation matrix (mod.c): sources, destinations (E1..E8 = P_E0..P_E7: shown with the engine's labels).
  * Append-only (stored values keep their meaning): S&H SLEW and DEPTH (#132) came after EXPR and E8; VEL and TIME
  * (1.5.6, #213: at the note) after DEPTH */
-static const char *const N_MSRC[] = {"OFF", "LFO", "ENV", "VEL", "KEY", "RAND", "MODW", "AT", "EXPR", "S&H", "SLEW"};
+#define ENV_TITLE (FELUCCA_MANGLER ? "AMP ENV" : "ENV")   /* (the mangler: beside its MOD ENV) */
+static const char *const N_MSRC[] = {"OFF", "LFO", "ENV", "VEL", "KEY", "RAND", "MODW", "AT", "EXPR", "S&H", "SLEW"
+#if FELUCCA_MANGLER
+                                     , "MENV"           /* (the MOD ENV: mod.c MS_MENV) */
+#endif
+};
 static const char *const N_MDST[] = {"OFF", "PITCH", "CUT", "SHP", "AMP", "PAN", "DIST", "CHO", "DLY", "REV", "RATE",
-                                     "VIB", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "DEPTH", "VEL", "TIME"};
+                                     "VIB", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "DEPTH", "VEL", "TIME"
+#if FELUCCA_MANGLER
+                                     , "XLO", "XHI", "DRIVE"   /* (DECK MODE's crossovers, its three bands' DRIVE) */
+#endif
+};
 /* 1.8: AFTERTOUCH SENS, the keys' pressure (keytouch.c): OFF (the keys send none; the routing still takes MIDI's), 1 the
  * firmest lean for full pressure .. 10 the lightest */
 static const char *const N_ATSNS[] = {"OFF", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"};
@@ -194,15 +203,19 @@ static const param_desc_t TP[P_COUNT] = {
     [P_VOIC] = PE("VOIC", N_VOIC, 0),
 /* the DRUM engine's lane levels (eng_drum.c, #97): 100 % = the kit as designed (the sound before 1.1) */
 #define LANE(k, l) [P_LN0 + (k)] = PD(l, F_PCT, 0, 127, 127)
-#if FELUCCA_MANGLER                                   /* (no DRUM: the first four are the MASTER EQ, track 1's) */
-    [P_MEQ_LO] = {"LOW", F_INT, -12, 12, 0, MEQ_DB_NAMES, 0},
+#if FELUCCA_MANGLER                                   /* (no DRUM: the first four are the MASTER EQ, track 1's; */
+    [P_MEQ_LO] = {"LOW", F_INT, -12, 12, 0, MEQ_DB_NAMES, 0},       /* the last four each track's MOD ENV) */
     [P_MEQ_MID] = {"MID", F_INT, -12, 12, 0, MEQ_DB_NAMES, 0},
     [P_MEQ_HI] = {"HIGH", F_INT, -12, 12, 0, MEQ_DB_NAMES, 0},
     [P_MEQ_F] = {"MID F", F_INT, 0, 127, MEQ_F_DEF, DECK_HZ_NAMES, 0},
+    [P_MENV_A] = PD("ATK", F_TIME, 0, 127, 0),
+    [P_MENV_D] = PD("DEC", F_TIME, 0, 127, 60),
+    [P_MENV_S] = PD("SUS", F_PCT, 0, 127, 0),
+    [P_MENV_R] = PD("REL", F_TIME, 0, 127, 40),
 #else
     LANE(0, "KICK"), LANE(1, "SNARE"), LANE(2, "CLAP"), LANE(3, "HATCL"),
-#endif
     LANE(4, "HATOP"), LANE(5, "TOM"), LANE(6, "RIM"), LANE(7, "BELL"),
+#endif
 #undef LANE
     [P_LSYNC] = PE("SYNC", N_LSYNC, 0),
     [P_LTRIG] = PE("TRIG", N_LTRIG, 0),
@@ -576,7 +589,10 @@ typedef struct {
 } page_t;
 
 static const page_t PAGES[] = {
-    {"ENV", FAM_ENV, SC_TRACK, GR_ADSR, {P_ATK, P_DEC, P_SUS, P_REL}},
+    {ENV_TITLE, FAM_ENV, SC_TRACK, GR_ADSR, {P_ATK, P_DEC, P_SUS, P_REL}},
+#if FELUCCA_MANGLER
+    {"MOD ENV", FAM_ENV, SC_TRACK, GR_ADSR, {P_MENV_A, P_MENV_D, P_MENV_S, P_MENV_R}},   /* (a MOD source: MENV) */
+#endif
     {"LOOP", FAM_ENV, SC_TRACK, GR_LOOP, {P_ATK, P_DEC, P_SUS, P_REL}},  /* SHARD only, in ENV's place (2026-11-14: was
                                                                              * EDIT's first page): the whole loop, the voices playing it,
                                                                              * the track's ENV over it (ui_slice.c); ENV's page hides */

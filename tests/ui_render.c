@@ -809,7 +809,7 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
 #if FELUCCA_MANGLER
        S_ARP_PEEK, S_ARP_HELD, S_ARP_KNOBS, S_ARP_PRE, S_BOUNCE, S_BOUNCE_USED, S_BOUNCE_BUSY, S_LIVE_OFF, S_LIVE_PLAY, S_LIVE_LAYER,
        S_EDIT_GRAIN_PLAY, S_THEME_LOOP, S_THEME_SLICES, S_SAMPLE_TRIM,
-       S_DECK_ISO, S_DECK_ISO2, S_DECK_MIX, S_DECK_FB, S_DECK_FB_RING, S_MEQ, S_MEQ_FLAT,
+       S_DECK_ISO, S_DECK_ISO2, S_DECK_MIX, S_DECK_FB, S_DECK_FB_RING, S_MEQ, S_MEQ_FLAT, S_MOD_ENV, S_MOD_MENV,
 #endif
        S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
@@ -848,7 +848,7 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
 #if FELUCCA_MANGLER
     "arp_layer", "arp_layer_held", "arp_layer_knobs", "arp_layer_pre", "bounce", "bounce_used", "bounce_busy", "live_off", "live_playing", "live_layer",
     "edit_grain_playing", "theme_custom_loop", "theme_custom_slices", "sample_trim_playing",
-    "deck_isolate", "deck_isolate2", "deck_mix", "deck_feedback", "deck_feedback_ring", "master_eq", "master_eq_flat",
+    "deck_isolate", "deck_isolate2", "deck_mix", "deck_feedback", "deck_feedback_ring", "master_eq", "master_eq_flat", "mod_env", "mod_menv_xlo",
 #endif
 };
 
@@ -1154,11 +1154,11 @@ static void setup(int s)
         trk[0].p[P_REV] = 127; trk[2].p[P_REV] = 1; trk[3].p[P_MUTE] = 1;
         song.rec = 1u | 8u; ui.hot_col = 3; ui.hot_t = 30;
         break;
-    case S_ENV: go_title("ENV"); ui.hot_col = 2; ui.hot_t = 30; break;
+    case S_ENV: go_title(ENV_TITLE); ui.hot_col = 2; ui.hot_t = 30; break;
     case S_ENVDEST: go_title("ENV DEST"); break;
     case S_ENV_SYNC:                                  /* 1.5: ENV SYNC on, the note values (the widest: 1/16D 1/32T) */
         TSEL->p[P_ESYNC] = 1; TSEL->p[P_ATK] = 52; TSEL->p[P_DEC] = 16; TSEL->p[P_REL] = 127;
-        go_title("ENV"); ui.hot_col = 0; ui.hot_t = 30; break;
+        go_title(ENV_TITLE); ui.hot_col = 0; ui.hot_t = 30; break;
     case S_ENV_DEST_SYNC: TSEL->p[P_ESYNC] = 1; go_title("ENV DEST"); break;
     case S_FILTER: TSEL->p[P_FTYPE] = 1; go_title("FILTER"); break;   /* 1.5: ANALOG's TYPE CUT RES KTR */
     case S_LFO: go_title("LFO"); break;
@@ -1388,7 +1388,7 @@ static void setup(int s)
     /* the FX layer's map: held alone; REPEAT 1/16 + LPF + a mute playing with the macros turned;
      * at 72 BPM: a REPEAT 1/16 waiting for its 1/16 (shown THEME) beside TAPE STOP playing, and REPEAT 1/8
      * held, too long at that tempo (it and REVERSE dimmed) */
-    case S_FX_PEEK: go_title("ENV"); ui.layer = LAYER_FX; break;
+    case S_FX_PEEK: go_title(ENV_TITLE); ui.layer = LAYER_FX; break;
     case S_FX_HELD:
         go_home(); ui.layer = LAYER_FX;
         perf_held = perf_act = PF_BIT(PF_R16) | PF_BIT(PF_LPF) | PF_BIT(PF_M1 + 1);
@@ -1413,7 +1413,7 @@ static void setup(int s)
         perf_k[3] = 25; ui.hot_col = 3; ui.hot_t = 30;
         break;
     case S_FX_ASSIGN:
-        go_title("ENV"); ui.layer = ui.ly = ui.lock = LAYER_FX;
+        go_title(ENV_TITLE); ui.layer = ui.ly = ui.lock = LAYER_FX;
         perf_map_put(fx_keys, 1, PF_PHS); perf_map_put(fx_keys, 12, PF_FLG); perf_map_put(fx_keys, 11, PF_N);
         fx_map_sync(); perf_remap = 0;
         kb_layer = 1u << key_at(0, 1); lys.fxk = (uint8_t)(key_at(0, 1) + 1u);
@@ -1448,13 +1448,13 @@ static void setup(int s)
     /* the GLO SCL EDIT layers (ui_layer.c): just opened (a peek), and in use: GLO with T2 muted, T3 soloed (its key
      * held) and KNOB 1 turned; with CLK EXT (TAP dimmed); SCL at D# minor, KNOB 2 turned; EDIT on DIGITAL preset 3,
      * a favourite; a user preset; the hint after a tap */
-    case S_GLO_PEEK: go_title("ENV"); ui.layer = LAYER_GLO; break;
+    case S_GLO_PEEK: go_title(ENV_TITLE); ui.layer = LAYER_GLO; break;
     case S_GLO_ACTIVE:
         go_home(); ui.layer = LAYER_GLO; trk[1].p[P_MUTE] = 1; perf_solo = 4; trk[0].p[P_LEVEL] = 90;
         ui.hot_col = 0; ui.hot_t = 30;
         break;
     case S_GLO_EXT: go_home(); ui.layer = LAYER_GLO; song.g[G_CLOCK] = 1; trk[0].p[P_MUTE] = trk[3].p[P_MUTE] = 1; break;
-    case S_SCL_PEEK: go_title("ENV"); ui.layer = LAYER_SCL; break;
+    case S_SCL_PEEK: go_title(ENV_TITLE); ui.layer = LAYER_SCL; break;
     case S_SCL_ACTIVE: go_home(); ui.layer = LAYER_SCL; TSEL->p[P_ROOT] = 3; TSEL->p[P_SCALE] = 2; ui.hot_col = 1; ui.hot_t = 30; break;
     case S_EDIT_PEEK: go_title("EDIT 1"); ui.layer = LAYER_EDIT; break;
     case S_EDIT_ACTIVE: eng(E_FM); apply_preset_to(TSEL, 2); favorite_set(E_FM, 2, 1); go_home(); ui.layer = LAYER_EDIT;
@@ -1463,8 +1463,8 @@ static void setup(int s)
         go_home(); ui.layer = LAYER_EDIT; break;
     case S_LAYER_HINT: go_page(GR_TRK); ui.msg_t = 0; layer_tap(LAYER_GLO); break;
     /* #83: locked open by a double tap (the lock after the header's name): EDIT and FX */
-    case S_LAYER_LOCK: go_title("ENV"); ui.layer = ui.lock = LAYER_EDIT; break;
-    case S_LAYER_LOCK_FX: go_title("ENV"); ui.layer = ui.lock = LAYER_FX; break;
+    case S_LAYER_LOCK: go_title(ENV_TITLE); ui.layer = ui.lock = LAYER_EDIT; break;
+    case S_LAYER_LOCK_FX: go_title(ENV_TITLE); ui.layer = ui.lock = LAYER_FX; break;
     /* 1.2 SEQ TOOLS (SEQ held on STEP): a melodic track (the sequence's tools), the DRUM grid (+ BEAT, the lane's tools,
      * the lanes; CLAP selected), a song playing (every tool dimmed: STOP TO EDIT) */
     case S_SEQ_TOOLS: go_page(GR_ROLL); ui.layer = LAYER_SEQ; break;
@@ -1805,6 +1805,19 @@ static void setup(int s)
         go_title_page("EQ");
         ui.msg_t = 0;
         break;
+    case S_MOD_ENV:                              /* the MOD ENV on track 1 (SHARD); the MOD page: MENV -> XLO, -> DRIVE */
+    case S_MOD_MENV:
+        song.sel = 0;
+        eng(ENGI_SHARD);
+        TSEL->p[P_MENV_A] = 30; TSEL->p[P_MENV_D] = 70; TSEL->p[P_MENV_S] = 50; TSEL->p[P_MENV_R] = 60;
+        if (s == S_MOD_MENV) {
+            TSEL->p[P_M1SRC] = MS_MENV; TSEL->p[P_M1DST] = MD_XLO; TSEL->p[P_M1AMT] = 40;
+            TSEL->p[P_M2SRC] = MS_MENV; TSEL->p[P_M2DST] = MD_BDRV; TSEL->p[P_M2AMT] = -20; mod_ui_slot = 1;
+            go_title("MOD");
+        } else
+            go_title_page("MOD ENV");
+        ui.msg_t = 0;
+        break;
     case S_THEME_LOOP:                           /* (SHARD) CUSTOM over SWISS: a dark blue, amber main, a coral red */
     case S_THEME_SLICES:
         ux_cust.c1 = RGB(16, 22, 40); ux_cust.c2 = RGB(255, 176, 48); ux_cust.c3 = RGB(232, 236, 245);
@@ -2117,7 +2130,7 @@ static void sweep_columns(void)
             draw(-1);                                    /* the whole page */
             lint();
             sweep_motion();
-            if (str_eq(PAGES[i].title, "ENV") && !esync_pass) {   /* 1.5: again with ENV SYNC's note values */
+            if (str_eq(PAGES[i].title, ENV_TITLE) && !esync_pass) {   /* 1.5: again with ENV SYNC's note values */
                 esync_pass = 1;
                 i--;
             } else {

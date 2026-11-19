@@ -307,6 +307,10 @@ static void voice_start(track_t *t, voice_t *v, uint32_t note, uint32_t vel, int
     v->age = ++vage;
     voice_born[(uint32_t)(t - trk) % NTRK][(uint32_t)(v - t->v) % NVOICE] = voice_clock;
     v->pitch16 = (int32_t)note * 16;
+#if FELUCCA_MANGLER
+    menv_e[(uint32_t)(t - trk) % NTRK][(uint32_t)(v - t->v) % NVOICE] = 0;   /* the MOD ENV from 0 (menv_tick) */
+    menv_st[(uint32_t)(t - trk) % NTRK][(uint32_t)(v - t->v) % NVOICE] = 1;
+#endif
     v->mvel = t->m_vel;                                 /* mod.c: the note's VEL and RAND */
     v->mrnd = t->m_rnd;
     t->m_vi = (uint8_t)(v - t->v);
@@ -585,6 +589,44 @@ static __attribute__((noinline)) void esync_coef(track_t *t)   /* (not inlined: 
     }
 }
 
+#if FELUCCA_MANGLER
+/* one control tick of a voice's MOD ENV (mod.c MS_MENV; P_MENV_*): the AMP ENV's curves and times (ENV_LIN, ENV_EXP; no
+ * ENV SYNC), from 0 at each note, its release when the key is let go; it never ends the voice */
+static inline void menv_tick(track_t *t, voice_t *v)
+{
+    const int16_t *p = t->p;
+    uint32_t ti = (uint32_t)(t - trk) % NTRK, vi = (uint32_t)(v - t->v) % NVOICE;
+    int32_t e = menv_e[ti][vi];
+    uint32_t st = menv_st[ti][vi];
+    if (st && st < 3u && (!v->gate || v->stage == 3))
+        st = 3;
+    switch (st) {
+    case 1:
+        e += (int32_t)ENV_LIN[p[P_MENV_A] & 127];
+        if (e >= (1 << 24)) {
+            e = 1 << 24;
+            st = 2;
+        }
+        break;
+    case 2:
+        e += mulq16(((int32_t)p[P_MENV_S] << 17) - e, ENV_EXP[p[P_MENV_D] & 127]);
+        break;
+    case 3:
+        e -= mulq16(e, ENV_EXP[p[P_MENV_R] & 127]);
+        if (e < (1 << 12)) {
+            e = 0;
+            st = 0;
+        }
+        break;
+    default:
+        e = 0;
+        break;
+    }
+    menv_e[ti][vi] = e;
+    menv_st[ti][vi] = (uint8_t)st;
+}
+#endif
+
 /* one control tick (CTL samples) of the amplitude envelope; returns Q15 */
 static int32_t env_tick(track_t *t, voice_t *v)
 {
@@ -716,6 +758,9 @@ static uint32_t track_render(track_t *t, int32_t *out, uint32_t n)
         if (!v->active)
             continue;
         {
+#if FELUCCA_MANGLER
+            menv_tick(t, v);                            /* (before the AMP ENV: a key let go releases both) */
+#endif
             env = env_tick(t, v);
             if (e->ownenv && v->active) {               /* the engine's envelopes (FM6): they end the voice */
                 if (e->done(t, v)) {

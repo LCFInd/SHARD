@@ -389,6 +389,14 @@ static void proj_deck(project_t *q)
             hit = 1;
         }
     }
+    for (k = 0; k < NTRK; k++) {   /* the MOD ENV (each track's DRUM lanes 5 .. 8 until 2026-11-19: 127 by default) */
+        proj_trk_t *d = &q->t[k];
+        if (d->p[P_MENV_A] == 127 && d->p[P_MENV_D] == 127 && d->p[P_MENV_S] == 127 && d->p[P_MENV_R] == 127) {
+            for (i = P_MENV_A; i <= P_MENV_R; i++)
+                d->p[i] = TP[i].def;
+            hit = 1;
+        }
+    }
     for (k = 0; k < NTRK; k++) {
         proj_trk_t *d = &q->t[k];
         if (d->p[P_DK_CURVE] >= 0 && d->p[P_DK_CURVE] <= 2)
