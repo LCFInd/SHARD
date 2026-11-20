@@ -124,9 +124,7 @@ static const menu_flag_t MENU_FLAGS[] = {
     {MI_MFOLLOW, PREF_MIDI_FOLLOW, {"OFF", "ON"}},     /* 1.5.5, #208: ON, MIDI IN notes select their track (ui_input.c) */
     {MI_SCRWAKE, PREF_WAKE_PANEL, {"+MIDI", "PANEL"}}, /* 1.5.5: PANEL, only the panel wakes SCREEN OFF (ui.c scr_input) */
 #if FELUCCA_CPU2
-    {MI_CPU2, PREF_CPU2_ON, {"OFF", FELUCCA_MANGLER ? "SPLIT (BETA)" : "ON (BETA)"}},   /* 1.6.1: ON, the second core
-                                                        * (main.c, from the next power-on); the mangler: SPLIT (fx.c
-                                                        * mix_pipe: the voices here, each part's rest there) */
+    {MI_CPU2, PREF_CPU2_ON, {"OFF", "ON (BETA)"}},     /* 1.6.1: ON, the second core (main.c, from the next power-on) */
 #endif
 };
 /* SPEAKER EQ (settings.lowcut, fx.c fx_lowcut): an EQ on the master for the small speaker, not a speaker switch

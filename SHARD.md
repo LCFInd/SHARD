@@ -256,25 +256,6 @@ LEVEL, PAN, the sends) stays the one playing. Silent lanes keep the track's own.
 same way. The copies live in the pool (1.4 KB). `tests/song_mod_test.c` plays a song of two slots saved with
 different settings.
 
-## 2ND CORE: SPLIT (2026-11-19)
-
-MENU > SYSTEM > 2ND CORE has OFF and SPLIT (BETA) in the mangler (from the next power-on, as before). Felucca's way of
-using the second core, whole tracks on each core, made SHARD slower on the device (the CPU from about 70 % to 90 %):
-both cores then read samples from the flash through the one cache they share. SPLIT divides the work by kind instead
-(`fx.c mix_pipe`):
-
-- this core renders every track's voices, the only work that reads samples from the flash;
-- the second core does each track's rest: DECK MODE's isolators, shapers, feedback and DJ filter, DIST, INSERT, the
-  SLICER, level, pan and the sends;
-- one track behind: track 1's rest there while this core renders track 2's voices, and so on, all within the same
-  block (no added latency). The shared effects, the crossfader, the MASTER EQ and the limiter stay on this core.
-
-A second core that misreads or stops answering is retired as before: the job it dropped is done here, and the rest of
-the session runs on one core. `tests/split_test.c` renders a busy scene (both decks cut, shaped and fed back, MENV on
-XLO and DRIVE, STRUM with SPREAD, an INSERT, the SLICER, DIST, the MASTER EQ) on one core, SPLIT, and SPLIT with core
-1 failing midway: bit for bit the same, and clean under ThreadSanitizer. Whether it is faster on the FM-1 is not known
-yet: compare the CPU figure with OFF.
-
 ## STRUM (2026-11-19)
 
 VOICE's VCE has a fifth mode, STRUM (after UNI; the mangler only): MONO with a power chord. Each note plays three
