@@ -39,6 +39,28 @@ static struct {
     volatile uint8_t want[NTRK];
 } chain;
 #define CHAIN_OWN 5u                         /* (LIVE) a lane playing the track's own steps, timing, automation */
+#if FELUCCA_MANGLER
+/* SHARD (2026-11-19): a lane brings its slot's modulation too: each track's AMP ENV (and ENV SYNC), MOD ENV, LFO, MOD
+ * matrix and aftertouch routing as that slot saved them, set at each section (chain_lane) and the track's own back on
+ * STOP, as the timing. The rest of the sound (engine, samples, deck, levels) stays the one playing. Silent and OWN
+ * lanes: the track's own. chain_snd[s][track]: s 0..3 the slots (chain_load_slot), 4 the track's own (chain_start).
+ * In the pool: the main RAM has no 1.4 KB to spare */
+static const uint8_t CHAIN_SND[] = {
+    P_ATK, P_DEC, P_SUS, P_REL, P_ESYNC, P_MENV_A, P_MENV_D, P_MENV_S, P_MENV_R,
+    P_LRATE, P_LWAVE, P_LPHASE, P_LFADE, P_LD_PIT, P_LD_FLT, P_LD_SHP, P_LD_AMP, P_LSYNC, P_LTRIG, P_LPOL,
+    P_M1SRC, P_M1DST, P_M1AMT, P_M2SRC, P_M2DST, P_M2AMT, P_M3SRC, P_M3DST, P_M3AMT, P_M4SRC, P_M4DST, P_M4AMT,
+    P_ATSNS, P_ATDST, P_ATAMT};
+#define NCSND (sizeof CHAIN_SND)
+#define CHAIN_SND_OWN 4u
+static int16_t chain_snd[5][NTRK][NCSND] __attribute__((section(".pool")));
+static void chain_snd_set(track_t *t, uint32_t k, uint32_t s)   /* track k's modulation from lane s (else its own) */
+{
+    const int16_t *v = chain_snd[s < 4u ? s : CHAIN_SND_OWN][k % NTRK];
+    uint32_t j;
+    for (j = 0; j < NCSND; j++)
+        t->p[CHAIN_SND[j]] = v[j];
+}
+#endif
 #define CHAIN_NONE 0xFFu
 /* a silent lane: its steps (empty: nothing plays) and its timing (a 4/4 bar of 1/16: the section's length when every
  * track is silent) */
@@ -134,6 +156,9 @@ static void chain_lane(uint32_t i, uint32_t s)
         t->p[P_SSWING] = 0;
         t->p[P_SQNT] = 1;
     }
+#if FELUCCA_MANGLER
+    chain_snd_set(t, i, s);                             /* the slot's envelopes, LFO and MOD matrix */
+#endif
 }
 /* a section starts (chain_start, chain_tick: once a section, not per block; not inlined: off the audio ISR's loop) */
 static __attribute__((noinline)) void chain_apply(void)
@@ -166,6 +191,13 @@ static void chain_start(void)
     for (i = 0; i < NTRK; i++) {
         memcpy(chain.timing[i], &trk[i].p[P_SLEN], sizeof chain.timing[i]);
         chain.qnt[i] = (uint8_t)trk[i].p[P_SQNT];
+#if FELUCCA_MANGLER
+        {
+            uint32_t j;
+            for (j = 0; j < NCSND; j++)                 /* the track's own modulation, back on STOP */
+                chain_snd[CHAIN_SND_OWN][i][j] = trk[i].p[CHAIN_SND[j]];
+        }
+#endif
     }
     chain.row = 0;
     chain.remaining = chain.config.row[0].repeat;
@@ -183,6 +215,9 @@ static void chain_stop(void)
     for (i = 0; i < NTRK; i++) {
         memcpy(&trk[i].p[P_SLEN], chain.timing[i], sizeof chain.timing[i]);
         trk[i].p[P_SQNT] = chain.qnt[i];
+#if FELUCCA_MANGLER
+        chain_snd_set(&trk[i], i, CHAIN_SND_OWN);
+#endif
         if (chain.live) {                            /* LIVE: PLAY again starts where it was (a waiting launch too) */
             chain.start[i] = chain.want[i] != CHAIN_NONE ? chain.want[i] : chain.lane[i];
             chain.want[i] = CHAIN_NONE;

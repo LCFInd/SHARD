@@ -1340,6 +1340,11 @@ static int chain_load_slot(uint32_t i)
         for (j = 0; j < 4u; j++)
             chain.source[i].timing[k][j] = (int16_t)clamp(p->t[k].p[P_SLEN + j],
                 TP[P_SLEN + j].min, TP[P_SLEN + j].max);
+#if FELUCCA_MANGLER
+        for (j = 0; j < NCSND; j++)                     /* its modulation (song_chain.c CHAIN_SND), fitted to the */
+            chain_snd[i][k][j] = (int16_t)param_fit(param_desc_of(trk[k].eng_req % NENGINES, CHAIN_SND[j]),   /* sound */
+                                                    p->t[k].p[CHAIN_SND[j]]);
+#endif
     }
     return 1;
 }

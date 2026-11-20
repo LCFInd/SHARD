@@ -244,6 +244,18 @@ The values live in every track's DRUM lane levels 5..8 (unused in the mangler; c
 before holds 127 in all four and loads the defaults (ATK 0, DEC 60, SUS 0, REL 40: a decaying blip). Cost: the
 envelope's tick, one per voice per block; the matrix costs nothing while no slot is active.
 
+## SONG sections bring their modulation (2026-11-20)
+
+A SONG section (GLO > SONG) used to take only each slot's sequence: its steps, LEN / DIV / SWING / GATE, QUANTIZE and
+automation, with the sounds playing as they were. In the mangler it now also takes, track by track, the slot's
+modulation as it was saved: the AMP ENV (ATK DEC SUS REL, ENV SYNC), the MOD ENV, the LFO (rate, wave, phase, fade,
+its four depths, SYNC, TRIG, POL), the MOD matrix's four slots and the aftertouch routing (`song_chain.c CHAIN_SND`).
+Each section sets them as it starts; a knob turned during a section holds until the next one. STOP brings back the
+values from before PLAY, as it does the timing. The rest of the sound (the engine, its sample and E values, the deck,
+LEVEL, PAN, the sends) stays the one playing. Silent lanes keep the track's own. LIVE's launches take a slot's the
+same way. The copies live in the pool (1.4 KB). `tests/song_mod_test.c` plays a song of two slots saved with
+different settings.
+
 ## 2ND CORE: SPLIT (2026-11-19)
 
 MENU > SYSTEM > 2ND CORE has OFF and SPLIT (BETA) in the mangler (from the next power-on, as before). Felucca's way of

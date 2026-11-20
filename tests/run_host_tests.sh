@@ -556,6 +556,12 @@ if $MCC -UFELUCCA_BUILTIN -O2 -w -Ibuild/gen -o "$OUT/deck_test" tests/deck_test
 else
     echo "the mangler: deck_test does not build"; fail=1
 fi
+# a song's sections bring their slot's envelopes, LFO and MOD matrix (song_chain.c CHAIN_SND), STOP the own back
+if $MCC -O1 -w -Ibuild/gen -Itests "-DFELUCCA_VERSION=\"$FV\"" -o "$OUT/song_mod_test" tests/song_mod_test.c -lm; then
+    run "the mangler: SONG sections bring their slot's MOD matrix, LFO, AMP ENV and MOD ENV; STOP restores" "$OUT/song_mod_test"
+else
+    echo "the mangler: song_mod_test does not build"; fail=1
+fi
 # 2ND CORE SPLIT (fx.c mix_pipe): the voices here, each part's rest on a thread as core 1, bit for bit (TSAN=1: under
 # ThreadSanitizer too)
 if $MCC -O2 -w -Ibuild/gen -Itests -pthread -o "$OUT/split_test" tests/split_test.c -lm; then
